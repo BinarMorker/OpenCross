@@ -147,12 +147,12 @@ void Battle::init_pc(int slot, const PartyMember& member) {
     }
     pip_tech_colour_ = member.innate;
   }
-  // The gauge tops out at the member's deepest unlocked grid row.
-  unit.gauge_max = 0;
+  // The gauge tops out at the deepest grid row with an unlocked cell holding an element; -1 (no gauge) when there is none.
+  unit.gauge_max = -1;
   for (size_t cell = 0; cell < data::kGridCells; ++cell) {
     const int id = member.cells[cell] & 0x3FFF;
     unit.usable[cell] = member.unlocked[cell] && id != 0 && id < static_cast<int>(tables_.elements.size());
-    if (member.unlocked[cell]) unit.gauge_max = std::max(unit.gauge_max, static_cast<int>(cell) / data::kGridCols);
+    if (member.unlocked[cell] && (unit.cells[cell] & 0x3FFF) != 0) unit.gauge_max = static_cast<int>(cell) / data::kGridCols;
   }
   unit.eq = member.eq;
   unit.perm_lo = unit.eq.status_lo, unit.perm_hi = unit.eq.status_hi;

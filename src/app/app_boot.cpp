@@ -404,7 +404,7 @@ void App::init_battle() {
       if (!battle_ok) log::warn("[Debug] Battle={}: could not start", config.debug_battle);
     }
   }
-  // Post-battle results screen: shown by the host after a won battle, before the rewards are written back and the field resumes.
+  // Post-battle results screen: shown by the host after a won, fled or script-ended (code 5+) battle, before the rewards are written back and the field resumes.
   if (battle_ready) {
     results_ok = results.init(ctx, files, sprites, tables, lang);
     if (results_ok) {

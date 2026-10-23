@@ -328,8 +328,8 @@ PartyMember make_member(int id, const char* name, int hp = 50) {
   // Cell 10 holds Cure, row 1.
   member.cells[10] = 0x4003;
   member.unlocked[10] = true;
-  // An empty open cell in row 7 lets the gauge reach level 8.
-  member.cells[70] = 0x4000;
+  // An element in row 7 lets the gauge reach level 8.
+  member.cells[70] = 0x4001;
   member.unlocked[70] = true;
   return member;
 }
@@ -381,7 +381,8 @@ void test_setup() {
   CHECK(!b2.start({make_member(0, "A")}, 5));
 }
 
-// The gauge cap is the deepest unlocked grid row: a member open to row 1 stops at level 2.
+// The gauge cap is the deepest grid row with an unlocked cell holding an element: an empty open cell below does not count, and a
+// member without any element has no gauge.
 void test_gauge_cap() {
   data::GameTables tables = make_tables();
   ScriptedRng rng(Lo::Fallback::Lo);
@@ -390,10 +391,13 @@ void test_gauge_cap() {
   NullBrain brain;
   Battle battle(tables, rng, brain);
   PartyMember capped = make_member(0, "A");
-  capped.unlocked[70] = false;
-  CHECK(battle.start({capped, make_member(1, "B"), make_member(2, "C")}, 0));
+  capped.cells[70] = 0x4000;
+  PartyMember bare = make_member(2, "C");
+  bare.unlocked.fill(false);
+  CHECK(battle.start({capped, make_member(1, "B"), bare}, 0));
   CHECK_EQ(battle.unit(0).gauge_max, 1);
   CHECK_EQ(battle.unit(1).gauge_max, 7);
+  CHECK_EQ(battle.unit(2).gauge_max, -1);
   Command attack;
   attack.kind = Command::Kind::Attack;
   attack.actor = 0;

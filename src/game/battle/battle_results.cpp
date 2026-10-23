@@ -161,6 +161,8 @@ struct BattleResults::Impl {
   // Star-up glyph brightness.
   int pulse = 0x40, pulse_dir = 4;
   bool auto_on = false;
+  // Scene 0x1D8 plays none of the screen's sounds unless the party fled.
+  bool muted = false;
   int draws = 0;
   // Frames since the current page appeared (auto mode).
   int page_age = 0;
@@ -587,7 +589,7 @@ struct BattleResults::Impl {
   // The exit sound (0x41) is due on the next tick.
   bool exit_sfx = false;
   void play(int id) {
-    if (sfx) sfx(id);
+    if (sfx && !muted) sfx(id);
   }
   void confirm() {
     if (debounce > 0 || age < kSettle) return;
@@ -766,8 +768,12 @@ void BattleResults::set_auto(bool on) { impl_->auto_on = on; }
 
 bool BattleResults::open(const battle::Battle& finished, int scene_id) {
   Impl& impl = *impl_;
-  // Not a victory / scene 0x1DD: no screen.
-  if (!impl.ctx || finished.outcome() != battle::Outcome::Victory || scene_id == 0x1DD) return false;
+  // Result codes 1 / 3 / 4 and scene 0x1DD show no screen; a flight or a scripted code 5+ shows it without rewards (they are a victory's).
+  const battle::Outcome outcome = finished.outcome();
+  const int code = finished.result_code();
+  if (!impl.ctx || code == 1 || code == 3 || code == 4 || scene_id == 0x1DD) return false;
+  if (outcome != battle::Outcome::Victory && outcome != battle::Outcome::Fled && outcome != battle::Outcome::Scripted) return false;
+  impl.muted = scene_id == 0x1D8 && code != 2;
   const battle::Rewards& rewards = finished.rewards();
   impl.rows = {};
   impl.gain_list.clear();

@@ -439,8 +439,8 @@ void BattleView::build_hud() {
   ops_.clear();
   const bool intro = ui_ == Ui::Intro;
 
-  // The whole HUD disappears the moment the party runs away.
-  const bool running = act_.phase == Act::Phase::Run || finish_ == Finish::Fled;
+  // The whole HUD disappears the moment the party runs away and stays off through the settle frames after the run act.
+  const bool running = act_.phase == Act::Phase::Run || finish_ == Finish::Fled || battle_->outcome() == battle::Outcome::Fled;
   if (!intro && !running && !hud_off_) {
     // The panels, the ring and the cast header are one block gated only by the intro / the pause flag; during a cast the ring, label and panels
     // all stay, and the plate lies over the ring.

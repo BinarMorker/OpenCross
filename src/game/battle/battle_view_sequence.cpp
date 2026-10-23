@@ -524,7 +524,8 @@ void BattleView::tick_finish() {
       break;
     case Finish::Fled:
       if (!finished_ && finish_ticks_ > 60) {
-        audio_.stop_music();
+        // In the field the battle music plays on until the field song replaces it.
+        if (!external_results_) audio_.stop_music();
         audio_.stop_sounds();
         finished_ = true;
       }
