@@ -272,6 +272,8 @@ bool Config::load(const std::filesystem::path& file) {
   debug_entrance = parse_int(ini.get("Debug", "Entrance"), debug_entrance);
   debug_battle = parse_int(ini.get("Debug", "Battle"), debug_battle);
   debug_battle_auto = parse_bool(ini.get("Debug", "BattleAuto"), debug_battle_auto);
+  debug_showcase = parse_bool(ini.get("Debug", "Showcase"), debug_showcase);
+  debug_showcase_stage = parse_int(ini.get("Debug", "ShowcaseStage"), debug_showcase_stage);
   debug_script = ini.get("Debug", "Script", debug_script);
   debug_script_speed = std::max(1, parse_int(ini.get("Debug", "ScriptSpeed"), debug_script_speed));
   debug_record = ini.get("Debug", "Record", debug_record);
@@ -379,6 +381,8 @@ bool Config::save(const std::filesystem::path& file) const {
   ini.set("Debug", "ShowFace", std::to_string(debug_show_face));
   ini.set("Debug", "Battle", std::to_string(debug_battle));
   ini.set("Debug", "BattleAuto", on_off(debug_battle_auto));
+  ini.set("Debug", "Showcase", on_off(debug_showcase));
+  ini.set("Debug", "ShowcaseStage", std::to_string(debug_showcase_stage));
   ini.set("Debug", "Script", debug_script);
   ini.set("Debug", "ScriptSpeed", std::to_string(debug_script_speed));
   ini.set("Debug", "Record", debug_record);

@@ -219,6 +219,7 @@ void BattleView::tick() {
   }
   stage_scene_.tick();
   tick_units();
+  showcase_tick();
   tick_links();
   tick_action();
   fx_tick();

@@ -234,7 +234,7 @@ void BattleView::draw_scene_3d(const render::Frame& frame, const render::Letterb
     for (int i = 0; i < battle::kUnits; ++i) {
       const battle::Unit& unit = battle_->unit(i);
       const Visual& visual = vis_[static_cast<size_t>(i)];
-      if (!unit.present || !visual.has_model || !visual.model->gpu || fx_hidden_[static_cast<size_t>(i)] || unplaced_[static_cast<size_t>(i)] || (ghosted(i) && !entry_shown_[static_cast<size_t>(i)]) || anm_hidden(i)) continue;
+      if (showcase_on_ || !unit.present || !visual.has_model || !visual.model->gpu || fx_hidden_[static_cast<size_t>(i)] || unplaced_[static_cast<size_t>(i)] || (ghosted(i) && !entry_shown_[static_cast<size_t>(i)]) || anm_hidden(i)) continue;
       if (!unit.pc && lerp(visual.fade_prev, visual.fade, alpha_) <= 0.0f) continue;
       const effects::FxModel* om = fx_ && fx_->bespoke_models() && static_cast<size_t>(i) < fx_->bespoke_models()->units.size()
                                        ? &fx_->bespoke_models()->units[static_cast<size_t>(i)]
@@ -300,6 +300,7 @@ void BattleView::draw_scene_3d(const render::Frame& frame, const render::Letterb
       }
       casters.push_back(caster);
     }
+    showcase_shadows(casters);
     stage_scene_.set_shadow_casters(std::move(casters));
     {
       // GTE depth cue of the stage objects (effects op 0x2D ramps it; the fog flag is set by ops 0x24 / 0x6C).
@@ -317,7 +318,7 @@ void BattleView::draw_scene_3d(const render::Frame& frame, const render::Letterb
   for (int i = 0; i < battle::kUnits; ++i) {
     const battle::Unit& unit = battle_->unit(i);
     const Visual& visual = vis_[static_cast<size_t>(i)];
-    if (!unit.present || !visual.has_model || !visual.model->gpu) continue;
+    if (showcase_on_ || !unit.present || !visual.has_model || !visual.model->gpu) continue;
     const float fade = lerp(visual.fade_prev, visual.fade, alpha_), flash = lerp(visual.flash_prev, visual.flash, alpha_);
     if (!unit.pc && fade <= 0.0f) continue;
     // unplaced_: a PC placed after a held intro.
@@ -430,6 +431,7 @@ void BattleView::draw_scene_3d(const render::Frame& frame, const render::Letterb
       }
     }
   }
+  showcase_draw(vp, view);
   meshes_->end();
   // The stage's smoke / dust sheets.
   stage_scene_.draw_sprites(frame, scissor, fx_view(), lb, alpha_);

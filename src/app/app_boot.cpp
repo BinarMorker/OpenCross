@@ -10,6 +10,7 @@
 
 #include "core/log.h"
 #include "game/cheats.h"
+#include "game/free_cam.h"
 #include "platform/paths.h"
 #include "render/imgui_mods_tab.h"
 #include "render/imgui_update_tab.h"
@@ -391,7 +392,15 @@ void App::init_battle() {
       log::warn("battle view unavailable; field encounters will be skipped");
     }
     if (config.debug_battle >= 0) {
-      battle_ok = battle_ready && battle.start(config.debug_battle);
+      game::BattleView::StartOptions options;
+      options.battlefield = config.debug_showcase_stage;
+      battle.set_showcase(config.debug_showcase);
+      battle_ok = battle_ready && battle.start(config.debug_battle, {}, options);
+      if (battle_ok && config.debug_showcase) {
+        // Front-on overview of the line-up (the characters face -x).
+        game::free_cam().set_on(true);
+        game::free_cam().init_from({-15000.0f, 3500.0f, 0.0f}, {0.0f, 600.0f, 0.0f});
+      }
       if (!battle_ok) log::warn("[Debug] Battle={}: could not start", config.debug_battle);
     }
   }

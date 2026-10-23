@@ -105,6 +105,7 @@ bool BattleView::init(render::GpuContext& ctx, const vfs::Vfs& vfs, render::Spri
 
 void BattleView::unload_scene() {
   for (Visual& visual : vis_) visual = Visual{};
+  showcase_.clear();
   entry_shown_.fill(false);
   ghost_view_.fill(false);
   fx_conceal_.fill(false);
@@ -553,6 +554,7 @@ bool BattleView::finish_start() {
       if (vis_[static_cast<size_t>(i)].pose.attach_now(14, 1.0f, hx, hy, hz) && -hy > 50.0f) vis_[static_cast<size_t>(i)].height = -hy;
       if (i < battle::kPcSlots) log::info("battle: unit {} height word {:.0f}", i, vis_[static_cast<size_t>(i)].height);
     }
+  if (showcase_on_) showcase_load();
 
   ui_ = Ui::Intro;
   // Consumed by the first idle command-camera pass.

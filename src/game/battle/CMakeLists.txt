@@ -46,6 +46,7 @@ add_library(oc_battle_view STATIC
   battle_view_draw.cpp
   battle_view_trail.cpp
   battle_view_pseudo.cpp
+  battle_view_showcase.cpp
   battle_view_ui.cpp
   texture_dump.h
   texture_dump.cpp

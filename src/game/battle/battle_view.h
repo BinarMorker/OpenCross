@@ -154,6 +154,8 @@ class BattleView {
     bool inv_party = false, inv_enemies = false;
   };
   void set_debug(const Debug& debug) { dbg_ = debug; }
+  // [Debug] Showcase: the next start() puts every playable character on the stage in its battle stance and hides the battle's units.
+  void set_showcase(bool on) { showcase_on_ = on; }
   const Debug& debug() const { return dbg_; }
   // Effect state for tools / tests.
   bool fx_active() const { return fx_ != nullptr; }
@@ -350,6 +352,23 @@ class BattleView {
   void bind_unit_model(int unit);
   void place_units();
   void unload_scene();
+
+  // showcase (battle_view_showcase.cpp)
+  struct ShowcaseModel {
+    std::shared_ptr<ModelHandle> model, weapon;
+    int weapon_attach = -1, weapon_hide = 0;
+    u32 part_hide = 0, part_show = 0;
+    UnitPose pose;
+    float x = 0, z = 0, height = 1000;
+  };
+  // Every model faces -x, the way the party faces the enemies.
+  static constexpr float kShowcaseFaceX = -1.0f, kShowcaseFaceZ = 0.0f;
+  void showcase_load();
+  void showcase_tick();
+  void showcase_shadows(std::vector<StageScene::ShadowCaster>& casters);
+  void showcase_draw(const render::Mat4& view_proj, const render::Mat4& view);
+  bool showcase_on_ = false;
+  std::vector<ShowcaseModel> showcase_;
   void apply_camera(float alpha);
   bool command_orbit(CamPose& pose) const;
   // Target selection in the DYNAMIC camera mode (Triangle toggles it).

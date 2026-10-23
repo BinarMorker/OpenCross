@@ -226,6 +226,10 @@ struct Config {
   std::string debug_replay;
   int debug_battle = -1;
   bool debug_battle_auto = false;
+  // [Debug] Showcase / ShowcaseStage: the Battle= scene shows every playable character on stage bg_NN (-1 = the
+  // scene's own) with the free camera on.
+  bool debug_showcase = false;
+  int debug_showcase_stage = -1;
 
   Cheats cheats;
   int settings_x = -1, settings_y = -1, settings_w = -1, settings_h = -1;
