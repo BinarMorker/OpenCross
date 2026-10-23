@@ -1,0 +1,87 @@
+# Publishes a GitHub release whenever project(OpenCross VERSION x.y.z) in CMakeLists.txt names a version with no v<x.y.z> tag yet.
+# The in-game updater (src/platform/updater.cpp) reads releases/latest, compares the tag with its own version and downloads the
+# asset named opencross.exe, so the release carries exactly that.
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      exists: ${{ steps.read.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -nE 's/^project\(OpenCross VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt)
+          [ -n "$version" ] || { echo "no version in CMakeLists.txt"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"; echo "v$version is already released"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"; echo "releasing v$version"
+          fi
+
+  build:
+    needs: version
+    if: needs.version.outputs.exists == 'false'
+    runs-on: windows-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}\..\vcpkg
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\..\vcpkg-cache,readwrite
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: vcpkg at the manifest baseline
+        shell: pwsh
+        run: |
+          $baseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+          git clone https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
+          git -C $env:VCPKG_ROOT checkout -q $baseline
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          New-Item -ItemType Directory -Force "${{ github.workspace }}\..\vcpkg-cache" | Out-Null
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\..\vcpkg-cache
+          key: vcpkg-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-
+
+      - id: librempeg-cache
+        uses: actions/cache@v4
+        with:
+          path: third_party/librempeg
+          key: librempeg-${{ hashFiles('scripts/build-librempeg.*', 'scripts/install-librempeg.py') }}
+
+      - name: librempeg
+        if: steps.librempeg-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          choco install nasm make -y --no-progress
+          .\scripts\build-librempeg.ps1 -NasmDir "$env:ProgramFiles\NASM"
+
+      - name: Build
+        shell: pwsh
+        run: .\build.ps1 release -Target opencross -VcpkgRoot $env:VCPKG_ROOT
+
+      - name: Publish v${{ needs.version.outputs.version }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v${{ needs.version.outputs.version }}"
+          gh release create $tag build\win-x64\bin\Release\opencross.exe --target $env:GITHUB_SHA --title "OpenCross $tag" --generate-notes
