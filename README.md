@@ -1,3 +1,5 @@
+<img width="1869" height="842" alt="image" src="https://github.com/user-attachments/assets/13d34927-a389-4678-a28f-09a58754792c" />
+
 # OpenCross
 
 OpenCross is a native PC engine for Chrono Cross, built in C++20 on SDL3 and its GPU API (Vulkan or Direct3D 12). Drop a single executable into your **Chrono Cross: The Radical Dreamers Edition** folder on Steam and it plays the game from your own files and saves.
