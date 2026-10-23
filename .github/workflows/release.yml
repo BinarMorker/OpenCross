@@ -6,6 +6,7 @@ name: release
 on:
   push:
     branches: [main]
+    paths: [CMakeLists.txt]
   workflow_dispatch:
 
 permissions:
