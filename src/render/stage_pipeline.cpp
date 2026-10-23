@@ -26,7 +26,7 @@ namespace {
 //   params  x = OT bias, y = depth mode (0 packet slot, 1 fixed slot, 2 per-fragment z) + 4 * uv-scroll flag, z = output alpha (0.5 for
 //           the average blend), w = fog offset B
 // The camera z of a point is the w of its clip position (the projection's last row is (0, 0, 1, 0)).
-//   uvw     x/y = uv phase (texels), z = off_u + 256 * off_v, w = win_w + 256 * win_h
+//   uvw     x/y = uv phase (texels), z = off_u + 256 * off_v + 65536 * (1 bilinear wrap + 2 EdgeBlend tiling), w = win_w + 256 * win_h
 #include "stage.vert.inc"
 #include "stage_affine.vert.inc"
 #include "stage.frag.inc"
@@ -70,7 +70,7 @@ void bind_texture(SDL_GPURenderPass* render_pass, const TexRef& texture) {
 }
 
 // Everything of one instance's per-draw uniforms except the clip matrix and the blend factor / alpha.
-void fill_push(PushData& pd, const StageInstance& in, const StagePipeline::DepthCue& cue, float factor, float alpha, bool smooth_fog = false) {
+void fill_push(PushData& pd, const StageInstance& in, const StagePipeline::DepthCue& cue, float factor, float alpha, bool smooth_fog = false, bool linear = false) {
   for (size_t channel = 0; channel < 3; ++channel) pd.color[channel] = static_cast<float>(in.rgb[channel]) / 128.0f;
   pd.color[3] = factor;
   pd.fogc[0] = cue.r;
@@ -88,7 +88,10 @@ void fill_push(PushData& pd, const StageInstance& in, const StagePipeline::Depth
   pd.params[2] = alpha;
   pd.uvw[0] = in.uv_phase[0];
   pd.uvw[1] = in.uv_phase[1];
-  pd.uvw[2] = static_cast<float>((in.uv_window[0] & 255) + 256 * (in.uv_window[1] & 255));
+  // Scroll flags: 1 = the bilinear footprint wraps inside the window, 2 = [Enhancements] EdgeBlend: a packet corner on the window's last texel
+  // reaches the window end, so the next packet's first texel continues the tiling.
+  const int scroll_flags = (linear ? 1 : 0) + (edge_blend() ? 2 : 0);
+  pd.uvw[2] = static_cast<float>((in.uv_window[0] & 255) + 256 * (in.uv_window[1] & 255) + 65536 * scroll_flags);
   pd.uvw[3] = static_cast<float>(std::clamp(in.uv_window[2], 0, 255) + 256 * std::clamp(in.uv_window[3], 0, 255));
 }
 
@@ -521,7 +524,8 @@ void StagePipeline::draw(const StageMesh& mesh, const Mat4& proj, std::span<cons
   if (!active_ || instances.empty()) return;
   SDL_GPURenderPass* render_pass = ctx_->pass();
   SDL_GPUCommandBuffer* command_buffer = ctx_->cmd();
-  const std::vector<TexRef>& sets = linear && mesh.sets_linear.size() == mesh.sets.size() ? mesh.sets_linear : mesh.sets;
+  linear_draw_ = linear && mesh.sets_linear.size() == mesh.sets.size();
+  const std::vector<TexRef>& sets = linear_draw_ ? mesh.sets_linear : mesh.sets;
   // Morphing instances (op 37) are drawn last from blended copies of their vertices (see below); the static pass skips them.
   std::vector<const StageInstance*> morphing, grounds;
   struct Item {
@@ -585,7 +589,7 @@ void StagePipeline::draw(const StageMesh& mesh, const Mat4& proj, std::span<cons
         }
         PushData pd;
         pd.clip = proj * cam;
-        fill_push(pd, in, cue_, it.factor, it.alpha, smooth_fog_);
+        fill_push(pd, in, cue_, it.factor, it.alpha, smooth_fog_, linear_draw_);
         fill_lights(pd, proj, it.blend, lights_);
         push_uniforms(command_buffer, pd);
         bound_in = it.in;
@@ -708,7 +712,7 @@ void StagePipeline::draw(const StageMesh& mesh, const Mat4& proj, std::span<cons
       bind_texture(render_pass, sets[static_cast<size_t>(sub.texture)]);
       PushData pd;
       pd.clip = proj * cam;
-      fill_push(pd, in, cue_, factor, alpha, smooth_fog_);
+      fill_push(pd, in, cue_, factor, alpha, smooth_fog_, linear_draw_);
       fill_lights(pd, proj, blend, lights_);
       push_uniforms(command_buffer, pd);
       SDL_DrawGPUIndexedPrimitives(render_pass, asub.index_count, 1, dyn_iused_ + asub.first_index, static_cast<int32_t>(dyn_vused_), 0);
@@ -857,7 +861,7 @@ void StagePipeline::draw_cpu(const StageMesh& mesh, const assets::StageAsset& as
     bind_texture(render_pass, sets[static_cast<size_t>(sub.texture)]);
     PushData pd;
     pd.clip = proj * cam;
-    fill_push(pd, in, cue_, factor, alpha, smooth_fog_);
+    fill_push(pd, in, cue_, factor, alpha, smooth_fog_, linear_draw_);
     fill_lights(pd, proj, blend, lights_);
     push_uniforms(command_buffer, pd);
     SDL_DrawGPUIndexedPrimitives(render_pass, runs[sub_index].second, 1, dyn_iused_ + runs[sub_index].first, static_cast<int32_t>(dyn_vused_), 0);

@@ -279,6 +279,8 @@ class StagePipeline {
   DepthCue cue_;
   // [Enhancements] BattleShadows: depth cue per vertex instead of per packet.
   bool smooth_fog_ = false;
+  // The current draw() samples the bilinear texture sets.
+  bool linear_draw_ = false;
   size_t rejected_ = 0;
   SceneLights lights_;
   std::unique_ptr<Texture> dyn_white_;

@@ -199,7 +199,7 @@ int main() {
     effects::EmitterSystem::MeshInstance sm = mi;
     sm.uv_scroll = true;
     sm.uv_window = {64, 64, 64, 64};
-    sm.uv_phase = {32.0f * 256.0f / 65536.0f, 0.0f};
+    sm.uv_phase = {32.0f, 0.0f};
     std::vector<effects::RoomMeshTri> scrolled;
     const size_t ns = rm.project(sm, vp, lb, 0.0f, scrolled);
     float umin = 1e9f, umax = -1e9f;

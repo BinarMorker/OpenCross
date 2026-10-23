@@ -313,7 +313,7 @@ int EmitterSystem::Impl::spawn(size_t hi, const Basis* parent) {
       case 0x36:
         if (header.big)
           if (auto* uv_scroll = std::get_if<assets::FxUvScroll>(&op.arg)) {
-            obj.uv_phase[0] = obj.uv_phase[1] = 0;
+            obj.uv_phase[0] = obj.uv_phase[1] = obj.uv_phase_prev[0] = obj.uv_phase_prev[1] = 0;
             obj.uv_rate[0] = uv_scroll->rate_u;
             obj.uv_rate[1] = uv_scroll->rate_v;
             obj.ext |= 1;

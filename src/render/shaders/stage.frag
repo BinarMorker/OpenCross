@@ -32,19 +32,36 @@ void main() {
   }
   bool scroll = py >= 3.5;
   float mode = scroll ? py - 4.0 : py;
+  vec4 c;
   if (scroll && uv_scale.x > 0.0) {
     // op-36 texture window: the GPU wraps each texel inside (off, off + win); a window of 0 wraps in the 256-texel page
-    vec2 off = vec2(mod(pc.uvw.z, 256.0), floor(pc.uvw.z / 256.0));
+    float sflags = floor(pc.uvw.z / 65536.0);
+    float offs = pc.uvw.z - sflags * 65536.0;
+    vec2 off = vec2(mod(offs, 256.0), floor(offs / 256.0));
     vec2 win = vec2(mod(pc.uvw.w, 256.0), floor(pc.uvw.w / 256.0));
-    vec2 w = uv_tex;
-    w.x = win.x > 0.0 ? off.x + mod(w.x - off.x, win.x) : mod(w.x, 256.0);
-    w.y = win.y > 0.0 ? off.y + mod(w.y - off.y, win.y) : mod(w.y, 256.0);
-    // keep the bilinear footprint inside the window (the texel beyond its edge belongs to another page of the atlas)
-    if (win.x > 0.0) w.x = clamp(w.x, off.x + 0.5, off.x + win.x - 0.5);
-    if (win.y > 0.0) w.y = clamp(w.y, off.y + 0.5, off.y + win.y - 0.5);
-    t = uv_page + w * uv_scale;
+    vec2 span = vec2(win.x > 0.0 ? win.x : 256.0, win.y > 0.0 ? win.y : 256.0);
+    // texel k is centred on k (it covers k - 1/2 .. k + 1/2), so the window starts half a texel before its first texel
+    vec2 lo = vec2(win.x > 0.0 ? off.x : 0.0, win.y > 0.0 ? off.y : 0.0) - 0.5;
+    if (mod(sflags, 2.0) >= 1.0) {
+      // Scroll flag 1 (bilinear): the four image pixels of the footprint each wrap inside the window, so the filter blends across the wrap
+      // (and never reaches the neighbouring page of the atlas).
+      vec2 px = abs(uv_scale) * vec2(textureSize(tex, 0));
+      vec2 len = span * px;
+      vec2 p = (uv_tex - lo) * px - 0.5;
+      vec2 p0 = floor(p);
+      vec2 f = p - p0;
+      vec2 a = mod(p0, len), b = mod(p0 + 1.0, len);
+      vec4 c00 = texture(tex, uv_page + (lo + (a + 0.5) / px) * uv_scale);
+      vec4 c10 = texture(tex, uv_page + (lo + (vec2(b.x, a.y) + 0.5) / px) * uv_scale);
+      vec4 c01 = texture(tex, uv_page + (lo + (vec2(a.x, b.y) + 0.5) / px) * uv_scale);
+      vec4 c11 = texture(tex, uv_page + (lo + (b + 0.5) / px) * uv_scale);
+      c = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+    } else {
+      c = texture(tex, uv_page + (lo + mod(uv_tex - lo, span)) * uv_scale);
+    }
+  } else {
+    c = texture(tex, t);
   }
-  vec4 c = texture(tex, t);
   if (c.a < 0.5) discard;
   // The packet builders multiply the corner colour by the object colour (DCPL: saturates at 255), then the depth cue (DPCS / DPCT) moves
   // it toward the far colour by fog_p; textured colours are modulation values (128 = 1.0), untextured ones raw (255 = 1.0).

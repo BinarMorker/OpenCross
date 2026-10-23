@@ -531,8 +531,7 @@ void StageScene::draw(render::StagePipeline& pipe, const render::Frame& frame, r
     if (cull_dbg) in.cull = std::string_view(cull_dbg) == "swap" ? 1 : std::string_view(cull_dbg) == "none" ? 2 : 0;
     if (mi.ext & 1) {
       in.uv_scroll = true;
-      // One rule with RoomMeshes.
-      for (size_t k = 0; k < 2; ++k) in.uv_phase[k] = effects::EmitterSystem::uv_phase_texels(mi.uv_phase[k]);
+      in.uv_phase = mi.uv_phase;
       if (mi.owner >= 0 && static_cast<size_t>(mi.owner) < em_->header_count())
         for (const auto& op : em_->header_def(static_cast<size_t>(mi.owner)).ops)
           if (op.op == 0x36)

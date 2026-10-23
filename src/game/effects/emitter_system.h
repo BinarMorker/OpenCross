@@ -278,7 +278,7 @@ class EmitterSystem {
     u32 ext = 0;
     // Object flag bit 29 (op 35): drawn by the extended mesh renderer (ABR = blend, not blend - 1).
     bool ext_path = false;
-    // Op 36 UV scroll phase in texels (24.8 fixed point / 256 of the object's own counter; see uv_phase_texels).
+    // Op 36 UV scroll phase the draw adds to the packet texel: the object's 24.8 counter at the tick alpha, in texels wrapped to 0..128.
     std::array<float, 2> uv_phase{};
     // Op 36 texture window (FxUvScroll of the owning header) when ext bit 0 is set: {off_u, off_v, win_w, win_h} in texels, a width / height of 0 =
     // wrap inside the 256-texel page. Filled by collect_meshes so every mesh drawer (battle stage scene, field room meshes) reads one rule.
@@ -302,8 +302,6 @@ class EmitterSystem {
     const std::string* morph_name = nullptr;
     float morph_t = 0, morph_t_prev = 0;
   };
-  // The scroll phase the draw adds to the packet texel (the 16.16 phase >> 8 masked to 0..127).
-  static float uv_phase_texels(float phase) { return static_cast<float>((static_cast<int>(std::lround(phase * 65536.0f)) >> 8) & 0x7F); }
   // `with_suppressed`: also the objects of emitters an overlay draws itself (set_draw_suppressed), for that overlay's own draw.
   void collect_meshes(const ViewParams& view, float alpha, std::vector<MeshInstance>& out, bool with_suppressed = false) const;
 

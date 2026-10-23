@@ -95,7 +95,12 @@ void EmitterSystem::Impl::collect_meshes(const ViewParams& view, float alpha, st
     mi.frame = obj.frame;
     mi.ext = obj.ext;
     mi.ext_path = (obj.flags & kFlagExt) != 0;
-    mi.uv_phase = {static_cast<float>(obj.uv_phase[0]) / 65536.0f, static_cast<float>(obj.uv_phase[1]) / 65536.0f};
+    // The 24.8 phase between the previous tick and this one, in texels wrapped to 0..128 (the 7-bit texel field).
+    for (size_t k = 0; k < 2; ++k) {
+      const s32 delta = static_cast<s32>(static_cast<u32>(obj.uv_phase[k]) - static_cast<u32>(obj.uv_phase_prev[k]));
+      const float raw = static_cast<float>(obj.uv_phase_prev[k] & 0x7FFF) + static_cast<float>(delta) * alpha;
+      mi.uv_phase[k] = std::fmod(std::fmod(raw / 256.0f, 128.0f) + 128.0f, 128.0f);
+    }
     mi.owner = obj.owner;
     mi.sprite_type = obj.stype;
     if ((obj.ext & 1) && obj.owner >= 0 && static_cast<size_t>(obj.owner) < headers.size() && headers[static_cast<size_t>(obj.owner)].def)

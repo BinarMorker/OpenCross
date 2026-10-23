@@ -168,6 +168,8 @@ void EmitterSystem::Impl::ext_step(Object& obj) {
       obj.sub_a[i] = static_cast<s16>(comb & 0xFFFF);
     }
   }
+  obj.uv_phase_prev[0] = obj.uv_phase[0];
+  obj.uv_phase_prev[1] = obj.uv_phase[1];
   if (obj.ext & 1) {
     obj.uv_phase[0] += obj.uv_rate[0];
     obj.uv_phase[1] += obj.uv_rate[1];

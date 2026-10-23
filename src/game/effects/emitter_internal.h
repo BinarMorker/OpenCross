@@ -94,7 +94,7 @@ struct Object {
   const std::string* light_name = nullptr;
   // Extended object block.
   u32 ext = 0;
-  s32 uv_phase[2]{}, uv_rate[2]{};
+  s32 uv_phase[2]{}, uv_rate[2]{}, uv_phase_prev[2]{};
   s16 morph_phase = 0, morph_rate = 0, morph_phase_prev = 0;
   // Op 37 target mesh (points into the pack's op list).
   const std::string* morph_name = nullptr;

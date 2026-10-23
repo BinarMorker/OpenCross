@@ -384,10 +384,10 @@ void BattleView::fx_draw(const render::Frame& frame, const render::Letterbox& lb
       // Dev: OC_FX_MESH_CULL forces a cull mode.
       static const int dev_cull = [] { const char* env = std::getenv("OC_FX_MESH_CULL"); return env ? std::atoi(env) : -1; }();
       if (dev_cull >= 0) in.cull = dev_cull;
-      // Op 36: phase in 24.8 texels, masked to 0..127, inside the texture window.
+      // Op 36: the scroll phase inside the texture window.
       if (mi.ext & 1) {
         in.uv_scroll = true;
-        for (size_t k = 0; k < 2; ++k) in.uv_phase[k] = static_cast<float>((static_cast<int>(std::lround(mi.uv_phase[k] * 65536.0f)) >> 8) & 0x7F);
+        in.uv_phase = mi.uv_phase;
         if (mi.owner >= 0 && static_cast<size_t>(mi.owner) < fx_->emitters().header_count())
           for (const auto& op : fx_->emitters().header_def(static_cast<size_t>(mi.owner)).ops)
             if (op.op == 0x36)

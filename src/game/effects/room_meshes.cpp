@@ -133,7 +133,7 @@ size_t RoomMeshes::project(const EmitterSystem::MeshInstance& mesh, const ViewPa
     cz = mesh.centre[2] + rotated[2];
   };
   const bool scroll = mesh.uv_scroll;
-  const float phase[2] = {EmitterSystem::uv_phase_texels(mesh.uv_phase[0]), EmitterSystem::uv_phase_texels(mesh.uv_phase[1])};
+  const float phase[2] = {mesh.uv_phase[0], mesh.uv_phase[1]};
   const float off[2] = {mesh.uv_window[2] > 0 ? static_cast<float>(mesh.uv_window[0] & 255) : 0.0f,
                         mesh.uv_window[3] > 0 ? static_cast<float>(mesh.uv_window[1] & 255) : 0.0f};
   const float win[2] = {mesh.uv_window[2] > 0 ? static_cast<float>(mesh.uv_window[2]) : 256.0f,

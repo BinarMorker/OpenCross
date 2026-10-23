@@ -430,7 +430,7 @@ void TitleBackdrop::draw(const render::Frame& frame, float view_w, float view_h,
       if (cull_dbg) in.cull = std::string_view(cull_dbg) == "swap" ? 1 : std::string_view(cull_dbg) == "none" ? 2 : 0;
       if (mi.ext & 1) {
         in.uv_scroll = true;
-        for (size_t k = 0; k < 2; ++k) in.uv_phase[k] = static_cast<float>((static_cast<int>(std::lround(mi.uv_phase[k] * 65536.0f)) >> 8) & 0x7F);
+        in.uv_phase = mi.uv_phase;
         if (mi.owner >= 0 && static_cast<size_t>(mi.owner) < em_->header_count())
           for (const auto& op : em_->header_def(static_cast<size_t>(mi.owner)).ops)
             if (op.op == 0x36)

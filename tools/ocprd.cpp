@@ -1,5 +1,5 @@
 // ocprd: room .prd effects tool.
-//   ocprd [-g <game dir>] info <room>               sheets (with every frame slice), emitters (with decoded ops) and sequences
+//   ocprd [-g <game dir>] info <room|path>          sheets (with every frame slice), emitters (with decoded ops) and sequences
 //   ocprd [-g <game dir>] validate                  every room .prd: totals, stream failures, timinfo / TIM mismatches
 //   ocprd [-g <game dir>] render <room> <outdir>    one PNG per sprite slice plus the composed frame of every sheet
 //   ocprd [-g <game dir>] soak [ticks]              every room emitter + every battle-effect emitter through the effect player
@@ -47,7 +47,8 @@ struct Loaded {
 };
 
 bool load(const vfs::Vfs& game_fs, const std::string& room, Loaded& out) {
-  auto prd = game_fs.read(tool::room_file(room, ".prd"));
+  // A name with a '/' is a VFS path of its own (cdrom/title.prd).
+  auto prd = game_fs.read(room.find('/') != std::string::npos ? room : tool::room_file(room, ".prd"));
   if (!prd) {
     std::fprintf(stderr, "no .prd for room %s\n", room.c_str());
     return false;

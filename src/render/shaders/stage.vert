@@ -39,6 +39,16 @@ void main() {
   uv = vec2(in_uv.x, 1.0 - in_uv.y);  // asset UVs are OBJ-style (v up); texture rows are stored top-down
   uv_page = uv - in_uvraw * in_uvscale;  // atlas position of the texture page origin
   uv_tex = in_uvraw + pc.uvw.xy;         // packet texel + scroll phase, wrapped per fragment
+  // Scroll flag 2 ([Enhancements] EdgeBlend): a corner on the window's last texel is drawn at the window end, so a run of packets each mapping the whole
+  // window tiles it without skipping a texel at every packet edge.
+  float sflags = floor(pc.uvw.z / 65536.0);
+  if ((pym >= 7.5 ? pym - 8.0 : pym) >= 3.5 && mod(sflags, 4.0) >= 2.0) {
+    float offs = pc.uvw.z - sflags * 65536.0;
+    vec2 off = vec2(mod(offs, 256.0), floor(offs / 256.0));
+    vec2 win = vec2(mod(pc.uvw.w, 256.0), floor(pc.uvw.w / 256.0));
+    if (win.x > 1.0 && in_uvraw.x == off.x + win.x - 1.0) uv_tex.x += 1.0;
+    if (win.y > 1.0 && in_uvraw.y == off.y + win.y - 1.0) uv_tex.y += 1.0;
+  }
   uv_scale = in_uvscale;
   color = in_color;
   // SDL_GPU clip space has +y up on every backend; everything above works in the PS1's y-down frame.
