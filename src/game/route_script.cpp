@@ -896,7 +896,7 @@ bool Route::run(const Cmd& cmd, const RouteState& st, platform::Input&, RouteOut
     out.dump = true;
     return true;
   }
-  // art hd|original|modded|toggle: the host switches like F1 (toggle = HD-family <-> original)
+  // art hd|original|modded|toggle: the host switches like F6 (toggle = HD-family <-> original)
   if (op == "art") {
     if (args.size() < 2 || (args[1] != "hd" && args[1] != "original" && args[1] != "modded" && args[1] != "toggle")) return bad("art hd|original|modded|toggle");
     out.art = args[1];

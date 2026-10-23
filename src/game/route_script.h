@@ -63,7 +63,7 @@
 //   (trace also logs the head-turn angles while the head callback is on) assert traceheadturn <ticks> <span>   the last trace saw the head turn on >= ticks ticks over an ax range >= span (4096/turn)
 //   assert traceyaw<ticks> <octants>   the last trace saw the model yaw change on >= ticks ticks and visit >= octants of the 8 45-deg sectors
 //   dump                          log the room's entity table
-//   art hd|original|toggle        switch the art mode like F1 / the options overlay (returns at once)
+//   art hd|original|toggle        switch the art mode like F6 / the options overlay (returns at once)
 //   snap [hexvar...]              remember the simulation state: room, flow, room-load / battle-start / title-sequence counters, the
 //                                 battle signature, every entity's position / facing / model yaw and the listed script variables
 //   assert same [tol]             nothing of the `snap` state changed (positions within tol world units, default 0)

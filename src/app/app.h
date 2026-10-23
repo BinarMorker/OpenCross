@@ -29,6 +29,7 @@
 #include "game/battle/battle_results.h"
 #include "game/battle/battle_view.h"
 #include "game/battle/texture_dump.h"
+#include "game/cheats.h"
 #include "game/debug_tools.h"
 #include "game/field_world.h"
 #include "game/game_flow.h"
@@ -53,6 +54,7 @@
 #include "ui/menu/main_menu.h"
 #include "ui/menu/status_model.h"
 #include "ui/party_screen.h"
+#include "ui/feature_icons.h"
 #include "ui/pause_screen.h"
 #include "ui/shop/shop_screen.h"
 #include "vfs/mods.h"
@@ -158,6 +160,9 @@ class App {
   // ---- app_run.cpp ------------------------------------------------------------------------------------------------------------
   void log_frametime();
   void frame_hotkeys();
+  // RDE's speed toggles do nothing in the Radius tutorial (its field map or its battle).
+  bool speed_locked() const;
+  void rde_toggle_keys();
   void frame_settings();
   // Returns false when the run is over (the sweep's last room).
   bool simulate();
@@ -300,6 +305,11 @@ class App {
   ui::KeyItemPopup key_popup;
   ui::PauseScreen pause_screen;
   bool pause_ok = false;
+  // RDE's feature icons and the hotkeys / pad buttons of its play-time toggles.
+  ui::FeatureIcons feature_icons;
+  bool feature_icons_ok = false;
+  game::RdeHotkeys rde_hotkeys;
+  game::SlowFieldCycle slow_field_cycle;
   ui::PartyScreen party_screen;
   bool party_ok = false;
   bool menu_ok = false, shop_ok = false, key_popup_ok = false;

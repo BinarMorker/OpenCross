@@ -334,6 +334,7 @@ void App::init_menus() {
     key_popup_ok = key_popup.init(ctx, files, sprites, menu_text);
     // RDE pause screen (Start / P): colour filter + PAUSE bar + Vibration / World Names rows.
     pause_ok = pause_screen.init(ctx, files, sprites, menu_text);
+    feature_icons_ok = feature_icons.init(ctx, files, sprites);
     // The Tele-Porter's "Current Party" screen.
     party_ok = party_screen.init(ctx, files, sprites, menu_text, lang);
     if (party_ok) {

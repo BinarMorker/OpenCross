@@ -1,4 +1,4 @@
-# Art mode switch (F1 / options) must only swap the rendering: no room load, no INIT / entrance re-run, nothing of the simulation changes.
+# Art mode switch (F6 / options) must only swap the rendering: no room load, no INIT / entrance re-run, nothing of the simulation changes.
 # Field: toggled twice inside the lift scene's first dialogue (the window stays open, the scene goes on), then twice when idle with time
 # running in between (positions / facings / model yaws of every entity, script variables, room-load counter unchanged). Battle: toggled
 # twice at the top menu (scene, unit HP, battle-start counter unchanged), then the fight is played out on the swapped models.

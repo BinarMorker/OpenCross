@@ -2,6 +2,9 @@
 
 #include <imgui.h>
 
+#include <algorithm>
+#include <cmath>
+
 #include "render/imgui_layer.h"
 
 namespace oc::game {
@@ -88,6 +91,62 @@ bool model_swap_skipped(int map, int ent, const StoryByte& story) {
   }
 }
 
+// ------------------------------------------------------------------------------------------------ hotkeys
+bool RdeHotkeys::poll(const HotkeyLevels& in, bool speed_locked, Toggles& toggles) {
+  // Stick clicks act on release: both were held = the chord (and the later release of the other one does nothing), one alone = a tap.
+  bool chord = false, tap_l3 = false, tap_r3 = false;
+  if ((!in.l3 || !in.r3) && l3_ && r3_) {
+    chord = true;
+    chord_used_ = true;
+  } else if (!in.l3 && !in.r3 && l3_ != r3_) {
+    (l3_ ? tap_l3 : tap_r3) = !chord_used_;
+    chord_used_ = false;
+  }
+  // LT + L3 fires the frame after the pair completes.
+  const bool menu = in.lt && in.l3 && (!lt_ || !l3_);
+  const bool open_menu = !menu && menu_;
+
+  const bool slow = in.slow_key || in.lt, fast = in.fast_key || in.rt;
+  if (slow && !slow_ && !speed_locked) {
+    toggles.slow = !toggles.slow;
+    toggles.fast = false;
+  }
+  if (fast && !fast_ && !speed_locked) {
+    toggles.fast = !toggles.fast;
+    toggles.slow = false;
+  }
+  const bool encounters = tap_l3 || in.encounters_key, boost = tap_r3 || in.boost_key, auto_battle = chord || in.auto_key;
+  if (encounters && !encounters_) toggles.encounters = !toggles.encounters;
+  if (boost && !boost_) toggles.boost = !toggles.boost;
+  if (auto_battle && !auto_) toggles.auto_battle = !toggles.auto_battle;
+
+  slow_ = slow, fast_ = fast, encounters_ = encounters, boost_ = boost, auto_ = auto_battle, menu_ = menu;
+  lt_ = in.lt, l3_ = in.l3, r3_ = in.r3;
+  return open_menu;
+}
+
+float speed_factor(bool fast, bool slow, int fast_rate, int slow_percent, bool in_battle, bool speed_locked) {
+  if (speed_locked) return 1.0f;
+  if (fast) return fast_rate <= 0 ? (in_battle ? 2.0f : 4.0f) : static_cast<float>(fast_rate);
+  if (slow) return static_cast<float>(slow_percent) / 100.0f;
+  return 1.0f;
+}
+
+float SlowFieldCycle::apply(double dt, bool active, float slow) {
+  if (!active) clock_ = 0.0;
+  if (!active || dt <= 0.0) return slow;
+  // The normal frames are [k * kCycle - kFrame, k * kCycle) for k >= 1.
+  const double from = clock_, to = clock_ + dt;
+  double normal = 0.0;
+  for (double k = std::floor(from / kCycle); k * kCycle - kFrame < to; k += 1.0) {
+    const double lo = std::max(from, k * kCycle - kFrame), hi = std::min(to, k * kCycle);
+    if (k >= 1.0 && hi > lo) normal += hi - lo;
+  }
+  clock_ = std::fmod(to, kCycle);
+  const double share = normal / dt;
+  return static_cast<float>(slow * (1.0 - share) + share);
+}
+
 // ------------------------------------------------------------------------------------------------ tab
 bool draw_cheats_tab(platform::Config& cfg) {
   using render::ImGuiLayer;
@@ -101,12 +160,12 @@ bool draw_cheats_tab(platform::Config& cfg) {
     ImGuiLayer::section("Radical Dreamers Edition set");
     if (ImGuiLayer::begin_rows("cheats_rde")) {
       toggle("No encounters", "##c_noenc", cheats.no_encounters,
-             "RDE's \"encounters off\" (F3): ordinary field battles (A3 / C9 ops) are won without being fought and the script goes on as after a win. "
+             "RDE's \"encounters off\" (F3, or click the left stick): ordinary field battles (A3 / C9 ops) are won without being fought and the script goes on as after a win. "
              "Story battles, forced battles and every battle RDE keeps (its Table A) still run.");
       toggle("Battle boost", "##c_boost", cheats.battle_boost,
-             "RDE's battle boost (F4): the party's HP, stamina and element gauge are refilled, negative status effects are cleared and nobody is knocked out.");
+             "RDE's battle boost (F4, or click the right stick): the party's HP, stamina and element gauge are refilled, negative status effects are cleared and nobody is knocked out.");
       toggle("Auto battle", "##c_auto", cheats.auto_battle,
-             "RDE's auto-battle (F5): every ready party member picks its own attack (a fierce hit on the first enemy). The results screen still waits for you.");
+             "RDE's auto-battle (F5, or click both sticks together): every ready party member picks its own attack (a fierce hit on the first enemy). The results screen still waits for you.");
       toggle("God mode", "##c_god", cheats.god_mode, "The party cannot be knocked out (HP stops at 1). The Debug tab's Invincible party box still works.");
       ImGuiLayer::end_rows();
     }

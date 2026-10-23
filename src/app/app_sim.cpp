@@ -31,7 +31,7 @@ void App::apply_audio_config() {
   if (voice_player) voice_player->set_enabled(config.voices);
 }
 
-// Art mode switch (F1, the Esc options overlay, route `art`): a pure rendering swap everywhere. Nothing is reloaded or
+// Art mode switch (F6, the Esc options overlay, route `art`): a pure rendering swap everywhere. Nothing is reloaded or
 // restarted - field room (title room included), battle, results, menus, shops - each part only rebuilds its art for the new mode.
 // Modded = HD art + the mod overlay: the VFS is re-pointed (hd mode + overlay) and HD <-> Modded / mod list edits force the same swap.
 void App::apply_art_mode() {
@@ -488,6 +488,8 @@ void App::advance(const platform::Input& in, double dt, int ticks) {
         if (game::Autosave::write(save_dat, flow.game_state().slot)) {
           save_dat.save(save_path);
           log::info("autosave: map {:#x} written", world.map_id());
+          // RDE's "AUTO SAVE" strip.
+          if (feature_icons_ok) feature_icons.show_autosave();
         }
       } catch (const std::exception& error) {
         log::warn("autosave failed: {}", error.what());

@@ -1,5 +1,5 @@
 #pragma once
-// Debug tab tools (Settings window, F2): start a battle on a chosen battlefield / formation, swap the enemies and the party, cast an element
+// Debug tab tools (Settings window, F8): start a battle on a chosen battlefield / formation, swap the enemies and the party, cast an element
 // in a running battle, teleport to a room, start an entity script, set story variables.
 //
 // The UI only queues requests (draw() runs inside the ImGui frame); apply() runs them once per frame in the main loop, before the game

@@ -1,4 +1,4 @@
-// The Esc overlay's "Debug" tab (F2): field / player / script VM status, the debug tools, the entity and variable tables; and the
+// The Esc overlay's "Debug" tab (F8): field / player / script VM status, the debug tools, the entity and variable tables; and the
 // per-frame debug-tool requests (free camera, battle / room / party / cast / script actions).
 #include "app/app.h"
 
@@ -186,7 +186,7 @@ void App::debug_tools_frame() {
     const bool fc_battle = battle_ready && (battle_ok || battle_in_field) && battle.scene_visible();
     const bool fc_title = flow_ready && flow.scene_mode() && world_ok && field_visible() && !movie_open && world.room_name() == game::kTitleRoom && title_bd.running();
     debug_tools.poll_free_camera(input, fc_battle || fc_title, window.handle());
-    // With the overlays hidden the game gets NO input at all - only Esc / F2 / F3 (read above) and the F-keys below still work; the
+    // With the overlays hidden the game gets NO input at all - only Esc / F8 / F7 (read above) and the F-keys below still work; the
     // pad is blanked too.
     if (game::free_cam().hide_overlays() && (fc_battle || fc_title)) {
       platform::Input blank;

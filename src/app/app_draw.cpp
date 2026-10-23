@@ -102,6 +102,15 @@ void App::draw_frame(const render::Frame& frame) {
     crt_pass.set_ramp(pause_on, tint);
     crt_pass.end(ctx, frame);
   }
+  // RDE's feature icons over the picture, under the pause screen's bars.
+  if (feature_icons_ok && !game::free_cam().hide_overlays()) {
+    const bool locked = speed_locked();
+    const ui::FeatureIcons::Active active{config.cheats.auto_battle, config.cheats.battle_boost, config.cheats.no_encounters,
+                                          config.slow_mode && !locked, config.fast_mode && !locked};
+    import::Lang icon_lang = import::Lang::En;
+    import::parse_lang(config.language, icon_lang);
+    feature_icons.draw(frame, vw, vh, active, icon_lang);
+  }
   // The pause screen's bars + text go over the filtered picture.
   if (pause_on && !(config.ps1_res && ps1_pass_43(frame, vw, vh, &menu_text, [&](const render::Frame& lf) { pause_screen.draw(lf, 1280.0f, 960.0f, true); })))
     pause_screen.draw(frame, vw, vh, true);

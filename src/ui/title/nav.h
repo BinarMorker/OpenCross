@@ -37,11 +37,11 @@ class NavPoller {
     nav.start = edge(SDL_SCANCODE_TAB) || pad_edge(SDL_GAMEPAD_BUTTON_START);
     nav.any = nav.confirm || nav.cancel || nav.l1 || nav.r1;
     for (int i = 0; i < platform::Input::kKeys && !nav.any; ++i)
-      if (in.key_pressed[static_cast<size_t>(i)] && i != SDL_SCANCODE_ESCAPE && i != SDL_SCANCODE_F1 && i != SDL_SCANCODE_F2 &&
-          i != SDL_SCANCODE_F3)
+      if (in.key_pressed[static_cast<size_t>(i)] && i != SDL_SCANCODE_ESCAPE && (i < SDL_SCANCODE_F1 || i > SDL_SCANCODE_F12))
         nav.any = true;
+    // The stick clicks are RDE's toggles.
     for (int i = 0; i < platform::Input::kButtons && !nav.any; ++i)
-      if (in.pad_pressed[static_cast<size_t>(i)]) nav.any = true;
+      if (in.pad_pressed[static_cast<size_t>(i)] && i != SDL_GAMEPAD_BUTTON_LEFT_STICK && i != SDL_GAMEPAD_BUTTON_RIGHT_STICK) nav.any = true;
     return nav;
   }
 

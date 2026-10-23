@@ -62,9 +62,9 @@ enum class TexFilter { Nearest, Bilinear };
 
 // [Cheats] (Esc overlay "Cheats" tab): every toggle off by default, never locks saving. platform::cheats() is the
 // live set (bound to Config::cheats by main) so the rule code in the lower layers can read it.
-//   no_encounters      RDE "encounters off" (F3): ordinary field battles are won without being fought
-//   battle_boost       RDE battle boost (F4): HP / stamina / elements refilled, negative status cleared
-//   auto_battle        RDE auto-battle (F5): the party plays itself
+//   no_encounters      RDE "encounters off" (F3 / L3): ordinary field battles are won without being fought
+//   battle_boost       RDE battle boost (F4 / R3): HP / stamina / elements refilled, negative status cleared
+//   auto_battle        RDE auto-battle (F5 / L3 + R3): the party plays itself
 //   god_mode           the party cannot be knocked out (Battle::set_invincible)
 //   no_clip            the leader ignores the walk mesh and the solid entities
 //   max_stamina        PC stamina never drops
@@ -110,7 +110,7 @@ void bind_cheats(const Cheats* set);
 //            2 atan(160 / 512) = 34.7); 30..110, larger = wider.
 //            WideHud ("Wide Menus/HUD", widescreen only): 0 = the battle HUD and the main menu on the 4:3 canvas, 1 = spread to a 16:9
 //            frame's width, 2 = spread to the window's edges (kWideHudNames; old `WideHudEdges=1` reads as 2).
-//            Widescreen (F3 toggles): the field, world map, battle and the title's 3D sea fill the window's own width (any shape wider
+//            Widescreen (F7 toggles): the field, world map, battle and the title's 3D sea fill the window's own width (any shape wider
 //            than 4:3; render::wide_extra_for); menus, dialogue, the title logo / menu and movies stay 4:3. Off = 4:3 with black bars.
 //            ArtMode (see the enum). Ps1Res (Retro look, every art mode): everything is drawn at the PS1's resolution and scaled up with
 //            sharp pixels - the field and battle 3D at 320 x 224, the menus / shops / title menu / name entry / Continue / party screens at
@@ -121,8 +121,10 @@ void bind_cheats(const Cheats* set);
 //            the 2D / UI drawn at output resolution; with Ps1Res the multiple of the PS1 320 x 224 target instead (2 = 640 x 448); one of
 //            kRenderScales (snapped on load). Ps1Jitter: GTE integer vertex snapping + affine texture mapping in the 3D pipelines
 //            (render/ps1_jitter.h). Crt: final full-frame CRT post pass (scanlines, mask, vignette), ImGui excluded (render/crt_pass.h).
-//   [Game]   FastMode (hotkey FastKey, an SDL key name, default F5): the simulation (field, battle) runs FastSpeed (2..5; FixedStep caps at
-//            5 ticks per frame) x faster; movies stay at normal speed. AutoSave: RDE's auto-save (card 1 slot 0) on every location change.
+//   [Game]   FastMode / SlowMode (RDE's speed toggles; exclusive; hotkeys FastSpeedKey / SlowSpeedKey, SDL key names, default F2 / F1,
+//            pad RT / LT): the simulation (field, battle) runs FastRate x faster (0 = RDE's: 4x in the field, 2x in battle; 2..5 =
+//            that many times; FixedStep caps at 5 ticks per frame) or at SlowRate percent (10..90, default RDE's 50); movies stay at
+//            normal speed. Both are off in the Radius tutorial (map / battle 386). AutoSave: RDE's auto-save (card 1 slot 0) on every location change.
 //            Language: en fr it de es jp (dialogue text). Portraits: 2021 or 1999 (RDE face art set).
 //   [Mods]   one line per mod folder (ModSetting; folders not listed get the defaults, Esc overlay "Mods" tab). DumpStages / DumpTitle /
 //            DumpRooms / DumpModels / DumpEffects: which categories the Mods tab "Dump all textures" button writes (battle stage + title 3D
@@ -141,7 +143,7 @@ void bind_cheats(const Cheats* set);
 //            AutoWalk: walk the player to the nearest talkable NPC and press the action key at AutoActionTick; AutoTarget: entity index to
 //            walk to (-1 = nearest NPC with an ON_ACTION script); AutoConfirm: press confirm every N ticks while a dialogue is open
 //            (0 = never); AutoTeleport: put the player next to the target at once instead of walking. Log: write opencross.log next to
-//            the exe (Debug tab checkbox; --config runs and Debug builds always log). Panels: show the field debug panels (F2 toggles).
+//            the exe (Debug tab checkbox; --config runs and Debug builds always log). Panels: show the field debug panels (F8 toggles).
 //            Entrance: ROOM_PARAM (entrance record) the debug room is entered with. SweepTicks: load every room in turn, run it for N
 //            ticks, log failures, then exit (0 = off); SweepTalk: with SweepTicks, also start every entity's ON_ACTION / ON_COLLISION for
 //            N ticks (softlock hunt). ShowMessage: open this dialogue message of the debug room at tick 30 (-1 = off); ShowChoice: make
@@ -174,9 +176,12 @@ struct Config {
   int wide_hud = 0;
   static constexpr const char* kWideHudNames[] = {"default", "16:9", "full"};
   bool fast_mode = false;
+  bool slow_mode = false;
   bool auto_save = true;
-  int fast_speed = 2;
-  std::string fast_key = "F5";
+  int fast_rate = 0;
+  int slow_rate = 50;
+  std::string fast_key = "F2";
+  std::string slow_key = "F1";
   bool widescreen = false;
   ArtMode art_mode = ArtMode::Hd;
   std::vector<ModSetting> mods;

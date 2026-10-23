@@ -178,9 +178,13 @@ bool Config::load(const std::filesystem::path& file) {
   }
   wide_edge_fade = std::clamp(parse_int(ini.get("Video", "WideEdgeFade"), wide_edge_fade), 0, 96);
   fast_mode = parse_bool(ini.get("Game", "FastMode"), fast_mode);
+  slow_mode = parse_bool(ini.get("Game", "SlowMode"), slow_mode) && !fast_mode;
   auto_save = parse_bool(ini.get("Game", "AutoSave"), auto_save);
-  fast_speed = std::clamp(parse_int(ini.get("Game", "FastSpeed"), fast_speed), 2, 5);
-  fast_key = ini.get("Game", "FastKey", fast_key);
+  fast_rate = std::clamp(parse_int(ini.get("Game", "FastRate"), fast_rate), 0, 5);
+  if (fast_rate == 1) fast_rate = 0;
+  slow_rate = std::clamp(parse_int(ini.get("Game", "SlowRate"), slow_rate), 10, 90);
+  fast_key = ini.get("Game", "FastSpeedKey", fast_key);
+  slow_key = ini.get("Game", "SlowSpeedKey", slow_key);
   widescreen = parse_bool(ini.get("Video", "Widescreen"), widescreen);
   {
     const std::string mode = ini.get("Video", "ArtMode", "hd");
@@ -310,9 +314,12 @@ bool Config::save(const std::filesystem::path& file) const {
   ini.set("Video", "WideHud", kWideHudNames[std::clamp(wide_hud, 0, 2)]);
   ini.set("Video", "WideEdgeFade", std::to_string(wide_edge_fade));
   ini.set("Game", "FastMode", on_off(fast_mode));
+  ini.set("Game", "SlowMode", on_off(slow_mode));
   ini.set("Game", "AutoSave", on_off(auto_save));
-  ini.set("Game", "FastSpeed", std::to_string(fast_speed));
-  ini.set("Game", "FastKey", fast_key);
+  ini.set("Game", "FastRate", std::to_string(fast_rate));
+  ini.set("Game", "SlowRate", std::to_string(slow_rate));
+  ini.set("Game", "FastSpeedKey", fast_key);
+  ini.set("Game", "SlowSpeedKey", slow_key);
   ini.set("Video", "Widescreen", on_off(widescreen));
   ini.set("Video", "ArtMode", art_mode == ArtMode::Modded ? "modded" : art_mode == ArtMode::Hd ? "hd" : "original");
   ini.set("Mods", "DumpStages", on_off(dump_stages));

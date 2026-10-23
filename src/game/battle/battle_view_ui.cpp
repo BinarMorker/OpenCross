@@ -705,8 +705,8 @@ void BattleView::auto_chain() {
 void BattleView::handle_input(const platform::Input& in) {
   auto key = [&](int scancode) { return in.key_pressed[static_cast<size_t>(scancode)]; };
   auto pad = [&](int button) { return in.pad_pressed[static_cast<size_t>(button)]; };
-  // Camera debug overlay: F4 in the game (F3 = widescreen there), F3 too in ocbattleview.
-  if (key(SDL_SCANCODE_F4) || (dbg_.overlay_key && key(SDL_SCANCODE_F3))) dbg_.overlay = !dbg_.overlay;
+  // Camera debug overlay: F9 in the game, F3 too in ocbattleview.
+  if (key(SDL_SCANCODE_F9) || (dbg_.overlay_key && key(SDL_SCANCODE_F3))) dbg_.overlay = !dbg_.overlay;
   {
     // Pad input selects pad glyphs, any key press keyboard glyphs (keyboard wins when both happen in one frame).
     bool any_pad = false, any_key = false;

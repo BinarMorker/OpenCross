@@ -3,6 +3,7 @@
 // field), composes the frame and applies what the Esc options window changed.
 #include "app/app.h"
 
+#include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_timer.h>
@@ -14,6 +15,7 @@
 
 #include "core/log.h"
 #include "game/effects/gpu_effects.h"
+#include "game/free_cam.h"
 #include "render/camera.h"
 
 namespace oc::app {
@@ -27,11 +29,16 @@ int App::run() {
     frame_settings();
     debug_tools_frame();
     frame_dt = timer.tick();
-    // [Game] FastMode: more 60 Hz ticks per frame.
-    if (config.fast_mode && !movie_open && !routing && !replaying) frame_dt *= config.fast_speed;
+    // [Game] FastMode / SlowMode: more or fewer 60 Hz ticks per frame.
+    if (!movie_open && !routing && !replaying) {
+      const bool in_battle = battle_ok || battle_in_field, locked = speed_locked();
+      const float factor = game::speed_factor(config.fast_mode, config.slow_mode, config.fast_rate, config.slow_rate, in_battle, locked);
+      const bool field_slow = config.slow_mode && !config.fast_mode && !in_battle && !locked;
+      frame_dt *= slow_field_cycle.apply(frame_dt, field_slow, factor);
+    }
     step = stepper.advance(frame_dt);
     // The art mode cycles SD -> HD -> Modded -> SD (also in the options window).
-    if (input.key_pressed[SDL_SCANCODE_F1]) {
+    if (input.key_pressed[SDL_SCANCODE_F6]) {
       config.art_mode = config.art_mode == platform::ArtMode::Original ? platform::ArtMode::Hd
                         : config.art_mode == platform::ArtMode::Hd     ? platform::ArtMode::Modded
                                                                        : platform::ArtMode::Original;
@@ -100,24 +107,55 @@ void App::log_frametime() {
 
 void App::frame_hotkeys() {
   if (input.key_pressed[SDL_SCANCODE_ESCAPE] && !routing && !replaying) ui.options_open = !ui.options_open;
-  if (input.key_pressed[SDL_SCANCODE_F2]) ui.toggle("Debug");
+  if (input.key_pressed[SDL_SCANCODE_F8]) ui.toggle("Debug");
   // A mode switch / monitor move rebuilds the swapchain at the new size.
   if (window.take_resized()) ctx.request_resize();
   // [Video] Widescreen on / off, live and saved (Graphics tab too).
-  if (input.key_pressed[SDL_SCANCODE_F3] && !routing && !replaying) {
+  if (input.key_pressed[SDL_SCANCODE_F7] && !routing && !replaying) {
     config.widescreen = !config.widescreen;
     config.save(config_file);
     ui.toast(config.widescreen ? "Widescreen: On" : "Widescreen: Off");
   }
-  // [Game] FastMode / FastSpeed / FastKey: the simulation (field ticks, battle, menus' fades) runs FastSpeed x faster; movies do not.
-  if (const SDL_Scancode fast_sc = SDL_GetScancodeFromName(config.fast_key.c_str());
-      fast_sc != SDL_SCANCODE_UNKNOWN && input.key_pressed[fast_sc] && !routing && !replaying) {
-    config.fast_mode = !config.fast_mode;
-    config.save(config_file);
-    ui.toast(config.fast_mode ? "Fast mode: " + std::to_string(config.fast_speed) + "x" : std::string("Fast mode: Off"));
-    // The key must not also count as an "any button" for the title / flow screens.
-    input.key_pressed[fast_sc] = false;
+  rde_toggle_keys();
+}
+
+bool App::speed_locked() const {
+  if (battle_ok || battle_in_field) return battle_ready && battle.scene_id() == game::kSpeedLockedMap;
+  return world_ok && world.map_id() == game::kSpeedLockedMap;
+}
+
+// RDE's play-time toggles ([Game] SlowMode / FastMode, [Cheats] NoEncounters / BattleBoost / AutoBattle) from its keys and pad
+// buttons; LT + L3 opens the settings window as it opens RDE's own menu. What is on shows as RDE's icons (draw_frame).
+void App::rde_toggle_keys() {
+  if (routing || replaying) return;
+  auto held = [&](const std::string& name) {
+    const SDL_Scancode sc = SDL_GetScancodeFromName(name.c_str());
+    if (sc == SDL_SCANCODE_UNKNOWN) return false;
+    // The speed keys must not also count as an "any button" for the title / flow screens.
+    input.key_pressed[sc] = false;
+    return input.key_down[sc];
+  };
+  game::HotkeyLevels levels;
+  levels.slow_key = held(config.slow_key);
+  levels.fast_key = held(config.fast_key);
+  levels.encounters_key = input.key_down[SDL_SCANCODE_F3];
+  levels.boost_key = input.key_down[SDL_SCANCODE_F4];
+  levels.auto_key = input.key_down[SDL_SCANCODE_F5];
+  // The Debug free camera flies on the triggers and stick clicks. A trigger counts as pressed from half way.
+  if (input.pad_connected && !game::free_cam().on()) {
+    levels.lt = input.pad_axis[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] >= 0.5f;
+    levels.rt = input.pad_axis[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] >= 0.5f;
+    levels.l3 = input.pad_down[SDL_GAMEPAD_BUTTON_LEFT_STICK];
+    levels.r3 = input.pad_down[SDL_GAMEPAD_BUTTON_RIGHT_STICK];
   }
+  platform::Cheats& cheats = config.cheats;
+  game::Toggles toggles{config.slow_mode, config.fast_mode, cheats.no_encounters, cheats.battle_boost, cheats.auto_battle};
+  const game::Toggles before = toggles;
+  if (rde_hotkeys.poll(levels, speed_locked(), toggles)) ui.options_open = !ui.options_open;
+  if (toggles == before) return;
+  config.slow_mode = toggles.slow, config.fast_mode = toggles.fast;
+  cheats.no_encounters = toggles.encounters, cheats.battle_boost = toggles.boost, cheats.auto_battle = toggles.auto_battle;
+  config.save(config_file);
 }
 
 // The live [Video] settings read every frame, so the overlay's changes apply at once.

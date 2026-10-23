@@ -382,26 +382,48 @@ OptionsChange ImGuiLayer::general_tab(platform::Config& cfg) {
 
   };
   auto sec_fast = [&] {
-  section("Fast mode");
+  section("Game speed");
   if (begin_rows("fast")) {
-    row("Fast mode", "Runs the game (field, battle) faster: more 60 Hz logic ticks per rendered frame. Music and movies keep their normal speed. "
-                     "The hotkey toggles it.");
-    if (ImGui::Checkbox("##fast", &cfg.fast_mode)) change.other = true;
-    row("Speed", "How many times faster the game runs while Fast mode is on (2x to 5x).");
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::SliderInt("##fastspeed", &cfg.fast_speed, 2, 5, "%dx")) change.other = true;
-    row("Hotkey", "The key that switches Fast mode on and off during play.");
-    static const char* const kKeys[] = {"F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "`", "Insert", "Home"};
+    // A key picker (SDL key names) for a speed toggle; an unknown stored name shows the first entry.
+    static const char* const kKeys[] = {"F1", "F2", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "`", "Insert", "Home"};
     static const std::vector<std::string> kKeyNames(std::begin(kKeys), std::end(kKeys));
-    int ki = 0;
-    bool known = false;
-    for (int i = 0; i < static_cast<int>(kKeyNames.size()); ++i)
-      if (cfg.fast_key == kKeys[i]) ki = i, known = true;
-    if (!known) ki = 0;
-    if (combo("##fastkey", ki, kKeyNames)) {
-      cfg.fast_key = kKeys[ki];
+    auto key_combo = [&](const char* id, std::string& key) {
+      int ki = 0;
+      for (int i = 0; i < static_cast<int>(kKeyNames.size()); ++i)
+        if (key == kKeys[i]) ki = i;
+      if (combo(id, ki, kKeyNames)) {
+        key = kKeys[ki];
+        change.other = true;
+      }
+    };
+    row("Fast mode", "RDE's high-speed mode: the game (field, battle) runs faster. Music and movies keep their normal speed. "
+                     "The fast key or the right trigger (RT) switches it on and off; it turns Slow mode off.");
+    if (ImGui::Checkbox("##fast", &cfg.fast_mode)) {
+      if (cfg.fast_mode) cfg.slow_mode = false;
       change.other = true;
     }
+    row("Fast speed", "How much faster the game runs in Fast mode. RDE = the Radical Dreamers Edition's own speeds: 4x in the field, 2x in battle.");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    {
+      int rate = cfg.fast_rate <= 0 ? 1 : cfg.fast_rate;
+      if (ImGui::SliderInt("##fastspeed", &rate, 1, 5, rate == 1 ? "RDE" : "%dx")) {
+        cfg.fast_rate = rate == 1 ? 0 : rate;
+        change.other = true;
+      }
+    }
+    row("Fast key", "The key that switches Fast mode on and off during play (RDE: F2).");
+    key_combo("##fastkey", cfg.fast_key);
+    row("Slow mode", "RDE's slow mode: the game (field, battle) runs slower. The slow key or the left trigger (LT) switches it on and off; "
+                     "it turns Fast mode off.");
+    if (ImGui::Checkbox("##slow", &cfg.slow_mode)) {
+      if (cfg.slow_mode) cfg.fast_mode = false;
+      change.other = true;
+    }
+    row("Slow speed", "How fast the game runs in Slow mode, in percent of normal speed (RDE: 50%).");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::SliderInt("##slowspeed", &cfg.slow_rate, 10, 90, "%d%%")) change.other = true;
+    row("Slow key", "The key that switches Slow mode on and off during play (RDE: F1).");
+    key_combo("##slowkey", cfg.slow_key);
     end_rows();
   }
 
@@ -409,13 +431,18 @@ OptionsChange ImGuiLayer::general_tab(platform::Config& cfg) {
   auto sec_controls = [&] {
   section("Controls");
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-    tooltip("The keyboard shortcuts the game itself listens to (pad buttons follow the RDE layout). Esc opens this window; F1 - F4 and the fast-mode key work in the field and in battle.");
+    tooltip("The keyboard shortcuts the game itself listens to (pad buttons follow the RDE layout). Esc opens this window; the others work in "
+            "the field and in battle.");
   // One key per row.
   if (begin_rows("controls")) {
-    const char* keys[][2] = {{"Esc", "Settings"},  {"F1", "Art mode"},           {"F2", "Debug tab"},
-                             {"F3", "Widescreen"}, {"F4", "Battle camera overlay"}, {cfg.fast_key.c_str(), "Fast mode"}};
+    const std::string speed_keys = cfg.slow_key + " / " + cfg.fast_key;
+    const char* keys[][2] = {{"Esc", "Settings (pad: LT + L3)"}, {speed_keys.c_str(), "Slow / Fast mode (pad: LT / RT)"},
+                             {"F3", "No encounters (pad: L3)"},  {"F4", "Battle boost (pad: R3)"},
+                             {"F5", "Auto battle (pad: L3 + R3)"}, {"F6", "Art mode"},
+                             {"F7", "Widescreen"},                {"F8", "Debug tab"},
+                             {"F9", "Battle camera overlay"}};
     for (const auto& shortcut : keys) {
-      row(shortcut[0], "Keyboard shortcut. The fast-mode key is set in the Fast mode section.");
+      row(shortcut[0], "Keyboard shortcut (and pad button). The speed keys are set in the Game speed section.");
       ImGui::AlignTextToFramePadding();
       ImGui::TextDisabled("%s", shortcut[1]);
     }
@@ -579,7 +606,7 @@ OptionsChange ImGuiLayer::graphics_tab(platform::Config& cfg) {
   auto sec_wide = [&] {
   section("Widescreen");
   if (begin_rows("wide")) {
-    row("Widescreen", "Fills the window's width with more of the field, world map, battle and title sea (F3 toggles). Off = 4:3 with "
+    row("Widescreen", "Fills the window's width with more of the field, world map, battle and title sea (F7 toggles). Off = 4:3 with "
                       "black bars. Menus, dialogue, the title logo / menu and movies stay 4:3.");
     if (ImGui::Checkbox("##wide", &cfg.widescreen)) change.widescreen = true;
     row("Edge fade", "Widescreen only: a room narrower than the window ends in a hard cut to black. This fades the room's edge into "
@@ -627,7 +654,7 @@ OptionsChange ImGuiLayer::graphics_tab(platform::Config& cfg) {
   auto sec_art = [&] {
   section("Art");
   if (begin_rows("art")) {
-    row("Art mode", "Switches the art live (F1 toggles HD / original); nothing is reloaded or restarted.");
+    row("Art mode", "Switches the art live (F6 cycles the art modes); nothing is reloaded or restarted.");
     std::vector<std::string> names;
     int ai = 0;
     for (size_t i = 0; i < std::size(kArtModes); ++i) {

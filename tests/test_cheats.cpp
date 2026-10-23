@@ -1,4 +1,5 @@
 // Cheats: the [Cheats] ini round trip (all off by default), the first-launch language mapping and RDE's encounter tables.
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -115,6 +116,97 @@ int main() {
   CHECK(!game::model_swap_skipped(0xAA, 0x0E, b7) && game::model_swap_skipped(0xAA, 6, b7));
   // Other maps: never skipped.
   CHECK(!game::model_swap_skipped(0xA0, 6, b7));
+
+  // --- RDE hotkeys: toggles flip on the press only; slow / fast exclude each other; the speed keys do nothing in the Radius tutorial
+  {
+    game::RdeHotkeys keys;
+    game::Toggles on;
+    auto frame = [&](game::HotkeyLevels in, bool locked = false) { return keys.poll(in, locked, on); };
+    game::HotkeyLevels fast_key;
+    fast_key.fast_key = true;
+    frame(fast_key);
+    frame(fast_key);
+    CHECK(on.fast && !on.slow);
+    frame({});
+    game::HotkeyLevels lt;
+    lt.lt = true;
+    frame(lt);
+    CHECK(on.slow && !on.fast);
+    frame({});
+    frame(lt);
+    CHECK(!on.slow && !on.fast);
+    frame({});
+    frame(fast_key, true);
+    CHECK(!on.fast);
+    frame({});
+    // F3 / F4 / F5
+    game::HotkeyLevels fkeys;
+    fkeys.encounters_key = fkeys.boost_key = fkeys.auto_key = true;
+    frame(fkeys);
+    frame(fkeys);
+    CHECK(on.encounters && on.boost && on.auto_battle);
+    frame({});
+    frame(fkeys);
+    frame({});
+    CHECK(!on.encounters && !on.boost && !on.auto_battle);
+    // L3 tap = encounters, R3 tap = boost, both on release
+    game::HotkeyLevels l3, r3, both;
+    l3.l3 = true, r3.r3 = true, both.l3 = both.r3 = true;
+    frame(l3);
+    CHECK(!on.encounters);
+    frame({});
+    CHECK(on.encounters && !on.boost && !on.auto_battle);
+    frame(r3);
+    frame({});
+    CHECK(on.boost);
+    // L3 + R3: auto battle when one is let go; letting go of the other one does not tap
+    frame(l3);
+    frame(both);
+    frame(r3);
+    CHECK(on.auto_battle && on.encounters && on.boost);
+    frame({});
+    CHECK(on.auto_battle && on.encounters && on.boost);
+    // LT + L3: the settings window, the frame after the pair completes (LT also toggled slow, the L3 release taps encounters)
+    game::HotkeyLevels lt_l3;
+    lt_l3.lt = lt_l3.l3 = true;
+    on = {};
+    CHECK(!frame(lt));
+    CHECK(!frame(lt_l3));
+    CHECK(frame(lt_l3));
+    CHECK(on.slow && !on.encounters);
+    CHECK(!frame({}));
+    CHECK(on.encounters);
+  }
+  // --- speed factors: RDE's own = 4x field / 2x battle; slow = percent; nothing in the tutorial
+  CHECK(game::speed_factor(true, false, 0, 50, false, false) == 4.0f && game::speed_factor(true, false, 0, 50, true, false) == 2.0f);
+  CHECK(game::speed_factor(true, false, 3, 50, true, false) == 3.0f && game::speed_factor(false, true, 0, 50, false, false) == 0.5f);
+  CHECK(game::speed_factor(true, false, 0, 50, false, true) == 1.0f && game::speed_factor(false, false, 0, 50, false, false) == 1.0f);
+  // --- field slow mode: 299 slow 1/30 s frames, then one at normal speed; restarts when slow mode is left
+  {
+    game::SlowFieldCycle cycle;
+    const double frame = game::SlowFieldCycle::kFrame;
+    double game_time = 0.0;
+    for (int i = 0; i < 300; ++i) {
+      const float factor = cycle.apply(frame, true, 0.5f);
+      CHECK(std::abs(factor - (i == 299 ? 1.0f : 0.5f)) < 1e-4f);
+      game_time += frame * factor;
+    }
+    CHECK(std::abs(game_time - 301.0 * frame / 2.0) < 1e-6);
+    CHECK(std::abs(cycle.apply(frame, true, 0.5f) - 0.5f) < 1e-4f);
+    // A 1/60 s frame half way into the normal frame: 3/4 speed.
+    game::SlowFieldCycle fine;
+    for (int i = 0; i < 599; ++i) fine.apply(frame / 2.0, true, 0.5f);
+    CHECK(std::abs(fine.apply(frame * 0.75, true, 0.5f) - (0.5 * (1.0 / 3.0) + 2.0 / 3.0)) < 1e-4);
+    // Leaving slow mode restarts the count; the frame's own factor comes back.
+    CHECK(fine.apply(frame, false, 2.0f) == 2.0f);
+    for (int i = 0; i < 299; ++i) CHECK(fine.apply(frame, true, 0.5f) == 0.5f);
+  }
+  // --- [Game] speed settings: RDE defaults, round trip
+  {
+    platform::Config defaults;
+    CHECK(!defaults.fast_mode && !defaults.slow_mode && defaults.fast_rate == 0 && defaults.slow_rate == 50 && defaults.fast_key == "F2" &&
+          defaults.slow_key == "F1");
+  }
 
   if (failures) return 1;
   std::printf("test_cheats: ok\n");

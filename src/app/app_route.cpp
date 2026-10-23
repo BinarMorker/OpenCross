@@ -141,7 +141,7 @@ void App::route_frame() {
     if (out.battle_auto && battle_ready) battle.set_auto(true);
     if (out.battle_auto && results_ok) results.set_auto(true);
     if (out.dump) log::info("route: tick {} entities of {}:\n{}", route_tick, rstate.room, world.dump_entities());
-    // Route `art`: the F1 path (not saved to the ini).
+    // Route `art`: the F6 path (not saved to the ini).
     if (!out.art.empty()) {
       const bool hd = out.art == "toggle" ? !platform::art_is_hd(config.art_mode) : out.art == "hd" || out.art == "modded";
       config.art_mode = !hd ? platform::ArtMode::Original : out.art == "modded" ? platform::ArtMode::Modded : platform::ArtMode::Hd;

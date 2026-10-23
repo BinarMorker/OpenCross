@@ -475,7 +475,7 @@ void BattleView::build_hud() {
   // The battle-script event window (E0).
   build_script_msg();
   if (ui_ == Ui::Result) build_result_ui();
-  // Debug free camera, "Hide overlays": no HUD / menus / windows / results (the F4 text below stays).
+  // Debug free camera, "Hide overlays": no HUD / menus / windows / results (the F9 text below stays).
   if (free_cam().hide_overlays()) ops_.clear();
   if (dbg_.overlay) build_camera_overlay();
 }

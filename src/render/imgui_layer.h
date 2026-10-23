@@ -68,7 +68,7 @@ class ImGuiLayer {
   // Inside a registered tab's draw: the config changed and must be saved (reported as OptionsChange::other).
   void mark_changed() { tab_changed_ = true; }
 
-  // Opens the overlay; a non-empty `tab` selects that tab (F2 opens "Debug").
+  // Opens the overlay; a non-empty `tab` selects that tab (F8 opens "Debug").
   void open(std::string_view tab = {});
   void toggle(std::string_view tab = {});
   // The tab shown last ("General", "Graphics", ...).

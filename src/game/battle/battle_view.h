@@ -142,8 +142,8 @@ class BattleView {
     bool enemy_cast = false;
     // >= 0: skip the intro, PC 0 attacks the first enemy with this strength (0 weak, 1 medium, 2 heavy).
     int weapon = -1;
-    // Camera overlay: active shot, eye / target, axis gizmo at each unit (F4 toggles it at run time); overlay_key: F3 toggles it too
-    // (ocbattleview only: in the game F3 toggles [Video] Widescreen).
+    // Camera overlay: active shot, eye / target, axis gizmo at each unit (F9 toggles it at run time); overlay_key: F3 toggles it too
+    // (ocbattleview only: in the game F3 is RDE's encounters-off key).
     bool overlay = false;
     bool overlay_key = false;
     // Both >= 0 with cast_element: that unit casts it on that unit (Debug tab; an all-targets element hits that side).
@@ -174,6 +174,7 @@ class BattleView {
   static constexpr float kBufferRows = render::kFieldRows, kGeomOffsetX = 160.0f, kGeomOffsetY = 112.0f;
   static render::Letterbox picture(float vw, float vh) { return render::Letterbox::field(vw, vh); }
   bool scene_visible() const { return ready_ && battle_ && !trans_run_; }
+  int scene_id() const { return scene_id_; }
   // The 3D pass: depth cue, stage, unit shadows, units, effects, mapped by `lb` = picture() of the window or Letterbox::identity(320, 224)
   // for a PS1-resolution target ([Video] Ps1Res; the host scales it up into picture()). Clipped to the 320 x 224 buffer.
   void draw_scene(const render::Frame& frame, const render::Letterbox& lb, bool sprites_resume = false);
