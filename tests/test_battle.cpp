@@ -328,6 +328,9 @@ PartyMember make_member(int id, const char* name, int hp = 50) {
   // Cell 10 holds Cure, row 1.
   member.cells[10] = 0x4003;
   member.unlocked[10] = true;
+  // An empty open cell in row 7 lets the gauge reach level 8.
+  member.cells[70] = 0x4000;
+  member.unlocked[70] = true;
   return member;
 }
 
@@ -376,6 +379,27 @@ void test_setup() {
   CHECK(b2.unit(0).name == "A" && b2.unit(1).name == "B" && b2.unit(2).name == "C");
   CHECK(!b2.start({}, 0));
   CHECK(!b2.start({make_member(0, "A")}, 5));
+}
+
+// The gauge cap is the deepest unlocked grid row: a member open to row 1 stops at level 2.
+void test_gauge_cap() {
+  data::GameTables tables = make_tables();
+  ScriptedRng rng(Lo::Fallback::Lo);
+  rng.push(0);
+  rng.push(100);
+  NullBrain brain;
+  Battle battle(tables, rng, brain);
+  PartyMember capped = make_member(0, "A");
+  capped.unlocked[70] = false;
+  CHECK(battle.start({capped, make_member(1, "B"), make_member(2, "C")}, 0));
+  CHECK_EQ(battle.unit(0).gauge_max, 1);
+  CHECK_EQ(battle.unit(1).gauge_max, 7);
+  Command attack;
+  attack.kind = Command::Kind::Attack;
+  attack.actor = 0;
+  attack.chain = {0, 1};
+  CHECK(battle.apply(attack));
+  CHECK_EQ(battle.unit(0).gauge, 1);
 }
 
 void test_stamina_sequence() {
@@ -1808,6 +1832,7 @@ int main() {
   test_colour_and_ring();
   test_growth();
   test_setup();
+  test_gauge_cap();
   test_stamina_sequence();
   test_action_events();
   test_status_and_poison();
