@@ -56,6 +56,7 @@
 #include "ui/party_screen.h"
 #include "ui/feature_icons.h"
 #include "ui/pause_screen.h"
+#include "ui/world_name.h"
 #include "ui/shop/shop_screen.h"
 #include "vfs/mods.h"
 #include "vfs/vfs.h"
@@ -133,6 +134,7 @@ class App {
   void handle_script_menu(const game::FieldWorld::MenuRequest& rq);
   void apply_flow_action(const game::FlowAction& action);
   bool pause_modal(const platform::Input& in);
+  void open_pause();
   void advance(const platform::Input& in, double dt, int ticks);
   bool field_visible() const { return world_ok && world.view().loaded(); }
 
@@ -310,6 +312,9 @@ class App {
   bool feature_icons_ok = false;
   game::RdeHotkeys rde_hotkeys;
   game::SlowFieldCycle slow_field_cycle;
+  // RDE's HD "Home / Another World" name over the world maps.
+  ui::WorldName world_name;
+  bool world_name_ok = false;
   ui::PartyScreen party_screen;
   bool party_ok = false;
   bool menu_ok = false, shop_ok = false, key_popup_ok = false;

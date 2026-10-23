@@ -152,6 +152,14 @@ void SpriteBatch::draw_quad_depth(TexRef texture, const float (&xy)[8], const fl
   for (size_t i = 0; i < 4; ++i) corners[i] = {xy[i * 2], xy[i * 2 + 1], uv[i * 2], uv[i * 2 + 1], color, depth};
 }
 
+void SpriteBatch::draw_quad(TexRef texture, const float (&xy)[8], const float (&uv)[8], u32 color) {
+  if (quad_count_ >= kMaxQuads) return;
+  quad(false, texture, 0, 0, 0, 0, 0, 0, 0, 0, 0, color);
+  if (quad_count_ == 0) return;
+  SpriteVertex* corners = vertex_data_ + static_cast<size_t>(quad_count_ - 1) * 4;
+  for (size_t i = 0; i < 4; ++i) corners[i] = {xy[i * 2], xy[i * 2 + 1], uv[i * 2], uv[i * 2 + 1], color, 0.0f};
+}
+
 void SpriteBatch::quad(bool depth, TexRef texture, float x, float y, float w, float h, float z, float u0, float v0,
                        float u1, float v1, u32 color) {
   if (quad_count_ >= kMaxQuads) {

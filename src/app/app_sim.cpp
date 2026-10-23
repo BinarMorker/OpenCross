@@ -210,8 +210,7 @@ bool App::pause_modal(const platform::Input& in) {
   if (!pause_screen.active()) {
     const bool over_battle = (battle_ok || battle_in_field) && !battle.transition_active();
     if (start_edge && (over_battle || movie_open)) {
-      pause_screen.set_language(lang);
-      pause_screen.open(world.game_state().option(ui::opt::kVibration));
+      open_pause();
       log::info("pause: opened over {} (vibration {})", movie_open ? "a movie" : "a battle", pause_screen.vibration());
       return true;
     }
@@ -229,7 +228,16 @@ bool App::pause_modal(const platform::Input& in) {
   if (pause_screen.vibration() && !world.game_state().option(ui::opt::kVibration)) platform::Rumble::instance().pulse();
   // The vibration option is saved with the game.
   world.game_state().set_option(ui::opt::kVibration, pause_screen.vibration());
+  // World Names = script var 0x52 (the world-map scripts and the HD name read it), written back on closing while its row is shown.
+  if (!pause_screen.active() && pause_screen.world_row() && world_ok) world.vm().set_var(0x52, pause_screen.world_names() ? 1 : 0);
   return true;
+}
+
+// The World Names row needs a map with a world name (var 0x50) and the scenario past Viper Manor's first talk with Melchior (0x34).
+void App::open_pause() {
+  pause_screen.set_language(lang);
+  const bool world_row = world_ok && world.vm().var(script::var::kScenario) >= 0x34 && world.vm().var(0x50) != 0;
+  pause_screen.open(world.game_state().option(ui::opt::kVibration), world_row, world_ok && world.vm().var(0x52) != 0);
 }
 
 // `ticks` field ticks (or battle / menu / movie time) for the input `in` over `dt` seconds.
@@ -444,9 +452,8 @@ void App::advance(const platform::Input& in, double dt, int ticks) {
   // Start / P (RDE): the pause screen over the frozen field / world map.
   if (pause_ok && world_ok && world.view().loaded() && !world.menu_active() && !world.battle_active() && world.idle() && menu.closed() &&
       (in.key_pressed[SDL_SCANCODE_P] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_START]))) {
-    pause_screen.set_language(lang);
-    pause_screen.open(world.game_state().option(ui::opt::kVibration));
-    log::info("pause: opened (vibration {})", pause_screen.vibration());
+    open_pause();
+    log::info("pause: opened (vibration {}, world names row {})", pause_screen.vibration(), pause_screen.world_row());
     return;
   }
   if (shop_open) {

@@ -57,6 +57,8 @@ class SpriteBatch {
   // A depth-tested quad with four free corners (PS1 POLY_FT4 order: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right; drawn
   // as the triangles 0-1-2 and 2-1-3 with affine UVs, like the GPU). xy / uv: 4 pairs. Depth writes follow the blend as in draw_depth().
   void draw_quad_depth(TexRef texture, const float (&xy)[8], const float (&uv)[8], float depth, u32 color = 0xFFFFFFFFu);
+  // The same free quad without the depth test (UI art drawn turned or mirrored).
+  void draw_quad(TexRef texture, const float (&xy)[8], const float (&uv)[8], u32 color = 0xFFFFFFFFu);
   // Switches the blend for the following quads (reset to Alpha by begin()).
   void set_blend(BlendMode mode);
   // Filtering of the following quads whatever the texture's sampler is (persists across begin() / end() until switched back):

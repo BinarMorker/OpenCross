@@ -83,6 +83,10 @@ class RoomView {
   u32 layer_mask() const { return layer_mask_; }
   // Host override: groups drawn as if BG_LAYER_OFF whatever the script says (the HD title hides the PS1 logo / prompt / (c) layers).
   void set_hidden_groups(u32 mask) { hidden_groups_ = mask; }
+  // Groups with parallax scale 0: fixed to the screen (the world maps' "Home / Another World" name).
+  u32 fixed_groups() const;
+  // Widescreen: the screen-fixed groups keep to the left edge of the visible columns instead of the 4:3 area's (the world name).
+  void set_fixed_to_edge(bool on) { fixed_to_edge_ = on; }
   // C2 SET_LAYER_OPACITY: the colour the group's tiles are modulated with (bytes, 128 = neutral). Cleared by load().
   void set_group_tint(size_t group, int r, int g, int b);
   // Debug: one line per drawn texture (group, z, rectangle, alpha).
@@ -202,6 +206,7 @@ class RoomView {
   int prev_pan_x_ = 0, prev_pan_y_ = 0;
   u32 layer_mask_ = 0xFFFFFFFFu;
   u32 hidden_groups_ = 0;
+  bool fixed_to_edge_ = false;
   // Per group, 1 = neutral.
   std::vector<std::array<float, 3>> group_tint_;
   bool loaded_ = false;

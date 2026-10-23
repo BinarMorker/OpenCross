@@ -13,9 +13,13 @@ constexpr float kCanvasW = 1280.0f, kCanvasH = 960.0f;
 // source columns kept unstretched at each end of the bar; the arrows are x0, y0, x1, y1 in source pixels.
 constexpr float kSrcW = 170.0f, kBarH = 60.0f, kCap = 38.0f;
 constexpr float kLeftArrow[4] = {1, 61, 13, 83}, kRightArrow[4] = {18, 61, 31, 83};
+// The pair of arrows as one strip; the World Names row draws it turned a quarter clockwise (left -> up, right -> down).
+constexpr float kArrowStrip[4] = {0, 61, 31, 83};
 // The art is drawn 1:1 at 1080p: kArt canvas units per art pixel (canvas 960 high). kTitleY / kRowY are the two bar centres.
 constexpr float kArt = 960.0f / 1080.0f;
 constexpr float kTitleY = 0.424f * kCanvasH, kRowY = 0.538f * kCanvasH;
+// The World Names row sits 89 canvas units below the Vibration row.
+constexpr float kRow2Y = kRowY + 89.0f;
 }  // namespace
 
 bool PauseScreen::init(render::GpuContext& ctx, const vfs::Vfs& vfs, render::SpriteBatch& sprites, render::TextBatch& text) {
@@ -58,8 +62,10 @@ void PauseScreen::shutdown() {
   ctx_ = nullptr;
 }
 
-void PauseScreen::open(bool vibration) {
+void PauseScreen::open(bool vibration, bool world_row, bool world_names) {
   vibration_ = vibration;
+  world_row_ = world_row;
+  world_names_ = world_names;
   open_ = true;
   last_ = std::chrono::steady_clock::now();
 }
@@ -74,17 +80,22 @@ void PauseScreen::tint(float (&rgb)[3]) {
   rgb[0] = 1.0f - shift, rgb[1] = 0.47f, rgb[2] = 0.47f + shift;
 }
 
-int PauseScreen::input(int dx, int, bool toggle, bool close) {
+int PauseScreen::input(int dx, int dy, bool toggle, bool close) {
   if (!open_) return 0;
   if (close) {
     open_ = false;
     return 6;
   }
+  int sfx = 0;
   if (dx != 0 || toggle) {
     vibration_ = !vibration_;
-    return 1;
+    sfx = 1;
   }
-  return 0;
+  if (dy != 0 && world_row_) {
+    world_names_ = !world_names_;
+    sfx = 1;
+  }
+  return sfx;
 }
 
 std::u32string PauseScreen::ui_text(int id, const char32_t* fallback) {
@@ -102,9 +113,11 @@ void PauseScreen::draw(const render::Frame& frame, float vw, float vh, bool resu
   const float zoom = fit.s, ox = fit.ox, oy = fit.oy;
   const std::u32string title = ui_text(0, U"PAUSE");
   const std::u32string line = ui_text(1, U"Vibration Function") + U" : " + ui_text(vibration_ ? 4 : 3, vibration_ ? U"On" : U"Off");
+  const std::u32string line2 = ui_text(2, U"World Names") + U" : " + ui_text(world_names_ ? 4 : 3, world_names_ ? U"On" : U"Off");
   if (face_ != render::kNoFace) {
     text_->prepare(face_, title);
     text_->prepare(face_, line);
+    if (world_row_) text_->prepare(face_, line2);
   }
 
   sprites_->begin(frame, vw, vh, resume);
@@ -144,16 +157,28 @@ void PauseScreen::draw(const render::Frame& frame, float vw, float vh, bool resu
   const float cx = kCanvasW * 0.5f;
   bar(cx, kTitleY, kSrcW * kArt, kArt, 255);
   centred(title, cx, kTitleY);
-  {
-    const float cy = kRowY;
-    const float tw = text_w(line), arrows = 40.0f * kArt;
+  // An option row: the bar sized to its text plus the arrows tucked inside its right end.
+  auto option_row = [&](const std::u32string& str, float cy, bool vertical) {
+    const float tw = text_w(str), arrows = 40.0f * kArt;
     const float w = tw + arrows + 2.0f * kCap * kArt * 1.0f;
     bar(cx, cy, w, kArt, 255);
     const float inner_right = cx + w * 0.5f - kCap * kArt * 0.85f;
-    centred(line, inner_right - arrows - tw * 0.5f - 4.0f * kArt, cy);
-    arrow(kLeftArrow, inner_right - 22.0f * kArt, cy - 1.0f, kArt, 0xFFFFFFFFu);
-    arrow(kRightArrow, inner_right - 6.0f * kArt, cy - 1.0f, kArt, 0xFFFFFFFFu);
-  }
+    centred(str, inner_right - arrows - tw * 0.5f - 4.0f * kArt, cy);
+    if (!vertical) {
+      arrow(kLeftArrow, inner_right - 22.0f * kArt, cy - 1.0f, kArt, 0xFFFFFFFFu);
+      arrow(kRightArrow, inner_right - 6.0f * kArt, cy - 1.0f, kArt, 0xFFFFFFFFu);
+    } else if (bar_set_) {
+      // The strip turned clockwise: its left edge becomes the top.
+      const float sw = (kArrowStrip[3] - kArrowStrip[1]) * kArt * zoom, sh = (kArrowStrip[2] - kArrowStrip[0]) * kArt * zoom;
+      const float x0 = ox + (inner_right - 14.0f * kArt) * zoom - sw * 0.5f, y0 = oy + (cy - 1.0f) * zoom - sh * 0.5f;
+      const float u0 = kArrowStrip[0] / bar_w_, v0 = kArrowStrip[1] / bar_h_, u1 = kArrowStrip[2] / bar_w_, v1 = kArrowStrip[3] / bar_h_;
+      const float xy[8] = {x0, y0, x0 + sw, y0, x0, y0 + sh, x0 + sw, y0 + sh};
+      const float uv[8] = {u0, v1, u0, v0, u1, v1, u1, v0};
+      sprites_->draw_quad(bar_set_, xy, uv);
+    }
+  };
+  option_row(line, kRowY, false);
+  if (world_row_) option_row(line2, kRow2Y, true);
   sprites_->end();
 }
 

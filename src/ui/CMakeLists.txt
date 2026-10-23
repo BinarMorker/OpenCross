@@ -20,6 +20,8 @@ add_library(oc_ui STATIC
   pause_screen.cpp
   feature_icons.h
   feature_icons.cpp
+  world_name.h
+  world_name.cpp
   menu/game_state.h
   menu/game_state.cpp
   menu/main_menu.h

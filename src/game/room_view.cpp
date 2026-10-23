@@ -382,6 +382,13 @@ bool RoomView::has_group(u32 group) const {
   return false;
 }
 
+u32 RoomView::fixed_groups() const {
+  u32 mask = 0;
+  for (size_t g = 0; g < group_scale_.size() && g < 32; ++g)
+    if (group_scale_[g] == 0) mask |= 1u << g;
+  return mask;
+}
+
 size_t RoomView::visible_group_images() const {
   size_t count = 0;
   if (!scene_) return 0;
@@ -517,13 +524,13 @@ void RoomView::draw(render::SpriteBatch& sprites, float vw, float vh, float alph
     if (it->group < 32 && (!((layer_mask_ >> it->group) & 1) || ((hidden_groups_ >> it->group) & 1))) continue;
     if (const float ot = std::max(8.0f, static_cast<float>(it->z)); ot <= slab_lo_ || ot > slab_hi_) continue;
     if ((it->blend >= 0 && std::max(8.0f, static_cast<float>(it->z)) < late_z_) != late_pass_) continue;
-    // Parallax: off = S * 4096 / scale. 4096 = scrolls with the foreground, larger = slower (farther).
-    const float scale =
-        it->group < group_scale_.size() && group_scale_[it->group] != 0 ? static_cast<float>(group_scale_[it->group]) : 4096.0f;
-    const float parallax = 4096.0f / scale;
+    // Parallax: off = S * 4096 / scale. 4096 = scrolls with the foreground, larger = slower (farther). Scale 0 = fixed to the screen:
+    // its offset is always a multiple of 4096, which the console's 11-bit drawing coordinates wrap to nothing.
+    const u32 scale = it->group < group_scale_.size() ? group_scale_[it->group] : 4096u;
+    const float parallax = scale == 0 ? 0.0f : 4096.0f / static_cast<float>(scale);
     // Sub-pixel placement only with the HD art.
     const bool sub = hd_ && it->set_hd;
-    float px = static_cast<float>(it->x) + scroll_x * parallax;
+    float px = static_cast<float>(it->x) + (scale == 0 ? (fixed_to_edge_ ? lb.x0 : 0.0f) : scroll_x * parallax);
     float py = static_cast<float>(it->y) + scroll_y * parallax;
     if (!sub) {
       px = std::floor(px);

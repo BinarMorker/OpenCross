@@ -60,8 +60,13 @@ void App::draw_frame(const render::Frame& frame) {
   if (title_scene && world.room_name() == game::kTitleRoom) render::set_wide_extra(0.0f);
   // HD art: RDE replaces the PS1 logo layer and prompt with title.png + its own prompt. Classic
   // (SD) art keeps the disc's own title room layers (PS1 logo / (c) / prompt), so nothing is hidden there.
+  // HD art: RDE draws its own world name (draw_field_ui) instead of the world maps' screen-fixed name layers.
+  // The world name (a map with var 0x50 set) follows the widescreen edge like RDE's HD name.
+  if (world_ok) world.view().set_fixed_to_edge(world.vm().var(0x50) != 0);
   if (world_ok)
-    world.view().set_hidden_groups(title_scene && (platform::art_is_hd(config.art_mode) || game::free_cam().hide_overlays()) && world.room_name() == game::kTitleRoom ? 0x7u : 0u);
+    world.view().set_hidden_groups(
+        (title_scene && (platform::art_is_hd(config.art_mode) || game::free_cam().hide_overlays()) && world.room_name() == game::kTitleRoom ? 0x7u : 0u) |
+        (platform::art_is_hd(config.art_mode) && world_name_ok && world.vm().var(0x50) != 0 ? world.view().fixed_groups() : 0u));
   // A disabled flow ([Debug] Battle / sweep / replay) is never started and would still "own the screen" in its initial Title state (black
   // frame over the battle): only an enabled flow draws.
   const bool flow_screen = flow_ready && flow_enabled && flow.owns_screen() && !movie_open && !title_scene;
@@ -384,6 +389,14 @@ void App::draw_battle_ui(const SceneFrame& sf) {
 void App::draw_field_ui(const SceneFrame& sf) {
   const render::Frame& frame = sf.frame;
   const float vw = sf.vw, vh = sf.vh;
+  // RDE's world name (HD art): under the windows, fades and menus.
+  if (world_name_ok) {
+    const bool show = platform::art_is_hd(config.art_mode) && !game::free_cam().hide_overlays() && world.vm().var(0x50) != 0 &&
+                      world.vm().var(0x52) != 0;
+    import::Lang name_lang = import::Lang::En;
+    import::parse_lang(config.language, name_lang);
+    world_name.draw(frame, vw, vh, world.view().letterbox(vw, vh).left(), show, ui::WorldName::home_map(world.map_id()), name_lang);
+  }
   if (world.overlay_needed()) {
     sprites.begin(frame, vw, vh, true);
     // With Ps1Res the status icons and dialogue windows go into the PS1-resolution target below.

@@ -1,9 +1,10 @@
 #pragma once
 // RDE pause screen: the frozen game picture under a magenta colour filter, a slanted bar "PAUSE" and below it the option row
-// "Vibration Function : On" with the small left / right arrows at the bar's right end. Text = lang.dat ui_pausemenu.txt (ids 0 PAUSE,
-// 1 Vibration Function, 3 Off, 4 On; id 2 World Names exists but the pause screen does not use it), bar art = ui.dat ui/pause.png,
-// font ui_font_gnb (HD) in both art modes.
-//   p.open(vibration);   per frame: sfx = p.input(dx, dy, toggle, close);   p.draw(...)
+// "Vibration Function : On" with the small left / right arrows at the bar's right end; on a map with a world name (script var 0x50)
+// once the scenario has reached 0x34 (Viper Manor, the first talk with Melchior) a second row "World Names : On" with the arrows
+// turned to up / down. Left / right flip Vibration, up / down flip World Names (no cursor). Text = lang.dat ui_pausemenu.txt (ids
+// 0 PAUSE, 1 Vibration Function, 2 World Names, 3 Off, 4 On), bar art = ui.dat ui/pause.png, font ui_font_gnb (HD) in both art modes.
+//   p.open(vibration, world_row, world_names);   per frame: sfx = p.input(dx, dy, toggle, close);   p.draw(...)
 #include <array>
 #include <chrono>
 #include <memory>
@@ -29,16 +30,19 @@ class PauseScreen {
   void shutdown();
   void set_language(import::Lang lang) { lang_ = lang; }
 
-  void open(bool vibration);
+  void open(bool vibration, bool world_row = false, bool world_names = true);
   void close() { open_ = false; }
   bool active() const { return open_; }
   bool vibration() const { return vibration_; }
+  // The World Names value (meaningful only while the row is shown; RDE writes it back only then).
+  bool world_row() const { return world_row_; }
+  bool world_names() const { return world_names_; }
   // The filter colour of this frame: a counter 0..479 advances once per frame (60 per second here, kept across openings as RDE's
   // global counter is), ramp = counter < 240 ? counter : 480 - counter, t = ramp / 240 * 0.53, colour = (1 - t, 0.47, 0.47 + t).
   void tint(float (&rgb)[3]);
 
-  // One frame of input (edges): dx or `toggle` flips the value, `close` leaves; `dy` is accepted for symmetry with the other panels
-  // and ignored. Returns the menu sound effect id to play (0 none, 1 cursor / toggle, 6 cancel).
+  // One frame of input (edges): dx or `toggle` flips Vibration, dy flips World Names (when its row is shown), `close` leaves.
+  // Returns the menu sound effect id to play (0 none, 1 cursor / toggle, 6 cancel).
   int input(int dx, int dy, bool toggle, bool close);
   // Draws over the frame (inside no begin / end); `resume` continues the frame's sprite pass as the other panels do.
   void draw(const render::Frame& frame, float vw, float vh, bool resume = false);
@@ -61,7 +65,7 @@ class PauseScreen {
   float font_scale_ = 1.0f;
   import::LangTables lt_;
   import::Lang lang_ = import::Lang::En;
-  bool open_ = false, vibration_ = true;
+  bool open_ = false, vibration_ = true, world_row_ = false, world_names_ = true;
   // Frames.
   double counter_ = 0;
   std::chrono::steady_clock::time_point last_{};
