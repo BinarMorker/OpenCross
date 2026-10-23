@@ -1,0 +1,45 @@
+# Battle HUD route: Continue from the save copy (the party of the real save, so the status plates must show
+# "Serge" / "Kid", not the save's kana default names), request encounter 1 from the field (request battle), then the Attack target
+# selection: status plates, the target cursor over the enemy, the target info window (name, HP ????, sex, INNATE dot) and the camera
+# hint with the keyboard key cap. Shots: bh_01 top menu, bh_02 target selection, bh_03 DYNAMIC hint, bh_04 the results screen.
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down                            # slot 5
+- wait 10
+- tap confirm
+- wait flow field 600
+- wait idle 600
+- request battle 1
+- wait battle start 600
+- wait 240                            # warp transition + white fade, then the intro shots
+- tap confirm                         # skip the intro shots
+- wait 120
+- screenshot bh_01_top.png
+- tap confirm                         # Attack -> target selection
+- wait 60
+- screenshot bh_02_target.png
+- tap c                               # Triangle: DYNAMIC camera
+- wait 40
+- screenshot bh_03_target_dynamic.png
+- tap c                               # back to NORMAL
+- wait 10
+- tap cancel                          # leave the target selection
+- wait 20
+- autoshot 300 30 bh_auto_            # the fight and the results pages (auto mode turns each page after 180 ticks)
+- fight 6000                          # the auto player finishes the fight; the results screen auto-advances
+- wait 30
+- quit

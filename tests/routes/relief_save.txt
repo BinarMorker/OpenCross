@@ -1,0 +1,46 @@
+# Relief Charm (memmenu2) on a loaded save. Fixture: tmp\relief\save.dat = tmp\save.dat with the
+# Relief Charm (key item 61) added to slot 8 (python tools\py\cc_save_keyitem.py tmp\save.dat tmp\relief\save.dat 8 61).
+# Slot 8 (wld_b01; the slot list's down key jumps 8 slots) owns Tele-Porter (1), Komodo Scale (32), Time Shifter (62) + the charm; field order:
+# Tele-Porter | Time Shifter / Relief Charm | Komodo Scale. Grid = Serge, Kid; relief byte (head 0x59F) = 0 (Serge).
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV first
+- tap confirm                         # skip it
+- wait movie end 300
+- wait 150
+- tap confirm                         # any button: the menu
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down                            # slot 8
+- wait 10
+- tap confirm
+- wait flow field 600
+- wait idle 900
+- tap f                               # the key-item list
+- wait 40
+- tap down                            # row 1, column 0: the Relief Charm
+- wait 6
+- screenshot rel_01_list.png
+- tap confirm                         # key item used (USED_KEY_ITEM = 0x400 + 61)
+- wait menu open 120
+- assert var 0x2A 1085
+- wait 30
+- tap confirm                         # cell 0 = Serge = the current relief member: refused (0x18)
+- wait 4
+- tap right                           # cell 1 = Kid
+- wait 4
+- tap confirm                         # relief member = Kid (sfx 8); the screen stays
+- wait 10
+- screenshot rel_02_relief.png
+- tap cancel                          # leave (always allowed): 64-frame closing fade
+- wait menu closed 120
+- assert party 0,1,-                  # the party itself is unchanged
+- wait idle 300
+- quit

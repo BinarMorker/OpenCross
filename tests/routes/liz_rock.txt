@@ -1,0 +1,14 @@
+# Lizard Rock North: talk to the giant clam (ent 17); it is flung into the pool and SET_VISIBLE 0 (+0x38 bit 0x10 = inactive) freezes it there - it stays DRAWN (as in retail).
+0 wait 30
+- load opa_a01f 0
+- wait idle 600
+- approach 17 60 900
+- action
+- wait 240
+- assert ent 17 shown 1
+- dump
+- screenshot liz_rock_landed.png
+- wait 400
+- screenshot liz_rock_later.png
+- assert ent 17 shown 1
+- quit

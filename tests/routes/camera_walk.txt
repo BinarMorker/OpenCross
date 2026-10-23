@@ -1,0 +1,15 @@
+# Camera on a diagonal walk (alu_a01f, Serge spawns at the right edge): hold left + up long enough to cross the screen centre, then
+# consecutive-tick screenshots cw_NN.png. The background shift between consecutive frames must be small and steady (one scroll value per
+# frame: no back-and-forth, no doubled layers); the dumps before / after show the scroll moved.
+0 wait idle 600
+- wait 30
+- key down left
+- key down up
+- wait 150
+- dump
+- autoshot 1 8 cw_
+- wait 12
+- dump
+- key up left
+- key up up
+- quit

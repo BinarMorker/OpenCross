@@ -1,0 +1,13 @@
+# Pushable block (FE 06, jac_b34i entity 4): while variable 0x118 bit 3 is clear the block stands at (0, -650) with FE 06 00 and takes the
+# player's velocity when the player walks into it (it advances one player step every second tick). Walk toward it: it must end
+# up well away from its spot (and the player behind it, not through it).
+0 wait 5
+- load jac_b34i 0
+- wait room jac_b34i 300
+- wait 60
+- dump
+- mark ent 4
+- approach 4 10 1500
+- dump
+- assert moved 4 30
+- quit

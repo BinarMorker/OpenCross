@@ -1,0 +1,23 @@
+# Guldove music: gal_b04f entered from gal_b02f (param 1: FE 78 song 56 at volume 0, entity 8 fades up over 120 frames),
+# then the right exit to gal_b02f entrance 2 (PLAY_SONG #56 of the same song). The music must stay audible after both steps: PLAY_SONG always
+# re-arms volume 0x7F, a stale FE 78 volume 0 left it silent. Check: music_guldove.env writes the mix (OC_AUDIO_DUMP), then
+# python tools\py\wav_rms.py tmp\h\music_guldove.wav  (0.5 s rms; ~1500 while the song plays, < 300 = silent).
+0 wait 5
+- request party_add 1
+- request party_add 39
+- load gal_b04f 0
+- wait room gal_b04f 300
+- wait idle 600
+- wait 120
+- log music: gal_b04f first entry
+- load gal_b04f 1
+- wait room gal_b04f 300
+- wait idle 600
+- wait 240
+- log music: gal_b04f entered with param 1 (faded in)
+- load gal_b02f 2
+- wait room gal_b02f 300
+- wait idle 600
+- wait 480
+- log music: gal_b02f entrance 2
+- quit

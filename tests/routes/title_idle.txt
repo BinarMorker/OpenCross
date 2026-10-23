@@ -1,0 +1,14 @@
+# Idle at the title: the script's idle timer starts the attract demo (room 10 = dem_01); a button returns to the title scene.
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait room dem_01 4000
+- wait 150
+- screenshot ti_01_demo.png
+- tap confirm
+- wait room opening 600
+- wait 120
+- assert flow title
+- screenshot ti_02_back.png
+- quit

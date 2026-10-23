@@ -1,0 +1,25 @@
+# Hydra poison water + field poison drain: HP never drops below 1, the field never kills.
+0 wait idle 600
+- set status 0 0
+- set hp 0 500
+- assert hp 0 500 500
+# walking in the poison water: +2 per tick on flag 0x10000, a hit (-2 HP) every 0x80 -> several hits over these walks
+- walk 401 285 40 900
+- walk 417 650 40 900
+- walk 401 285 40 900
+- walk 417 650 40 900
+- assert hp 0 400 498
+# standing still keeps the accumulator; no status bit is set by the water
+- assert status 0 1 clear
+# poison: -4 every 241 ticks while the input is free
+- set hp 0 300
+- set status 0 1
+- assert status 0 1 set
+- wait 260
+- assert hp 0 292 296
+# never below 1
+- set hp 0 2
+- wait 260
+- assert hp 0 1 1
+- set status 0 0
+- quit

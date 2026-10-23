@@ -1,0 +1,86 @@
+# Guldove clinic (gal_b06i, ROOM_PARAM 1) after the wake-up scene: Kid is the patient in the bed, so the entrance script removes her from the party
+# with 7D 01. The party entities belong to the slots, so the emptied slot's entity must lose its model (Kid stood on among the followers
+# next to her bed copy). Party Serge, Kid, Guile; var bit 0x1884 is the "Kid was in the party" mark gal_b09i leaves.
+0 wait 20
+- request party_add 0
+- request party_add 1
+- request party_add 2
+- set var 0x00 54
+- set var 0x188 0x10
+- load gal_b06i 1
+- wait room gal_b06i 300
+- wait text patient has been poisoned
+- assert party 0,2,-
+- assert ent 3 shown 0
+- dump
+- skip
+- wait text can save this girl
+- skip
+- wait text extinct
+- skip
+- skip
+- skip
+- skip
+- wait text Even if you manage
+- log msg 32 (PC1 = the party's second member, Guile) must show 'speaker ent 2, face 2' above
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- skip
+- wait text Oooo
+- log Kid calling from the bed: a frameless window (flag 0x10) with {mend} while the controls are locked must take the confirm key
+- skip
+- wait text go talk to her
+- quit

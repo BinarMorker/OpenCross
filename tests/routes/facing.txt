@@ -1,0 +1,24 @@
+# Arni entrances: screenshots of the PC right after each transition.
+0 wait idle
+- load alu_a01f 0
+- wait room alu_a01f 300
+- wait idle 300
+- wait 10
+- assert facing player 2200 8
+- screenshot fc_01_entrance0.png
+- load alu_a01f 1
+- wait idle 300
+- wait 10
+- assert facing player 4000 8
+- screenshot fc_02_entrance1.png
+- load alu_a01f 2
+- wait idle 300
+- wait 10
+- assert facing player 928 8
+- screenshot fc_03_entrance2.png
+- load alu_a01f 3
+- wait idle 300
+- wait 10
+- assert facing player 412 8
+- screenshot fc_04_entrance3.png
+- quit

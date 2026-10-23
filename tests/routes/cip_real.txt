@@ -1,0 +1,23 @@
+# Chronos room curtains with real input only (no teleports): walk to the window, face it, press confirm.
+# $0080 = 2 is the state after the intro (curtains up / day); the press must clear it (Serge jumps, the blinds roll down), and the state must survive leaving / re-entering.
+0 wait 5
+- request party_add 1
+- set var 0x00 8
+- set var 0x80 2
+- load alu_a03i 0
+- wait 90
+- assert anim 5 2
+- walk -21 404 20 900
+- key down up
+- wait 30
+- key up up
+- assert facing player 2900 1500
+- action
+- trace 1 160
+- wait 300
+- assert var 0x80 0
+- screenshot cip_down.png
+- load alu_a03i 0
+- wait 6
+- assert var 0x80 0
+- quit

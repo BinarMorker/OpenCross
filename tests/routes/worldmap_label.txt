@@ -1,0 +1,10 @@
+# World-map location label (Termina, wld_a00 entity 15): the frameless window sits above its marker (flags 56 = mode 2),
+# not at a fixed screen row. The window position is checked in the log ("dialogue window ps1").
+0 wait idle 600
+- load wld_a00 0
+- wait room wld_a00 300
+- wait idle 600
+- approach 15 40 1500
+- wait dialogue open 200
+- wait 30
+- quit

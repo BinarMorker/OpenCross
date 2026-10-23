@@ -1,0 +1,7 @@
+# Termina portrait painter choice lines: the {PARTYn%} tokens show the current party's names (Serge, Kid); screenshot cn_painter.png.
+0 wait 5
+- request party_add 1
+- request party_add 39
+- wait 200
+- screenshot cn_painter.png
+- quit

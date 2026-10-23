@@ -1,0 +1,15 @@
+# Title route: cold boot -> logo FMV (title room script) -> logo scene behind the title screen -> menu over the scene.
+0 wait flow title 300
+- wait movie start 300
+- wait 60
+- screenshot tt_01_movie.png
+- tap confirm                         # the opening FMV (newop / a01op, table row 0) is skippable
+- wait movie end 300
+- wait 100
+- screenshot tt_02_scene_a.png
+- wait 60
+- screenshot tt_03_scene_b.png
+- tap confirm                         # any button: the menu over the scene
+- wait 60
+- screenshot tt_04_menu.png
+- quit

@@ -1,0 +1,27 @@
+# Continue route: title -> Continue -> slot 5 of the owner's save copy (SaveDir=tmp) -> field at the saved position.
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV first
+- tap confirm                         # skip it
+- wait movie end 300
+- wait 150
+- tap confirm                         # any button: the menu
+- wait 60
+- tap down                            # Continue
+- wait 10
+- screenshot ct_01_title_continue.png
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down                            # slot 5 (index 5 of the list)
+- wait 10
+- screenshot ct_02_slot_list.png
+- tap confirm
+- wait flow field 600
+- wait idle 900
+- screenshot ct_03_continued.png
+- pos
+- quit

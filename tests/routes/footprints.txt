@@ -1,0 +1,11 @@
+# Walk the leader around on jac_a02f (footprints enabled by the room's party INIT, FE 2C 00). Expected log lines:
+#   field: tick N ent E foot 0|1 asi1 at x,y,z   (a foot event every 28 ticks walking / 20 running, alternating feet)
+0 wait idle 600
+- key down left
+- wait 90
+- key up left
+- key down up
+- wait 90
+- key up up
+- log footprints: expect 'foot 0 asi1' and 'foot 1 asi1' lines above
+- quit

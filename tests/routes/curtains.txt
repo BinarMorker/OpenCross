@@ -1,0 +1,23 @@
+# Chronos room (alu_a03i): the curtains hang from the rod (not drawn on the ground) and open / close on action.
+# The two curtains are room models 3 / 4 (ent 5 / 6): a flat strip hanging DOWN from its origin (bind y 0..2505) that op B0 SET_Y_OFFSET (ctx +0x110 = -505 / -514)
+# lifts to the rod; without the offset the strips would lie below the floor. Ent 7 (RECT_SIZE 20 x 180) toggles night / day on ON_ACTION.
+0 wait 5
+- request party_add 1
+- set var 0x00 8
+- load alu_a03i 0
+- wait 90
+- assert ent 5 shown 1
+- screenshot cu_01_start.png
+- approach 7 40 600
+- wait 20
+- screenshot cu_02_at_rect.png
+- action
+- wait 200
+- assert var 0x80 2                 # ent 7 set $0080 bit 1 (curtains rolled up / day)
+- assert anim 5 2                   # ent 5 ended on clip 2 (script 4: clips 0, 1, 2 = the blind rolls up)
+- screenshot cu_03_opened.png
+- action
+- wait 400
+- assert var 0x80 0                 # second press: bit cleared, script 5 (clips 3, 4, 0; then the idle flutter clip 4) lowers them again
+- screenshot cu_04_closed.png
+- quit

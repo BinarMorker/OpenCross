@@ -1,0 +1,26 @@
+# FMV via the real flow: title -> New Game -> opening rooms, mashing until the Kid dream FMV (opn_a05i 7E 3) is requested.
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap confirm
+- wait 20
+- tap confirm                         # the vibration page: On
+- wait flow name 600
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap tab
+- wait room opn_a01i 900
+- wait 200
+- load opn_a05i 1
+- wait room opn_a05i 300
+- mash until movie start 6000
+- wait 60
+- assert movie playing
+- quit

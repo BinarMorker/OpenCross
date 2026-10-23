@@ -1,0 +1,52 @@
+# Continue slot 4 of the owner's save copy (tmp\save.dat): gal_b09i (Guldove, the house), saved inside the wake-up event with
+# var 0x3A = 4, so the Load re-enters with ROOM_PARAM 4 and entity 9's UPDATE resumes the event after the save menu.
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap down
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap right
+- tap right
+- tap right
+- tap right                           # slot 4
+- wait 10
+- tap confirm
+- wait flow field 600
+- assert room gal_b09i
+- assert var 2 4
+- wait text You're finally awake?
+- skip
+- wait idle 1200
+- dump
+- walk -150 -330 30
+- walk -40 -345 20
+- walk 21 -340 20
+- walk 100 -320 20
+- walk 300 -380 30
+- walk 511 -492 40
+- wait room gal_b14f 600
+- wait text Ya finally woke up      # gal_b14f msg 0: Kid (room NPC entity 5) on the jetty
+- dump
+- skip
+- wait text Give yer thanks to Korcha
+- skip
+- wait text No sweat
+- skip
+- wait text such a wuss                # msg 7 ({bwait}{fset(3)}{fwait(1)}{wend(1)}): the text / script handshake on variable 0x22
+- wait 120
+- tap confirm                         # {bpage}
+- wait 120
+- tap confirm                         # {bwait}: fset(3) -> the script answers 1 -> the window closes
+- wait text A little graze             # msg 8: {fset(3)} mid-text, {fset(4)} at the end; the script answers 1 and the window closes
+- skip
+- wait text burnin' up                 # Korcha's msg 6: past the old stall
+- skip
+- wait room gal_b06i 900               # SET_NEXT_ROOM #214, #1: the clinic
+- quit

@@ -1,0 +1,18 @@
+# Termina portrait painter (tel_b02f ent 7, ON_ACTION 0467): `99 $room[8], #2` reads party slot 2 (0xFF empty) and
+# `IF $room[8] == #255` picks message 37 (two names + No thanks, MULTI_CHOICE 0x13) for a two-member party, else 38 (three names,
+# 0x14). The choice result is the cursor's line number (1..3), so "No thanks" (line 3) runs L055A "Come again!".
+# Regression: the three-name list showed with Serge + Kid (99 wrote -1) and "No thanks" answered "OK, it's done!" (0-based result).
+0 wait 5
+- request party_add 1
+- assert party 0,1,-
+- approach 7 60 600
+- action
+- wait text Shall I draw you a portrait
+- assert text No thanks
+- assert notext Guile
+- choose 2
+- wait text Come again
+- assert var 0x04 3
+- skip
+- wait idle 600
+- quit

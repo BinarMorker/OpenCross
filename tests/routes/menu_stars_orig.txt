@@ -1,0 +1,27 @@
+# Main menu, original art: title -> Continue -> slot 2 (head 0x5A5 = 3, 0x5A4 = 3, 0x40 = 0x20) -> field -> main menu.
+# The log must show "menu: star counter 3/3" (not the progression value 32).
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV first
+- tap confirm                         # skip it
+- wait movie end 300
+- wait 150
+- tap confirm                         # any button: the menu
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap right                           # slot 1
+- tap right                           # slot 2
+- wait 10
+- tap confirm
+- wait flow field 600
+- wait idle 900
+- tap tab                             # the menu key
+- wait menu open 120
+- wait 40
+- screenshot ms_01_main_orig.png
+- tap cancel
+- wait menu closed 300
+- quit

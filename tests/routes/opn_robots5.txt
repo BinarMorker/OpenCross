@@ -1,0 +1,15 @@
+# opn_a02i: Cybot 5 (1390,-1351, platform y -779, faces +X): idles while the leader y >= -778 or his tile attr == 79 (7A), else chases on D8.
+0 wait idle
+- request party_add 1
+- request party_add 22
+- load opn_a02i 0
+- wait room opn_a02i 300
+- wait idle 300
+- wait 30
+- put 1600 -1351
+- wait 20
+- trace 5 300
+- wait 200
+- screenshot robots5_01.png
+- dump
+- quit

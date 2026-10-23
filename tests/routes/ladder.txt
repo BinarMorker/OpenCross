@@ -1,0 +1,20 @@
+# gal_b03f's ladder is walk-mesh attr 80 (0x204000): 1270 units of height over about 130 units of ground. The engine keeps the 3D length
+# of every step, so the climb runs at 5 units per tick (about 260 ticks), not 5 ground units per tick (about 26 ticks);
+# the stair clip (+0xF0 = 5) plays on it and the character faces the wall.
+0 wait idle
+- load gal_b03f 0
+- wait room gal_b03f 300
+- wait idle 300
+- wait 30
+- walk 740 -405 24 1500
+- wait 10
+- assert height p0 -1330 -1200
+- mark time
+- walk 729 -459 14 900
+- assert anim p0 stair
+- assert anim p0 5
+- assert height p0 -1150 -400
+- walk 715 -525 24 900
+- wait 5
+- assert height p0 -300 60
+- assert elapsed 150 420

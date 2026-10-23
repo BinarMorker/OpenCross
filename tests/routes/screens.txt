@@ -1,0 +1,82 @@
+# Script-opened screens, driven through the host requests the field opcodes make: FE 4A / FE 84 rename, FE 5B party screen, FE 65 change disc,
+# FE 67 + FE 61 trading post. New game -> warp to Arni first (the flow owns the state).
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV first
+- tap confirm                         # skip it
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap confirm                         # New Game
+- wait 20
+- tap confirm                         # the vibration page: On
+- wait flow name 600                  # RDE user guide (two pages) before the name entry
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- wait 20
+- tap tab                             # Start: accept "Serge"
+- wait room opn_a01i 900
+- load alu_a01f 0
+- wait room alu_a01f 300
+- wait idle 600
+- assert party 0,1,39                 # Serge, Kid and the title script's random third member (Doc for [Debug] Seed=1)
+# ---- FE 4A: name entry for Kid (character 1)
+- request rename 1
+- wait menu open 120
+- screenshot sc_01_rename.png
+- tap e
+- tap e                             # R1 x2: the position moves onto the 'd'
+- tap cancel                          # backspace blanks it: "Kid" -> "Ki"
+- tap tab                             # Start: accept
+- wait menu closed 120
+- assert name 1 Ki
+# ---- FE 5B: party screen: Serge's slot is locked (new game), Kid <-> the third member
+- request party
+- wait menu open 120
+- screenshot sc_02_party.png
+- tap confirm                         # slot 0 = Serge, locked: refused (0x18), stays on the slots
+- wait 4
+- tap right                           # slot 1 (Kid)
+- wait 4
+- tap confirm                         # mode B: the grid, cursor on cell 0 (Serge)
+- wait 4
+- tap right
+- wait 4
+- tap right                           # cell 2: the third member (id 39)
+- wait 4
+- tap confirm                         # swap: Serge | third | Kid; the slot cursor follows to slot 2, the grid stays open
+- wait 4
+- screenshot sc_03_party_swapped.png
+- tap cancel                          # back to the slots
+- wait 4
+- tap cancel                          # leave (3 of 3 slots filled): 64-frame closing fade
+- wait menu closed 120
+- assert party 0,39,1
+- wait idle 120
+# ---- FE 65: change disc (argument = disc - 1), room ids then resolve through cdrom2.fnd
+- request disc 1
+- assert disc 2
+- request movie 10                    # disc 2 record 6045 = ending_s (the credits movie; disc 1 has no movie 10... it is a10hyofb)
+- wait movie start 300
+- screenshot sc_05_ending_movie.png
+- assert movie playing
+- tap confirm                         # skippable
+- wait movie end 300
+- request disc 0
+- assert disc 1
+- request movie 19                    # disc 1 record 6054 = newop (a01op_<lang>)
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+# ---- FE 67 + FE 61: trading post row 0
+- request trading 0
+- wait shop open 300
+- screenshot sc_04_trading_post.png
+- tap cancel
+- tap cancel
+- tap cancel
+- wait shop closed 300
+- quit

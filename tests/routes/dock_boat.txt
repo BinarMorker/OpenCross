@@ -1,0 +1,23 @@
+# Termina shrine path / Korcha's dock (tel_b23e, scenario 0x20, party Serge + Kid): the boat must be drawn and the fisherman next to it
+# must face the right way.
+# - ent 11 = the boat (room model 3, op 26 at y -160 on a water triangle): free-height entities get walk flags +0x7C = 0
+#   so it is dry - not filed behind the background by the water rule.
+# - ent 10 = the fisherman (model 6, op 26 + FE 19 01 keeps the triangle's flags: wet); INIT never turns him: heading 0.
+0 wait 5
+- request party_add 1
+- set var 0x00 32
+- load tel_b23e 0
+- wait room tel_b23e 300
+- wait 10
+- dump
+- assert ent 11 model 3
+- assert ent 11 shown 1
+- assert ent 11 wet 0
+- assert facing 11 2748 8
+- assert ent 10 model 6
+- assert ent 10 shown 1
+- assert ent 10 wet 1
+- assert facing 10 0 8
+- assert ent 9 model 5
+- assert facing 9 1536 8
+- quit

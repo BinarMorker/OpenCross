@@ -1,0 +1,17 @@
+# Attract demo party + NPC animation: idle at the title until the demo starts (dem_01: the script empties the party with 7D FF/FE/FD
+# and adds Serge, Kid and Glenn), then follow it into dem_02 where Zoah jumps down from the tree (LOAD_ANIMATION on a room-model NPC,
+# JUMP_MOVE ballistic step with the +0xE6 fall clip).
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait room dem_01 4000
+- wait 60
+- assert party 0,1,19
+- screenshot demo_01_party.png
+- wait room dem_02 3000
+# Zoah's JUMP_MOVE starts ~884 field ticks after the room loads (80 frames); this lands in the falling half (clip 0x88).
+- wait 915
+- screenshot demo_02_zoah_jump.png
+- wait 200
+- quit

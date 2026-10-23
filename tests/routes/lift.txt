@@ -1,0 +1,15 @@
+# Opening lift: the party rides up, then runs out of the elevator along engine heading 0x400 (-Z) onto the walk mesh.
+0 wait 5
+- request party_add 1
+- request party_add 39
+- load opn_a01i 0
+- wait room opn_a01i 300
+- autoshot 60 30 lf_t
+- mash until idle x 4000
+- wait 240
+- dump
+- assert gap player p1 0 300
+# retail row (o7 frame 2900, PS1 px from Serge): third member left, Kid right, both a little behind him
+- assert rel p2 p0 -20 -7 10
+- assert rel p1 p0 19 -7 10
+- quit

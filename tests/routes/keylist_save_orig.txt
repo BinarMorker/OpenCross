@@ -1,0 +1,62 @@
+# Key-item list (F) on a loaded save. The 6th file of the list owns Tele-Porter (1), Komodo Scale (32)
+# and Time Shifter (62), on the world map (wld_b01): field order = Tele-Porter | Time Shifter / Komodo Scale | empty.
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV first
+- tap confirm                         # skip it
+- wait movie end 300
+- wait 150
+- tap confirm                         # any button: the menu
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down                            # slot 5
+- wait 10
+- tap confirm
+- wait flow field 600
+- wait idle 900
+- tap f                               # the list slides up (23 frames to y 495, hand from frame 15)
+- wait 40
+- screenshot klo_01_list.png
+- tap right                           # Time Shifter
+- wait 6
+- tap down                            # the empty slot right of Komodo Scale (empty slots are reachable)
+- wait 6
+- tap confirm                         # refused (sound 0x18): the list stays
+- wait 6
+- tap left                            # Komodo Scale
+- wait 6
+- screenshot klo_02_moved.png
+- tap confirm                         # a plain item: USED_KEY_ITEM = 0x400 + 32, the list closes
+- wait 10
+- assert var 0x2A 1056
+- wait idle 300
+- tap f
+- wait 40
+- tap confirm                         # Tele-Porter (slot 0): the FE 5B party screen
+- wait menu open 120
+- assert var 0x2A 1025
+- wait 30
+- tap confirm                         # slot 0 = Serge, locked: refused (0x18), stays on the slots
+- wait 4
+- tap right                           # slot 1 (Kid)
+- wait 4
+- tap confirm                         # mode B: the grid, cursor on cell 0 (Serge)
+- wait 4
+- screenshot klo_03_party.png
+- tap confirm                         # Serge is in slot 0: swap -> Kid, Serge; the slot cursor follows to slot 0; the grid stays
+- wait 4
+- tap cancel                          # back to the slots
+- wait 4
+- tap cancel                          # leave (2 filled = 2 grid members): 64-frame closing fade
+- wait menu closed 120
+- assert party 1,0,-
+- wait idle 300
+- screenshot klo_04_back.png
+- quit

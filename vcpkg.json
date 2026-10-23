@@ -1,0 +1,15 @@
+{
+  "name": "opencross",
+  "version-string": "0.0.1",
+  "description": "Native PC port of Chrono Cross running from the Radical Dreamers Edition data files",
+  "license": "GPL-3.0-or-later",
+  "dependencies": [
+    { "name": "sdl3", "features": ["vulkan"] },
+    "shaderc",
+    "sdl3-shadercross",
+    { "name": "imgui", "features": ["sdl3-binding", "sdlgpu3-binding"] },
+    "miniz",
+    "stb"
+  ],
+  "builtin-baseline": "15e5f3820f0370f1ba7150853762cec0688cd396"
+}

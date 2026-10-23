@@ -1,0 +1,56 @@
+# Gate 2 route. Coordinates are world units (see the "dump" command).
+# Marker entities of wld_a01: 15 Opassa Beach (msg 9) -> opa_a04f, 16 Lizard Rock North (msg 10) -> opa_a01f,
+# 17 Lizard Rock South -> opa_a03f, 18/19 Fossil Valley (Drowned Valley) North/South -> obo_a01f.
+0 wait idle
+- assert room alu_a01f
+- screenshot g2_01_arni.png
+- key down run
+- walk 870 46 8                       # east exit of Arni (ent 18, a box): the room changes while walking
+- wait room wld_a01 600
+- screenshot g2_02_worldmap_arrive.png
+- walk -2427 -2148 110                # Lizard Rock North marker (ent 16): the label opens within 130 units
+- wait dialogue open 120
+- wait 20
+- screenshot g2_03_worldmap_label.png
+- tap confirm                         # JUMP_IF_NOT_KEY 0x20 while the label is up: enter
+- wait room opa_a01f 600
+- screenshot g2_04_lizard_rock.png
+- walk_ent 17 150 600                 # the giant clam (ent 17) blocks the trail; talking to it runs its cutscene and clears the way
+- action
+- wait 30
+- wait idle 3000
+- screenshot g2_05_clam_open.png
+- walk_ent 8 10 1500                  # the visible monster (ent 8, LOAD_MODEL_D1): touching it runs its ON_COLLISION = BATTLE_A3
+- wait battle start 600
+- screenshot g2_06_battle.png
+- fight 1800
+- wait room opa_a01f 600
+- wait idle 900
+- screenshot g2_07_back_on_field.png
+- walk -2287 1682 8                   # west exit of Lizard Rock North (ent 13): SET_NEXT_ROOM opa_a03f, entrance 1
+- wait room opa_a03f 600
+- dump
+- screenshot g2_08_lizard_rock_south.png
+- walk -2591 667 8                    # west exit of Lizard Rock South (opa_a03f ent 8): SET_NEXT_ROOM wld_a01, entrance 7
+- wait room wld_a01 600
+- screenshot g2_09_worldmap_south.png
+- walk -2825 -2657 100                # Opassa Beach marker (ent 15)
+- wait dialogue open 120
+- wait 20
+- screenshot g2_10_opassa_label.png
+- tap confirm
+- wait room opa_a04f 600
+- wait idle 1500
+- screenshot g2_11_opassa_beach.png
+- walk_ent 14 8 1500                  # Opassa Beach exit (ent 14): SET_NEXT_ROOM wld_a01, entrance 1
+- wait room wld_a01 600
+- screenshot g2_12_worldmap_from_opassa.png
+- walk -799 -471 110 3000             # Fossil Valley South marker (ent 19): label, then enter (obo_a01f)
+- wait dialogue open 120
+- wait 20
+- screenshot g2_13_fossil_valley_label.png
+- tap confirm
+- wait room obo_a01f 600
+- wait idle 1500
+- screenshot g2_14_fossil_valley.png
+- quit

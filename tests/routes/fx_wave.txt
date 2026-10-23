@@ -1,0 +1,12 @@
+# 8F ripple in jac_b35e (OT 1500 split): HD then classic art; the shots are compared numerically, not viewed (tmp/fx_draw/abcheck.py).
+# The dialogue window that opens at tick 122 stays on screen; the check masks it out.
+0 wait 300
+- screenshot fxw_hd_a.png
+- wait 7
+- screenshot fxw_hd_b.png
+- art original
+- wait 10
+- screenshot fxw_lo_a.png
+- wait 7
+- screenshot fxw_lo_b.png
+- quit

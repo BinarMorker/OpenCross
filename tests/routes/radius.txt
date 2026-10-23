@@ -1,0 +1,100 @@
+# Radius tutorial battle (scene 386, Arni alu_a04f `BATTLE #386, #22, #2`; evt386.pac entity 4 slot 2): the windows must come in the
+# script's order with the attacks: window 1 ("C'mon, Serge! Don't hold back!"), then the three queued attacks while the script's `delay 60` runs, then
+# windows 2, 3, 4 (each E0 .. E2 waits for the button), never all the windows first and the attacks after. `request battle 898` starts the encounter
+# (battlefield 0, a confirm tap every 90 ticks stands in for the player: the scene's own stage 22 / `ev01` shot is not requested by this command). The log lines `battle script: message N ... at tick T` and
+# `battle: action A actor X ... at tick T` give the order; OC_BATTLE_AUDIT=1 (radius.env) adds the flow audit.
+0 wait 5
+- load alu_a04f 0
+- wait room alu_a04f 600
+- wait idle 600
+- request battle 898
+- wait battle start 900
+- assert battle active
+# The order itself (window 1 only after the PC's return walk, `66 begin_action` waits on e064b <= 4; the attacks start once window 1 has closed;
+# windows 2 / 3 / 4 follow the attacks' `delay 60`) is read from the log lines `battle script: message N ... at tick T` / `battle: action ...`:
+# `assert battle events` reads that order from BattleView::route_events(): "w<msg>" = script window <msg> opened (0-based), "a" = a queued action began.
+# Observed (Debug, seed 1): w0 a a a w1 a w2 w3 w4 ... - window 1, the three queued attacks, then window 2 (the later 'a' tokens are the tap-driven turns).
+- wait 300
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- assert battle events w0 a a a w1
+- wait 60
+- quit

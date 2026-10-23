@@ -1,0 +1,13 @@
+# Short battle-free route used to record an input file for the replay test (tests\routes\replay_demo.ini records it,
+# tests\routes\replay_check.ini replays it; the "final state" log lines of both runs must be identical).
+0 wait idle
+- key down run
+- walk 870 46 8
+- wait room wld_a01 600
+- walk -2427 -2148 110
+- wait dialogue open 120
+- wait 20
+- tap confirm
+- wait room opa_a01f 600
+- wait 120
+- quit

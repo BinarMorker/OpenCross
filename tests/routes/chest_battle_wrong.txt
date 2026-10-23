@@ -1,0 +1,34 @@
+# Wrong pick variant: Viper Manor treasure vault chest (jac_b25i ent 23): the Boxer Boys battle (C9 #409, scene 409, evt409.pac). The battle script asks
+# "Which of us do you choose?" (battle message 0, then the PC command menu), the first PC attack decides: the unit named by var 0x82 wins
+# (set_result 0, ghost_self, mark_defeated) - any other pick answers "WROOONG" and the fight goes on; a multi-target hit answers "cheaters".
+# Seed picks the boxer holding the treasure (op 1F = libc rand); Seed=2 makes unit 3 the holder and the tap attack hits unit 4 (the auto player of chest_battle hits unit 3 = the right pick), so 'WROOONG' (message 1, entity 0 slot 1 reacting to var 0x84 = 2) must show and the fight goes on.
+0 wait 5
+- request party_add 1
+- load jac_b25i 0
+- wait room jac_b25i 600
+- wait idle 600
+- assert ent 23 shown 1
+- approach 23 40 900
+- tap confirm
+- wait 60
+- tap confirm
+- wait 60
+- wait battle start 900
+- wait 400
+- tap confirm
+- wait 120
+- tap confirm
+- wait 120
+- tap confirm
+- wait 120
+- tap confirm
+- wait 120
+- tap confirm
+- wait 120
+- tap confirm
+- wait 120
+- tap confirm
+- wait 120
+- tap confirm
+- wait 120
+- quit

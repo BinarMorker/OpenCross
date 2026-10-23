@@ -1,0 +1,524 @@
+#include "audio/mixer.h"
+
+#include <SDL3/SDL.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <optional>
+#include <string>
+
+#include "audio/bgm_table.h"
+#include "core/log.h"
+#include "vfs/vfs.h"
+
+namespace oc::audio {
+
+Mixer::Mixer() {
+  for (auto& bus : bus_) bus.store(1.0f);
+}
+
+// Finishes the WAV header of a running capture.
+Mixer::~Mixer() {
+  close_device();
+  if (capture_) {
+    const u32 bytes = u32(capture_frames_ * 4);
+    std::fseek(capture_, 4, SEEK_SET);
+    const u32 riff = 36 + bytes;
+    std::fwrite(&riff, 4, 1, capture_);
+    std::fseek(capture_, 40, SEEK_SET);
+    std::fwrite(&bytes, 4, 1, capture_);
+    std::fclose(capture_);
+  }
+}
+
+bool Mixer::start_capture(const std::string& path) {
+  if (capture_ || stream_) return false;
+  capture_ = std::fopen(path.c_str(), "wb");
+  if (!capture_) return false;
+  auto write32 = [&](u32 value) { std::fwrite(&value, 4, 1, capture_); };
+  auto write16 = [&](u16 value) { std::fwrite(&value, 2, 1, capture_); };
+  std::fwrite("RIFF", 1, 4, capture_);
+  write32(36);
+  std::fwrite("WAVEfmt ", 1, 8, capture_);
+  write32(16); write16(1); write16(2); write32(kRate); write32(kRate * 4); write16(4); write16(16);
+  std::fwrite("data", 1, 4, capture_);
+  write32(0);
+  log::info("audio: capturing the mix to {}", path);
+  return true;
+}
+
+void Mixer::capture_tick(double seconds) {
+  if (!capture_) return;
+  capture_carry_ += seconds * kRate;
+  const u32 frames = u32(capture_carry_);
+  capture_carry_ -= frames;
+  if (frames == 0) return;
+  std::vector<float> buf(size_t(frames) * 2);
+  render(buf.data(), frames);
+  std::vector<s16> pcm(buf.size());
+  for (size_t i = 0; i < buf.size(); ++i) pcm[i] = s16(std::clamp(buf[i], -1.0f, 1.0f) * 32767.0f);
+  std::fwrite(pcm.data(), 2, pcm.size(), capture_);
+  capture_frames_ += frames;
+}
+
+void Mixer::voice_play(std::shared_ptr<const std::vector<float>> pcm) {
+  Cmd cmd;
+  cmd.type = Cmd::VoicePlay;
+  cmd.voice = std::move(pcm);
+  push(std::move(cmd));
+}
+
+void Mixer::voice_stop() {
+  Cmd cmd;
+  cmd.type = Cmd::VoiceStop;
+  push(std::move(cmd));
+}
+
+// Without a device (or with a stalled callback) the ring is reset directly instead of by the audio thread.
+void Mixer::movie_start() {
+  if (movie_ring_.empty()) movie_ring_.assign(size_t(kMovieRing) * 2, 0.0f);
+  movie_on_.store(false, std::memory_order_release);
+  movie_flush_.store(true, std::memory_order_release);
+  for (int i = 0; i < 200 && movie_flush_.load(std::memory_order_acquire) && stream_; ++i) SDL_Delay(1);
+  if (movie_flush_.exchange(false)) {
+    movie_r_.store(movie_w_.load());
+    movie_played_.store(0);
+  }
+}
+
+void Mixer::movie_run() { movie_on_.store(true, std::memory_order_release); }
+
+void Mixer::movie_stop() { movie_on_.store(false, std::memory_order_release); }
+
+u32 Mixer::movie_free_frames() const {
+  return kMovieRing - u32(movie_w_.load(std::memory_order_relaxed) - movie_r_.load(std::memory_order_acquire));
+}
+
+u32 Mixer::movie_push(const float* stereo, u32 frames) {
+  const u32 accepted = std::min(frames, movie_free_frames());
+  u64 write_pos = movie_w_.load(std::memory_order_relaxed);
+  for (u32 i = 0; i < accepted; ++i, ++write_pos) {
+    const size_t at = size_t(write_pos & (kMovieRing - 1)) * 2;
+    movie_ring_[at] = stereo[size_t(i) * 2];
+    movie_ring_[at + 1] = stereo[size_t(i) * 2 + 1];
+  }
+  movie_w_.store(write_pos, std::memory_order_release);
+  return accepted;
+}
+
+// Without a device nothing drains the queue (scripted runs): it is kept bounded, the newest commands win.
+void Mixer::push(Cmd cmd) {
+  std::lock_guard lk(mu_);
+  if (queue_.size() >= 8192 && !stream_ && !capture_) queue_.erase(queue_.begin(), queue_.begin() + 4096);
+  queue_.push_back(std::move(cmd));
+}
+
+void Mixer::play(std::shared_ptr<HcaStream> stream, int song_id, int volume127, double start_seconds) {
+  push({Cmd::Play, std::move(stream), song_id, std::clamp(volume127, 0, 127), start_seconds});
+}
+void Mixer::stop() { push({Cmd::Stop, nullptr, -1, 0, 0}); }
+void Mixer::fade(int target_volume127, double seconds) { push({Cmd::Fade, nullptr, -1, std::clamp(target_volume127, 0, 127), seconds}); }
+void Mixer::pause() { push({Cmd::Pause, nullptr, -1, 0, 0}); }
+void Mixer::resume() { push({Cmd::Resume, nullptr, -1, 0, 0}); }
+
+bool Mixer::play_akao_bgm(int song_id, int volume127) {
+  if (!vfs_) return false;
+  const BgmEntry* entry = bgm_entry(song_id);
+  if (!base_table_) base_table_ = load_akao_base_table(*vfs_);
+  auto music = load_akao_music(*vfs_, entry ? entry->file_no : song_id, base_table_);
+  if (!music) return false;
+  auto player = std::make_shared<AkaoPlayer>(kRate, false);
+  player->load_music(music->seq, music->table);
+  log::debug("audio: song {} -> music{:03} (bank {}) on the AKAO sequencer", song_id, entry ? entry->file_no : song_id, music->seq->bank_id);
+  Cmd cmd{Cmd::PlayAkao, nullptr, song_id, std::clamp(volume127, 0, 127), 0};
+  cmd.akao = std::move(player);
+  push(std::move(cmd));
+  return true;
+}
+
+// 1. Both sources' timing (the AKAO loop is measured by running its sequencer silently). 2. The position now -> the same musical
+// position on the new source. 3. The new source built and positioned there; the time the build took is added at the end so the
+// unrolled clock carried in the command stays continuous.
+bool Mixer::switch_bgm_source(bool remastered, int song) {
+  const int cur = song_.load();
+  if (cur < 0 || !vfs_) return false;
+  if (bgm_akao_.load() == !remastered) return true;
+  if (song < 0) song = cur;
+  const bool from_akao = remastered;
+  if (!base_table_) base_table_ = load_akao_base_table(*vfs_);
+  auto load_music = [&](int id) {
+    const BgmEntry* entry = bgm_entry(id);
+    return load_akao_music(*vfs_, entry ? entry->file_no : id, base_table_);
+  };
+  auto make_player = [&](const AkaoMusic& music) {
+    auto player = std::make_shared<AkaoPlayer>(kRate, false);
+    player->load_music(music.seq, music.table);
+    return player;
+  };
+  auto hca_of = [](int id) {
+    const BgmEntry* entry = bgm_entry(id);
+    return entry ? hca_timing(entry->loop_start, entry->loop_end, kRate) : SongTiming{};
+  };
+  SongTiming from, to;
+  std::optional<AkaoMusic> akao_music;
+  if (from_akao) {
+    if (auto music = load_music(cur)) from = make_player(*music)->measure_timing();
+    to = hca_of(song);
+  } else {
+    from = hca_of(cur);
+    akao_music = load_music(song);
+    if (!akao_music) return false;
+    to = make_player(*akao_music)->measure_timing();
+  }
+  const auto build_start = std::chrono::steady_clock::now();
+  const double now_secs = bgm_secs_.load(), target_secs = map_song_position(now_secs, from, to);
+  const float level = level_view_.load(), level_target = level_target_view_.load();
+  const u32 fade_left = fade_left_view_.load();
+  const auto to_volume127 = [&](float gain) {
+    return int(std::clamp(from_akao ? gain / kSfxLevel * 127.0f : gain / kBgmVolumeScale, 0.0f, 127.0f) + 0.5f);
+  };
+  Cmd cmd{Cmd::Switch, nullptr, song, to_volume127(level), target_secs};
+  if (fade_left > 0) {
+    cmd.vol_target = to_volume127(level_target);
+    cmd.fade_secs = double(fade_left) / kRate;
+  }
+  if (remastered) {
+    const BgmEntry* entry = bgm_entry(song);
+    if (!entry) return false;
+    auto bytes = vfs_->read(bgm_path(entry->file_no));
+    auto stream = std::make_shared<HcaStream>();
+    if (!bytes || !stream->open(*bytes)) return false;
+    const double build_secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - build_start).count();
+    cmd.seconds = target_secs + build_secs;
+    stream->seek(u32(stream_position(cmd.seconds, to) * stream->sample_rate()));
+    cmd.stream = std::move(stream);
+  } else {
+    auto player = make_player(*akao_music);
+    player->seek_music(target_secs);
+    const double build_secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - build_start).count();
+    player->seek_music(build_secs, build_secs);
+    cmd.akao = std::move(player);
+    cmd.seconds = target_secs + build_secs;
+  }
+  log::debug("audio: bgm source switch song {}->{} {} -> {}: {:.3f} s (intro {:.2f} loop {:.2f}) -> {:.3f} s (intro {:.2f} loop {:.2f}) volume {} fade {}->{} in {:.2f} s",
+             cur, song, from_akao ? "AKAO" : "HCA", remastered ? "HCA" : "AKAO", now_secs, from.intro, from.loop, cmd.seconds, to.intro, to.loop, cmd.volume,
+             cmd.volume, cmd.vol_target, cmd.fade_secs);
+  push(std::move(cmd));
+  return true;
+}
+
+// The pending mask is published before the queue push so sfx_active() sees the request before the audio thread starts it.
+void Mixer::play_sfx(const SfxProgram& program) {
+  if (sfx_trace_on())
+    log::info("sfxtrace {:9.1f} ms REQ '{}' mask {:x} programs {} (queue {})", double(g_sfx_trace_clock.load()) * 1000.0 / kRate, program.tag, program.mask,
+              program.count, queue_.size());
+  Cmd cmd{Cmd::Sfx, nullptr, -1, 0, 0};
+  cmd.sfx = program;
+  std::lock_guard lk(mu_);
+  sfx_pending_.fetch_or(program.mask, std::memory_order_acq_rel);
+  queue_.push_back(std::move(cmd));
+}
+void Mixer::set_sfx_mods(u32 mask, int volume127, int pan127) {
+  Cmd cmd{Cmd::SfxMods, nullptr, -1, volume127, 0};
+  cmd.mask = mask;
+  cmd.pan = pan127;
+  push(std::move(cmd));
+}
+void Mixer::fade_sfx_volume(u32 mask, int frames, int volume127) {
+  Cmd cmd{Cmd::SfxFade, nullptr, -1, volume127, 0};
+  cmd.mask = mask;
+  cmd.pan = frames;
+  push(std::move(cmd));
+}
+void Mixer::evict_sfx() { push({Cmd::EvictSfx, nullptr, -1, 0, 0}); }
+void Mixer::evict_sfx(u32 mask, bool untagged) {
+  if (!mask && !untagged) return;
+  Cmd cmd{Cmd::EvictSfx, nullptr, -1, 0, 0};
+  cmd.mask = mask;
+  cmd.untagged = untagged;
+  push(std::move(cmd));
+}
+void Mixer::trace_report(const char* why) {
+  std::lock_guard lk(mu_);
+  if (sfx_player_) sfx_player_->trace_report(why);
+}
+void Mixer::stop_sfx() { push({Cmd::StopSfx, nullptr, -1, 0, 0}); }
+
+void Mixer::arm_level(float gain) {
+  level_ = level_target_ = gain;
+  fade_left_ = 0;
+  paused_ = false;
+}
+
+void Mixer::step_fade() {
+  if (fade_left_) {
+    level_ += level_step_;
+    if (--fade_left_ == 0) level_ = level_target_;
+  }
+}
+
+// BGM transport changes are logged (debug) so scripted runs can check what a room change did to the music. A Play / PlayAkao of
+// the song already current keeps it playing but re-arms its volume (a faded-out scene must not leave it silent). Switch continues
+// the playing song on the other source (already positioned by switch_bgm_source): a running fade goes on from the current level,
+// otherwise a ~15 ms declick ramp replaces a hard cut.
+void Mixer::apply(const Cmd& cmd) {
+  switch (cmd.type) {
+    case Cmd::Play: case Cmd::PlayAkao: case Cmd::Stop: case Cmd::Pause: case Cmd::Resume:
+      log::debug("audio: bgm cmd {} song {} (current {}) at frame {}", int(cmd.type), cmd.song, song_.load(), captured_frames());
+      break;
+    default: break;
+  }
+  switch (cmd.type) {
+    case Cmd::Play:
+      if (cmd.stream && bgm_ && song_.load() == cmd.song) {
+        arm_level(bgm_gain(cmd.volume));
+        break;
+      }
+      if (!cmd.stream) break;
+      akao_.reset();
+      bgm_ = cmd.stream;
+      bgm_->seek(u32(std::max(0.0, cmd.seconds) * bgm_->sample_rate()));
+      bgm_base_ = std::max(0.0, cmd.seconds);
+      bgm_frames_ = 0;
+      bgm_akao_.store(false);
+      arm_level(bgm_gain(cmd.volume));
+      song_.store(cmd.song);
+      break;
+    case Cmd::PlayAkao:
+      if (cmd.akao && akao_ && song_.load() == cmd.song) {
+        arm_level(akao_gain(cmd.volume));
+        break;
+      }
+      if (!cmd.akao) break;
+      bgm_.reset();
+      akao_ = cmd.akao;
+      arm_level(akao_gain(cmd.volume));
+      song_.store(cmd.song);
+      bgm_akao_.store(true);
+      break;
+    case Cmd::Stop:
+      bgm_.reset();
+      akao_.reset();
+      song_.store(-1);
+      bgm_pos_.store(0);
+      break;
+    case Cmd::Fade:
+      if (!bgm_ && !akao_) break;
+      level_target_ = akao_ ? akao_gain(cmd.volume) : bgm_gain(cmd.volume);
+      fade_left_ = u32(std::max(0.0, cmd.seconds) * kRate);
+      if (fade_left_ == 0)
+        level_ = level_target_;
+      else
+        level_step_ = (level_target_ - level_) / float(fade_left_);
+      break;
+    case Cmd::Pause: paused_ = true; break;
+    case Cmd::Resume: paused_ = false; break;
+    case Cmd::Sfx:
+      if (!sfx_player_) sfx_player_ = std::make_unique<AkaoPlayer>(kRate, true);
+      sfx_player_->start_sfx(cmd.sfx);
+      break;
+    case Cmd::StopSfx:
+      if (sfx_player_) sfx_player_->stop();
+      break;
+    case Cmd::EvictSfx:
+      if (sfx_player_) {
+        if (cmd.mask || cmd.untagged) sfx_player_->evict_sfx(cmd.mask, cmd.untagged);
+        else sfx_player_->evict_sfx();
+      }
+      break;
+    case Cmd::SfxMods:
+      if (sfx_player_) sfx_player_->set_sfx_mods(cmd.mask, cmd.volume, cmd.pan);
+      break;
+    case Cmd::SfxFade:
+      if (sfx_player_) sfx_player_->fade_sfx_volume(cmd.mask, cmd.pan, cmd.volume);
+      break;
+    case Cmd::Switch:
+      if (!cmd.stream && !cmd.akao) break;
+      bgm_.reset();
+      akao_.reset();
+      if (cmd.stream) {
+        bgm_ = cmd.stream;
+        bgm_base_ = cmd.seconds;
+        bgm_frames_ = 0;
+      } else {
+        akao_ = cmd.akao;
+      }
+      bgm_akao_.store(cmd.akao != nullptr);
+      paused_ = false;
+      song_.store(cmd.song);
+      {
+        const auto gain = [&](int volume127) { return cmd.akao ? akao_gain(volume127) : bgm_gain(volume127); };
+        if (cmd.vol_target >= 0 && cmd.fade_secs > 0.0) {
+          level_ = gain(cmd.volume);
+          level_target_ = gain(cmd.vol_target);
+          fade_left_ = std::max<u32>(1, u32(cmd.fade_secs * kRate));
+          level_step_ = (level_target_ - level_) / float(fade_left_);
+        } else {
+          level_target_ = gain(cmd.volume);
+          level_ = 0;
+          fade_left_ = kRate / 66;
+          level_step_ = level_target_ / float(fade_left_);
+        }
+      }
+      break;
+    case Cmd::VoicePlay:
+      voice_ = cmd.voice;
+      voice_pos_ = 0;
+      voice_on_.store(voice_ && !voice_->empty(), std::memory_order_release);
+      break;
+    case Cmd::VoiceStop:
+      voice_.reset();
+      voice_on_.store(false, std::memory_order_release);
+      break;
+  }
+}
+
+// The command queue is drained under a try-lock: the audio thread never blocks, commands it cannot take apply next callback. While
+// held (pause screen) the music, voice and movie stand still and only the SFX engine runs. The SFX engine shares the PS1's single
+// reverb unit with the music: it takes the AKAO song's mode / depth when the original music plays, otherwise the boot values
+// (mode 4, depth 0x3FFF), which is what RDE runs since its PS1 sequencer never loads a song.
+void Mixer::render(float* out, u32 frames) {
+  std::fill(out, out + size_t(frames) * 2, 0.0f);
+  if (sfx_trace_on()) g_sfx_trace_clock.fetch_add(frames, std::memory_order_relaxed);
+  {
+    std::unique_lock lk(mu_, std::try_to_lock);
+    if (lk.owns_lock()) {
+      u32 started = 0;
+      for (const Cmd& cmd : queue_) {
+        apply(cmd);
+        if (cmd.type == Cmd::Sfx) started |= cmd.sfx.mask;
+      }
+      queue_.clear();
+      sfx_active_.store(sfx_player_ ? sfx_player_->active_sfx_mask() : 0, std::memory_order_release);
+      sfx_pending_.fetch_and(~started, std::memory_order_acq_rel);
+    }
+  }
+  const bool hold = hold_.load(std::memory_order_acquire);
+  const float master = bus_gain(Bus::Master);
+  if (movie_flush_.load(std::memory_order_acquire)) {
+    movie_r_.store(movie_w_.load(std::memory_order_acquire));
+    movie_played_.store(0, std::memory_order_release);
+    movie_flush_.store(false, std::memory_order_release);
+  }
+  if (!hold && movie_on_.load(std::memory_order_acquire)) {
+    const u64 read_pos = movie_r_.load(std::memory_order_relaxed);
+    const u32 count = u32(std::min<u64>(frames, movie_w_.load(std::memory_order_acquire) - read_pos));
+    const float gain = master * bus_gain(Bus::Movie);
+    for (u32 i = 0; i < count; ++i) {
+      const size_t at = size_t((read_pos + i) & (kMovieRing - 1)) * 2;
+      out[size_t(i) * 2] += movie_ring_[at] * gain;
+      out[size_t(i) * 2 + 1] += movie_ring_[at + 1] * gain;
+    }
+    movie_r_.store(read_pos + count, std::memory_order_release);
+    movie_played_.store(movie_played_.load(std::memory_order_relaxed) + count, std::memory_order_release);
+  }
+  if (bgm_ && !paused_ && !hold) {
+    const float bus_level = master * bus_gain(Bus::Bgm);
+    u32 done = 0;
+    while (done < frames) {
+      u32 want = std::min<u32>(frames - done, 1024);
+      scratch_.resize(size_t(want) * 2);
+      u32 got = bgm_->read(scratch_.data(), want);
+      for (u32 i = 0; i < got; ++i) {
+        step_fade();
+        const float gain = level_ * bus_level * (1.0f / 32768.0f);
+        out[(size_t(done) + i) * 2] += float(scratch_[size_t(i) * 2]) * gain;
+        out[(size_t(done) + i) * 2 + 1] += float(scratch_[size_t(i) * 2 + 1]) * gain;
+      }
+      done += want;
+      bgm_frames_ += got;
+      if (got < want) {
+        bgm_.reset();
+        song_.store(-1);
+        break;
+      }
+    }
+    if (bgm_) {
+      bgm_pos_.store(bgm_->position(), std::memory_order_relaxed);
+      bgm_secs_.store(bgm_base_ + double(bgm_frames_) / double(bgm_->sample_rate()), std::memory_order_relaxed);
+    }
+  }
+  if (akao_ && !paused_ && !hold) {
+    const float bus_level = master * bus_gain(Bus::Bgm);
+    fscratch_.resize(size_t(frames) * 2);
+    akao_->render(fscratch_.data(), frames);
+    bgm_secs_.store(akao_->seconds(), std::memory_order_relaxed);
+    for (u32 i = 0; i < frames; ++i) {
+      step_fade();
+      const float gain = level_ * bus_level;
+      out[size_t(i) * 2] += fscratch_[size_t(i) * 2] * gain;
+      out[size_t(i) * 2 + 1] += fscratch_[size_t(i) * 2 + 1] * gain;
+    }
+    if (akao_->finished()) {
+      akao_.reset();
+      song_.store(-1);
+    }
+  }
+  if (sfx_player_ && !sfx_player_->finished()) {
+    if (akao_) sfx_player_->set_reverb(akao_->reverb_mode(), akao_->reverb_depth());
+    else sfx_player_->set_reverb(4, 0x3FFF);
+    const float gain = master * bus_gain(Bus::Sfx) * kSfxLevel;
+    fscratch_.resize(size_t(frames) * 2);
+    sfx_player_->render(fscratch_.data(), frames);
+    for (size_t i = 0; i < size_t(frames) * 2; ++i) out[i] += fscratch_[i] * gain;
+    sfx_active_.store(sfx_player_->active_sfx_mask(), std::memory_order_release);
+  }
+  if (voice_ && !hold) {
+    const size_t total = voice_->size() / 2;
+    const size_t count = std::min<size_t>(frames, total - voice_pos_);
+    const float gain = master * bus_gain(Bus::Voice);
+    const float* src = voice_->data() + voice_pos_ * 2;
+    for (size_t i = 0; i < count * 2; ++i) out[i] += src[i] * gain;
+    voice_pos_ += count;
+    if (voice_pos_ >= total) {
+      voice_.reset();
+      voice_on_.store(false, std::memory_order_release);
+    }
+  }
+  if (mono_.load(std::memory_order_relaxed))
+    for (u32 i = 0; i < frames; ++i) out[2 * i] = out[2 * i + 1] = 0.5f * (out[2 * i] + out[2 * i + 1]);
+  level_view_.store(level_, std::memory_order_relaxed);
+  level_target_view_.store(level_target_, std::memory_order_relaxed);
+  fade_left_view_.store(fade_left_, std::memory_order_relaxed);
+}
+
+void Mixer::sdl_callback(void* user, SDL_AudioStream* stream, int additional, int) {
+  auto* self = static_cast<Mixer*>(user);
+  std::vector<float> buf;
+  int frames_left = additional / int(sizeof(float) * 2);
+  while (frames_left > 0) {
+    int frames = std::min(frames_left, 2048);
+    buf.resize(size_t(frames) * 2);
+    self->render(buf.data(), u32(frames));
+    SDL_PutAudioStreamData(stream, buf.data(), frames * int(sizeof(float)) * 2);
+    frames_left -= frames;
+  }
+}
+
+bool Mixer::open_device() {
+  if (stream_) return true;
+  if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+    log::error("SDL audio init failed: {}", SDL_GetError());
+    return false;
+  }
+  SDL_AudioSpec spec{SDL_AUDIO_F32, 2, int(kRate)};
+  stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, &Mixer::sdl_callback, this);
+  if (!stream_) {
+    log::error("SDL_OpenAudioDeviceStream failed: {}", SDL_GetError());
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    return false;
+  }
+  SDL_ResumeAudioStreamDevice(stream_);
+  return true;
+}
+
+// Destroying the stream closes the device it opened and stops the callback.
+void Mixer::close_device() {
+  if (!stream_) return;
+  SDL_DestroyAudioStream(stream_);
+  stream_ = nullptr;
+  SDL_QuitSubSystem(SDL_INIT_AUDIO);
+}
+
+}  // namespace oc::audio

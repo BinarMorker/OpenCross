@@ -1,0 +1,18 @@
+# RDE pause screen over the world map with a location label up (Arni Village, wld_a01 ent 10): the label is part of the picture (under the
+# filter); only the PAUSE bar and the Vibration row sit above it.
+0 wait idle 600
+- request party_add 1
+- load wld_a01 0
+- wait room wld_a01 300
+- wait idle 600
+- wait 120
+- put -1100 -1450
+- approach 10 40 1500
+- wait dialogue open 300
+- wait 60
+- tap p
+- wait 20
+- screenshot pause_01.png
+- tap p
+- wait 10
+- quit

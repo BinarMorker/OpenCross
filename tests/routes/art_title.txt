@@ -1,0 +1,26 @@
+# Title: F1 twice behind the logo scene and twice over the menu. The title room is swapped in place (assert swaps), never reloaded: the flow
+# state, the running tit0..3 sequence and its start count, the room's entities and the room-load counter are unchanged.
+0 wait flow title 300
+- wait movie start 300
+- tap confirm                         # skip the opening FMV
+- wait movie end 300
+- wait 120
+- snap
+- art toggle
+- art toggle
+- assert same 0
+- assert swaps 2
+- wait 60
+- assert same 0
+- tap confirm                         # any button: the menu
+- wait 90
+- snap
+- art toggle                          # -> original
+- wait 20
+- assert same 0
+- art toggle                          # -> hd
+- wait 20
+- assert same 0
+- assert swaps 2
+- assert flow title
+- quit

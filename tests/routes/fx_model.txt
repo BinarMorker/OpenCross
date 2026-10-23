@@ -1,0 +1,7 @@
+# AC whole-model semi-transparency in crn_b05i
+0 wait 120
+- screenshot fxm_a.png
+- art hd
+- wait 4
+- screenshot fxm_hd.png
+- quit

@@ -1,0 +1,27 @@
+# Battle attack chain: target selection with the NORMAL / DYNAMIC camera hint (C = Triangle toggles it), the
+# HIT% menu in the PS1 line box, row colours by stamina (yellow = the last affordable hit, dim above it).
+0 wait 30
+- tap confirm                         # skip the intro shots
+- wait 90
+- tap confirm                         # Attack -> target selection
+- wait 20
+- screenshot bc_01_target_normal.png
+- tap c                               # camera mode DYNAMIC
+- wait 30
+- screenshot bc_02_target_dynamic.png
+- tap c                               # back to NORMAL
+- wait 10
+- tap confirm                         # target -> the PC runs up
+- wait 150
+- screenshot bc_03_chain_7_0.png      # 7.0 stamina: all rows white
+- tap confirm                         # weak hit (1): 6.0
+- wait 150
+- tap down                            # the cursor auto-advanced to row 2 after the weak hit: one Down = row 3
+- wait 6
+- tap confirm                         # fierce hit (3): 3.0 -> row 3 yellow
+- wait 160
+- screenshot bc_04_chain_3_0.png
+- tap confirm                         # fierce again: 0.0 -> turn ends
+- wait 200
+- screenshot bc_05_turn_end.png
+- quit

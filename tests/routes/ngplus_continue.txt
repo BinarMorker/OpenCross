@@ -1,0 +1,38 @@
+# Continue+: title -> Continue -> the cleared save (slot 2) -> New Game+ list -> Continue + -> the slot list in
+# variant 2 (slot 2 is refused: "completed") -> slot 1 -> loads with the cleared game carried in (variable 0x7E = 2).
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap right
+- tap right                           # slot 2 = the cleared save
+- wait 10
+- tap confirm
+- wait room ending 600
+- wait menu open 600                  # the New Game+ list
+- wait 60
+- tap down                            # Continue +
+- wait 10
+- tap confirm
+- wait 90
+- tap right
+- tap right                           # slot 2: refused (summary flags 3)
+- wait 10
+- screenshot ngc_01_refused.png
+- tap confirm                         # sfx 0x18, nothing happens
+- wait 20
+- tap left                            # slot 1: an ordinary save
+- wait 10
+- tap confirm
+- wait menu closed 600
+- wait idle 900
+- assert var 0x7E 2
+- quit

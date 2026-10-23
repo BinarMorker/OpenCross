@@ -1,0 +1,16 @@
+# Dash & Slash (element 147) variant: the cursor moves down one row before the element is confirmed; the gauge is filled (battle_dash2.env).
+0 wait 30
+- tap confirm
+- wait 90
+- tap down
+- wait 6
+- tap confirm
+- wait 20
+- screenshot dash2_a.png
+- tap confirm
+- wait 20
+- tap confirm
+- wait 20
+- tap confirm
+- wait 1200
+- quit

@@ -1,0 +1,6 @@
+# Room-model texture check (treasure chest): stand in a chest room (chest.ini: bak_a01f, room model 2 = the chest Mdl shared by 160 rooms) and screenshot the room models (HD art: 1x textures must stay crisp, no fringe).
+0 wait idle 600
+- wait 60
+- dump
+- screenshot chest_01.png
+- quit

@@ -1,0 +1,23 @@
+# Key-item list (F key, RDE): give two key items, dismiss their pickup panels, open the list with F, move the hand, close it.
+0 wait idle 600
+- wait 60
+- request keyitem 5
+- wait 50
+- tap confirm
+- wait 60
+- request keyitem 9
+- wait 50
+- tap confirm
+- wait 60
+- tap f
+- wait 40
+- screenshot kl_01_list.png
+- tap down
+- wait 10
+- tap right
+- wait 10
+- screenshot kl_02_moved.png
+- tap f
+- wait 40
+- screenshot kl_03_closed.png
+- quit

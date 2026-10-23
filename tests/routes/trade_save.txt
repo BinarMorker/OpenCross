@@ -1,0 +1,61 @@
+# Trading post on a loaded save. Continue -> slot 5 -> warp to Termina's market
+# (tel_b02f) -> talk to the trader (entity 4) -> "I want to trade" -> FE 67 #6 + FE 61.
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down                            # slot 5
+- wait 10
+- tap confirm
+- wait flow field 600
+- wait idle 900
+- load tel_b02f 0
+- wait room tel_b02f 300
+- wait idle 600
+- approach 4 30 900
+- action
+- choose 0 600                        # "I want to trade"
+- wait shop open 300
+- key up confirm                      # the choice's Enter is still held
+- wait 20
+- tap confirm                         # greeting -> goods list ("Exchange Rate")
+- wait 30
+- tap confirm                         # goods 0 (Eyeball, 12 levels, any colour) -> Element offer list
+- wait 30                             # the screen prepares one row name per frame before the input is read
+- screenshot trs_01_offer.png
+# Offer list of this save (log "trade: offer"): 88 lv2 x1 | 105 lv1 x10 | 19 lv1 x1 | 13 lv1 x1. 2 + 10 x 1 = 12 opens "Make the exchange?"
+- tap confirm                         # 88 (lv 2): offered 1
+- tap confirm                         # 88 again: all copies offered, nothing added (sound 8 only)
+- tap down
+- tap confirm                         # 105 (lv 1) x 10
+- tap confirm
+- tap confirm
+- tap confirm
+- tap confirm
+- tap confirm
+- tap confirm
+- tap confirm
+- tap confirm
+- tap confirm                         # 12 levels: the confirmation opens on "Yes"
+- wait 40                             # Circle is read after 30 frames
+- tap confirm                         # Yes: elements taken, Eyeball +1, sound 0x1B
+- wait 10
+- tap cancel                          # offer -> goods list
+- wait 30
+- tap cancel                          # goods list -> greeting
+- wait 10
+- tap cancel                          # greeting -> leave
+- wait shop closed 300
+- quit

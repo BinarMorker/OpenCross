@@ -1,0 +1,44 @@
+# New Game+: title -> Continue -> the cleared save (slot 2: map 9, entrance 3) -> the ending room's FE 84 + FE 61
+# open the New Game+ list (variant 2) -> New Game + -> FE 4A names Serge -> dream party -> MAP_JUMP_DC 22 + movie 2 -> opn_a01i as a New Game+.
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV first
+- tap confirm                         # skip it
+- wait movie end 300
+- wait 150
+- tap confirm                         # any button: the menu
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap right
+- tap right                           # slot 2 = the cleared save (left / right step through the files)
+- wait 10
+- tap confirm
+- wait room ending 600
+- wait menu open 600                  # FE 84 + FE 61: the New Game+ title list
+- wait 60
+- screenshot ng_01_list.png
+- tap confirm                         # New Game +
+- wait 20
+- screenshot ng_01b_vibration.png       # the vibration page after New Game +
+- tap confirm                         # On
+- wait menu closed 300
+- wait menu open 600                  # FE 4A with MAP_ID 0: RDE's user guide (two pages), then the name entry for Serge
+- wait 30
+- tap confirm                         # guide page 2
+- wait 40
+- tap confirm                         # guide closes
+- wait 40
+- tap tab                             # accept
+- wait menu closed 300
+- assert var 0x7E 2
+- wait movie start 900                # MAP_JUMP_DC 22 + PLAY_MOVIE_SKIPPABLE 2
+- tap confirm
+- wait room opn_a01i 900
+- assert var 0x7E 2
+- log New Game+ reached opn_a01i
+- wait 120
+- screenshot ng_02_opening.png
+- quit

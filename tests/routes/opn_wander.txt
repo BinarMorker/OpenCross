@@ -1,0 +1,14 @@
+# opn_a02i from entrance 0: the leader stays put; Cybots 4 / 5 roam on A0 (wander: random walk windows, +-0x80 turns, wall slide).
+0 wait idle
+- request party_add 1
+- request party_add 22
+- load opn_a02i 0
+- wait room opn_a02i 300
+- wait idle 300
+- wait 30
+- mark ent 4
+- trace 4 1500
+- wait 1500
+- assert moved 4 100
+- dump
+- quit

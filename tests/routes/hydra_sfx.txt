@@ -1,0 +1,9 @@
+# Hydra Marshes ambient sound: stand in hid_a01f and walk a little; the log lists every PLAY_SFX (id, mode, volume) the room scripts fire.
+0 wait idle 600
+- wait 240
+- key down up
+- wait 120
+- key up up
+- wait 240
+- screenshot hs_01.png
+- quit

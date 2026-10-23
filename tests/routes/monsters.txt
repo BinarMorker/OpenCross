@@ -1,0 +1,21 @@
+# Part 1: the story flags that wake the Lizard Rock monsters (00C2 bit 0 = they are out, bit 1 = they roam), then watch entity 11 wander.
+0 wait 30
+- set var C2 3
+- load opa_a01f 0
+- wait idle 600
+- mark ent 11
+- screenshot mon_01_lizard_t0.png
+- wait 1200
+- dump
+- screenshot mon_02_lizard_t1.png
+- wait 1200
+- dump
+- screenshot mon_03_lizard_t2.png
+- assert moved 11 30
+# Part 2: dream Fort Dragonia entrance 4. With the start-triangle rule (level 0 = the lowest of the three floors under the spot, y 867) Serge
+# stands 1646 units below the Cybot (y -779); its chase script (OPD8, 600 units, 3D) therefore keeps it idle. The earlier
+# "nearest y 0" spawn (y -779) was wrong; so no chase / battle assertion here any more, only that the room loads and settles.
+- load opn_a02i 4
+- wait idle 600
+- screenshot mon_04_cybot_t0.png
+- quit

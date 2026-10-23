@@ -1,0 +1,5 @@
+# NPC path log: a scripted walker (gal_a01f ent 7) for 600 ticks. Rule: 5 u/tick (speed 0x50), heading +0xFA set at once at the leg start, the model yaw
+# chases it at 0x40 per tick; read the "summary" line (max step <= 5, legs, moving ticks).
+0 wait idle 600
+- trace 7 600
+- quit

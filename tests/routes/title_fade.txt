@@ -1,0 +1,15 @@
+# Title: the opening FMV's last frame is held and cross-faded into the title scene (no black gap); Enter fades to black before the menu.
+0 wait flow title 300
+- wait movie start 300
+- wait 90
+- tap confirm                         # skip the opening FMV
+- wait movie end 300
+- wait 8
+- screenshot tf_01_crossfade.png      # the held movie frame over the first scene frames
+- wait 150
+- tap confirm                         # any button: fade to black, then the menu fades in
+- wait 18
+- screenshot tf_02_to_menu.png
+- wait 90
+- assert flow title
+- quit

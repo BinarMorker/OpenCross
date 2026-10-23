@@ -1,0 +1,31 @@
+# Pose-pop check: the player (Serge) through the wake-up scene; a cross-fade source must stay frozen and no stray clip may appear.
+# Continue slot 4 of the owner's save copy (tmp\save.dat): gal_b09i (Guldove, the house), saved inside the wake-up event with
+# var 0x3A = 4, so the Load re-enters with ROOM_PARAM 4 and entity 9's UPDATE resumes the event after the save menu.
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap down
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap right
+- tap right
+- tap right
+- tap right                           # slot 4
+- wait 10
+- tap confirm
+- wait flow field 600
+- assert room gal_b09i
+- assert var 2 4
+- trace -1 700                       # the sit-up (ex_01) and the two scripted looks: the head callback ignores the clip
+- assert traceheadturn 100 800                   # looks one way (ax -512..) then the other (..+419): span 931 in the log
+- wait text You're finally awake?
+- skip
+- trace -1 900
+- assert traceclip 0 40
+- quit

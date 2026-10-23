@@ -1,0 +1,13 @@
+# Hydra Marshes boss room (dem_06): the hydra (ent 5, room model 1) rises out of the pool with x = z = 896 and the y scale growing from
+# 0 (AXIS_SCALE 0x02 from $room[6] while $room[8] = 1, ent 7 script 4). The debug load does not start the demo sequence, so the route
+# sets the risen state (room[8] = 1, room[6] = 896, pitch room[4] = 0, roll room[5] = 0) and takes one frame.
+0 wait room dem_06 600
+- wait 120
+- set var 40C 896
+- set var 408 0
+- set var 40A 0
+- set var 410 1
+- wait 60
+- dump
+- screenshot hydra_boss_01.png
+- quit

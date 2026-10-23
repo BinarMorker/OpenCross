@@ -1,0 +1,7 @@
+# Results heal menu route (needs OC_RESULTS_HURT / OC_RESULTS_HEALER, see run_heal.ps1): the BattleAuto fight reaches the results screen; every page
+# auto-advances after 180 ticks: PowerUp pages -> heal menu (choice 0) -> "Elements used..." -> Spoils -> exit.
+0 wait battle results 6000
+- wait 420
+- screenshot rh_01.png
+- wait 1500
+- quit

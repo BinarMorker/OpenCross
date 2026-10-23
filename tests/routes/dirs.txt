@@ -1,0 +1,32 @@
+# Direction route: holding Left / Right / Up / Down walks the player that way on screen (Arni, script yaw 4000).
+0 wait idle
+- assert room alu_a01f
+- mark
+- key down left
+- wait 10
+- key up left
+- wait 5
+- assert screen left
+- screenshot dr_01_left.png
+- mark
+- key down right
+- wait 10
+- key up right
+- wait 5
+- assert screen right
+- screenshot dr_02_right.png
+- mark
+- key down down
+- wait 10
+- key up down
+- wait 5
+- assert screen down
+- screenshot dr_03_down.png
+- mark
+- key down up
+- wait 10
+- key up up
+- wait 5
+- assert screen up
+- screenshot dr_04_up.png
+- quit

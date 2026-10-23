@@ -1,0 +1,31 @@
+# Settings row "[button] Pressed: Run / Walk": option clear = the run button runs, set = the character
+# runs and the button walks. Clip ids: 3 walk, 2 run.
+0 wait idle 600
+- wait 30
+- set option 200 0
+- key down left
+- wait 20
+- assert anim p0 3
+- key up left
+- wait 10
+- key down run
+- key down left
+- wait 20
+- assert anim p0 2
+- key up left
+- key up run
+- wait 10
+- set option 200 1
+- key down left
+- wait 20
+- assert anim p0 2
+- key up left
+- wait 10
+- key down run
+- key down left
+- wait 20
+- assert anim p0 3
+- key up left
+- key up run
+- log RUN_WALK_OPTION_OK
+- quit

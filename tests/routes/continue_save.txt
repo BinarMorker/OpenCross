@@ -1,0 +1,22 @@
+# Continue from the file the save route wrote (tmp\save_route.dat, file 2): title -> Continue -> the only file -> Arni with the saved state.
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV first
+- tap confirm                         # skip it
+- wait movie end 300
+- wait 150
+- tap confirm                         # any button: the menu
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- screenshot cs_01_slot_list.png
+- tap confirm                         # the saved file
+- wait flow field 600
+- wait room alu_a01f 300
+- wait idle 900
+- assert var 0x00 44                  # SCENARIO_FLAG round trip
+- assert var 0x0C 0                   # party slot 0 = Serge (from the loaded state)
+- screenshot cs_02_continued.png
+- quit

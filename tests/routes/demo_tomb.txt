@@ -1,0 +1,14 @@
+# Attract demo, tombstone cliff (dem_11, ROOM_PARAM 6): three label windows are open at once (entities 6, 7, 8 each own one; the engine keeps
+# four, one per owning entity) and close together on the {fset}/{fwait} handshake on variable 0x22.
+0 wait 5
+- load dem_11 6
+- wait room dem_11 300
+# SETUP_FORMATION U@14 / U@16 / U@18 (#2048 for all three) is written to +0xFA when each member arrives
+- wait 220
+- assert facing player 2048 40
+- wait text Our beloved
+- wait text anything away from him
+- wait text returned to the sea
+- wait dialogue closed 3000
+- wait 300
+- quit

@@ -1,0 +1,23 @@
+# New Game up to the user guide (controls / key map) and the name entry, original art mode: screenshots km_*.png next to the
+# reference frames (tmp\keymap\ccx_*_page.png). The guide is RDE's own UI, so both art modes draw the same RDE pages.
+0 wait flow title 300
+- wait movie start 300
+- wait 30
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap confirm                         # New Game
+- wait 20
+- tap confirm                         # the vibration page: On
+- wait flow name 600
+- wait 90
+- screenshot km_01_controller.png
+- tap confirm
+- wait 90
+- screenshot km_02_keyboard.png
+- tap confirm
+- wait 90
+- screenshot km_03_name_entry.png
+- quit

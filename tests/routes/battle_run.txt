@@ -1,0 +1,16 @@
+# Battle Run Away (S5 entry 7): the party turns its back on the enemies (RotateT to yaw 3072 / 1024) and runs out
+# by its own side; the screen darkens after ~130 ticks. Shots: br_02 turned, br_03 running, br_04 fading.
+0 wait 30
+- tap confirm                         # skip the intro shots
+- wait 90
+- tap up                              # cursor wraps to Run Away
+- wait 8
+- screenshot br_01_cursor_run.png
+- tap confirm
+- wait 24
+- screenshot br_02_turned.png
+- wait 50
+- screenshot br_03_running.png
+- wait 90
+- screenshot br_04_fading.png
+- quit

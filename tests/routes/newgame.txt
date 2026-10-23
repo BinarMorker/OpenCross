@@ -1,0 +1,45 @@
+# New game route: title -> New Game -> name entry "Serge" -> opening (opn_a01i ...) -> first field room.
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV (a07b_ite)
+- wait 60
+- screenshot ng_00_title_movie.png
+- tap confirm                         # skippable
+- wait movie end 300
+- wait 150                            # the logo scene with its pulsing "Push START" prompt
+- screenshot ng_01_title_prompt.png
+- tap confirm                         # any button: the menu appears
+- wait 60
+- screenshot ng_02_title_menu.png
+- tap confirm                         # New Game (fades out)
+- wait 20
+- tap confirm                         # the vibration page: On
+- wait flow name 600                  # RDE user guide first: Controller Controls page (fades in over 15 frames)
+- wait 90
+- screenshot ng_03a_keymap_controller.png
+- tap confirm                         # next page: Keyboard Controls (cross-fade)
+- wait 90
+- screenshot ng_03b_keymap_keyboard.png
+- tap confirm                         # closes the guide (fade out), then the name entry
+- wait 90
+- screenshot ng_03_name_entry.png     # default name "Serge" is already in the buffer
+- tap tab                             # Start: accept the name
+- wait movie start 300                # the title script's D4 #2: a02koryu plays first (skippable)
+- wait 60
+- tap confirm
+- wait movie end 300
+- wait room opn_a01i 900
+- assert flow opening
+- assert var 0x0C 0                   # PARTY_0 = Serge, from the in-memory game state
+- assert var 0x0E 1                   # PARTY_1 = Kid
+- dump
+- mash until idle x 4000                 # the opening cutscene: confirm through its dialogue until Serge can move
+- screenshot ng_04_opening_opn_a01i.png
+- key down up                         # Serge was left off the walk mesh by the cutscene's scripted move: the world re-seats him
+- wait 60
+- key up up
+- pos
+- walk_ent 13 12 1800                 # the east exit of the temple room (ent 13: ON_COLLISION -> room 23)
+- wait 200
+- pos
+- screenshot ng_05_after_exit.png
+- quit

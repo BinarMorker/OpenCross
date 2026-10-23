@@ -1,0 +1,7 @@
+# Hydra Marshes (dem_06): the submerged hydra (ent 5) before the rise: y scale 0, so its model is a flat shape on the pool floor under the water.
+0 wait room dem_06 600
+- wait 120
+- dump
+- screenshot hydra_sub_01.png
+- assert ent 5 shown 1
+- quit

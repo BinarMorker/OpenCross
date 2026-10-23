@@ -1,0 +1,18 @@
+# World map -> Divine Dragon Falls: wld_a01 ent 25 (442,-789) label, confirm -> SET_NEXT_ROOM 260 (wld_a05, "Falls" sub-map), 0.
+# wld_a05 INIT is `PLAY_SONG #255` = the retail STOP command: the world-map song must end. Check the log:
+# `audio: bgm cmd` lines (cmd 2 = Stop) and `PLAY_SONG 0xFF: stop the music`.
+0 wait idle 600
+- request party_add 1
+- load wld_a01 0
+- wait room wld_a01 300
+- wait idle 600
+- wait 120
+- log falls: world map song playing
+- put 442 -789
+- wait 60
+- action
+- wait room wld_a05 600
+- wait idle 600
+- wait 240
+- log falls: wld_a05 entered
+- quit

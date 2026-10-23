@@ -1,0 +1,41 @@
+# Art mode switch (F1 / options) must only swap the rendering: no room load, no INIT / entrance re-run, nothing of the simulation changes.
+# Field: toggled twice inside the lift scene's first dialogue (the window stays open, the scene goes on), then twice when idle with time
+# running in between (positions / facings / model yaws of every entity, script variables, room-load counter unchanged). Battle: toggled
+# twice at the top menu (scene, unit HP, battle-start counter unchanged), then the fight is played out on the swapped models.
+0 wait 5
+- request party_add 1
+- request party_add 39
+- load opn_a01i 0
+- wait room opn_a01i 300
+- wait dialogue open 1500
+- snap 0x00 0x3C
+- art toggle
+- art toggle
+- assert swaps 2
+- assert dialogue open
+- assert room opn_a01i
+- mash until idle x 4000
+- wait 240
+- snap 0x00 0x3C 0x0C 0x0E 0x10
+- art toggle                          # -> original
+- wait 30
+- assert same 0
+- assert swaps 1
+- art toggle                          # -> hd
+- wait 30
+- assert same 0
+- assert swaps 2
+- assert gap player p1 0 300
+- request battle 1
+- wait battle start 600
+- wait 240
+- tap confirm                         # skip the intro shots
+- wait 120
+- snap
+- art toggle
+- art toggle
+- assert same 0
+- assert battle active
+- fight 6000
+- wait 30
+- quit

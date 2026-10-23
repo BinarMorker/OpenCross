@@ -1,0 +1,42 @@
+# Boxer Boys re-entry (retail shows "Which of us do you choose?" again in the second battle - e0204 opens with
+# the lock AF 1 held, vars 0x80..0x84 re-rolled/zeroed). Open the chest, close the window, Run from the menu (Up wraps Attack -> Run), come back to
+# the chest and open it again: the log must carry battle script message 0 twice.
+0 wait 5
+- request party_add 1
+- load jac_b25i 0
+- wait room jac_b25i 600
+- wait idle 600
+- assert ent 23 shown 1
+- approach 23 40 900
+- tap confirm
+- wait 60
+- tap confirm
+- wait 60
+- wait battle start 900
+- wait 400
+- tap confirm
+- wait 200
+- tap confirm
+- wait 120
+- tap confirm
+- wait 120
+- tap confirm
+- wait 120
+- tap confirm
+- wait 300
+- wait 600
+- tap up
+- wait 30
+- tap confirm
+- wait 600
+- wait idle 1800
+- assert battle inactive
+- assert room jac_b25i
+- approach 23 40 900
+- tap confirm
+- wait 60
+- tap confirm
+- wait 60
+- wait battle start 900
+- wait 400
+- quit

@@ -1,0 +1,7 @@
+# Same as choice_names with the original (classic) art; screenshot cno_painter.png.
+0 wait 5
+- request party_add 1
+- request party_add 39
+- wait 200
+- screenshot cno_painter.png
+- quit

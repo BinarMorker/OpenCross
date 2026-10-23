@@ -1,0 +1,60 @@
+# Save route: new game (name entry "Serge") -> warp to Arni -> main menu -> Save -> file 2 -> back to the field.
+# Runs against tmp\save_route.dat only (SaveDir=tmp, SaveFile=save_route.dat, a scratch copy of the owner's save with card 1 emptied:
+# powershell -File tests\routes\run_save.ps1). Afterwards run_save.ps1 dumps file 2 with tools\py\cc_save.py and checks the fields.
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV first
+- tap confirm                         # skip it
+- wait movie end 300
+- wait 150
+- tap confirm                         # any button: the menu
+- wait 60
+- tap confirm                         # New Game
+- wait 20
+- tap confirm                         # the vibration page: On
+- wait flow name 600                  # RDE user guide (two pages) before the name entry
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- wait 20
+- tap tab                             # Start: accept "Serge"
+- wait movie start 300                # the title script's D4 #2: a02koryu plays first (skippable)
+- wait 60
+- tap confirm
+- wait movie end 300
+- wait room opn_a01i 900
+- load alu_a01f 0                     # debug warp to Arni (the opening cutscene is not what is tested here)
+- wait room alu_a01f 300
+- wait idle 600
+- set var 0x00 44                     # SCENARIO_FLAG: a mid-game value (savetbl location key, head 0x40)
+- set var 0x3C 1                      # the save gate (rooms that allow saving set it)
+- screenshot sv_01_arni.png
+- tap tab                             # the menu key
+- wait menu open 120
+- wait 30
+- screenshot sv_01b_main_menu.png     # main list: needle on Status, Save/Load entry not dimmed
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down                            # Save / Load
+- wait 20
+- tap confirm
+- wait 30
+- screenshot sv_02_save_screen.png
+- tap confirm                         # Save a File -> the file list (cursor on slot 1, auto-save slot 0 is not offered)
+- wait 20
+- tap right                           # slot 2 (file# 3)
+- wait 10
+- tap confirm                         # empty file: saved at once
+- wait 60
+- screenshot sv_03_saved.png
+- tap cancel
+- tap cancel
+- wait 20
+- tap cancel
+- wait menu closed 300
+- wait idle 300
+- assert location 27
+- quit

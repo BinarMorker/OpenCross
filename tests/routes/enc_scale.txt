@@ -1,0 +1,33 @@
+# Encounter route: Continue from the save copy, request encounter 1 from the field; the field plays the
+# encounter effect 'enct' (effect/particle.prd > fenc) for 105 ticks with the field running, then the battle starts from white.
+# Shot enc_01 = 30 ticks into enct (subtractive dim 0x69 restored from tick 12, enc0 / enc1 discs and bt1 sparks at the leader's waist).
+# Log check: "encounter effect 'enct' ended after 105 ticks".
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down                            # slot 5
+- wait 10
+- tap confirm
+- wait flow field 600
+- wait idle 600
+- load opa_b02f
+- wait room opa_b02f 600
+- wait 60
+- wait idle 600
+- autoshot 1 260 es_
+- request battle 1
+- wait 330
+- quit

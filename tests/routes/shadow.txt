@@ -1,0 +1,12 @@
+# Blob shadow depth in Arni (alu_a01f): walk toward the camera into the foreground grass strip; the shadow must be hidden behind it like the actor.
+0 wait idle
+- wait 20
+- screenshot sh_01_open_floor.png
+- key down down
+- wait 30
+- screenshot sh_02_nearing_grass.png
+- wait 8
+- key up down
+- wait 6
+- screenshot sh_03_behind_foreground.png
+- quit

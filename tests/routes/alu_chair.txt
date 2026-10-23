@@ -1,0 +1,26 @@
+# alu_a03i: walk-mesh attr 4 walls (flags 0x400000) block the player class around the chair and the bed.
+# Without the class bit the player would walk onto them.
+0 wait 5
+- request party_add 1
+- set var 0x00 8
+- load alu_a03i 0
+- wait 90
+- walk -15 210 24 900
+- trace 1 1
+- key down up
+- trace 1 120
+- key up up
+# the attr-4 region (tris 38..47) starts at z ~468 here; the 8-unit stand-off stops the player at about z 460
+- assert near player -84 460 12
+- walk 60 300 24 900
+- key down right
+- trace 1 120
+- key up right
+# stopped before the bed wall (x ~118 at z 455)
+- assert near player 106 454 10
+# keep pushing into the corner: the position must not vibrate (the slide must not flip direction every tick)
+- key down right
+- trace 1 60
+- key up right
+- assert near player 108 452 12
+- quit

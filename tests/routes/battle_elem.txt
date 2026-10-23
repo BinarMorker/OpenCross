@@ -1,0 +1,51 @@
+# Battle element menu: a weak hit first (the gauge opens level 1), then the Element row
+# of the HIT% menu: name plates of the level, grid minimap, description window; Right / Left change the level; confirm -> target selection.
+# Needs tmp\save.dat (copy of the owner's save, slot 5 = a party with elements); the Element screen shows the Tablet plate.
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down                            # slot 5
+- wait 10
+- tap confirm
+- wait flow field 600
+- wait idle 600
+- request battle 1
+- wait battle start 600
+- wait 240                            # warp transition + white fade, then the intro shots
+- tap confirm                         # skip the intro shots
+- wait 120
+- tap confirm                         # Attack -> target selection
+- wait 20
+- tap confirm                         # target -> the PC runs up
+- wait 150
+- tap confirm                         # weak hit: gauge level 1
+- wait 150
+- tap down
+- wait 6
+- tap down                            # Element row (the cursor auto-advanced to row 2 after the weak hit)
+- wait 6
+- tap confirm
+- wait 20
+- screenshot be_01_elem_level1.png
+- tap right
+- wait 10
+- screenshot be_02_elem_level2.png
+- tap left
+- wait 10
+- tap confirm                         # target selection of the element
+- wait 20
+- screenshot be_03_elem_target.png
+- quit

@@ -1,0 +1,20 @@
+# Termina Smithy door: walk to the door in tel_b03f, press action, expect tel_b12i.
+0 wait 5
+- request party_add 1
+- request party_add 39
+- set var 0x00 32
+- load tel_b03f 0
+- wait room tel_b03f 300
+- wait idle 600
+- wait 60
+- walk 625 585 12 3000
+- walk 612 556 6 600
+- wait 30
+- tap left 2
+- wait 20
+- screenshot dr_01_at_door.png
+- action
+- wait room tel_b12i 600
+- screenshot dr_02_inside.png
+- assert room tel_b12i
+- quit

@@ -1,0 +1,11 @@
+# Hydra Marshes exit: zone-watcher entities (ops 55 / 56) test the CONTROLLED entity; walking into zone 0 of hid_a01f (z -1104..-959) leaves for the world map.
+0 wait idle 600
+- load hid_a01f 0
+- wait room hid_a01f 300
+- wait idle 600
+- wait 30
+- walk 0 -1030 30 900
+- wait room wld_a01 600
+- assert room wld_a01
+- screenshot hx_01_world_map.png
+- quit

@@ -1,0 +1,12 @@
+# Start-triangle rule: the party spawns on the floor named by the entrance record's level, not the one nearest y = 0.
+0 wait idle
+- request party_add 1
+- request party_add 22
+- load tel_b02f 0
+- wait room tel_b02f 300
+- wait idle 300
+- dump
+- load tel_b02f 1
+- wait idle 300
+- dump
+- quit

@@ -1,0 +1,11 @@
+# FMV route: the title room (opening) plays its movie with D4 PLAY_MOVIE_SKIPPABLE; letterboxed Bink 2 playback, then skipped with confirm.
+0 wait movie start 900
+- wait 150
+- screenshot mv_01_movie_frame.png
+- assert movie playing
+- tap confirm                         # D4 movies are skippable
+- wait movie end 300
+- wait 60
+- assert movie idle
+- screenshot mv_02_after_movie.png
+- quit

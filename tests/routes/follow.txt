@@ -1,0 +1,24 @@
+# Party followers in Arni: they spawn near the leader, trail it while walking and stop spaced behind (gap and facing assertions).
+0 wait idle
+- request party_add 1
+- request party_add 22
+- load alu_a01f 0
+- wait idle 300
+- wait 60
+- log gap after spawn (followers back off to 128 from the leader)
+- assert gap player p1 70 200
+- key down left
+- wait 90
+- screenshot fw_01_walking.png
+- key up left
+- wait 200
+- screenshot fw_02_stopped.png
+- assert facing player 2048 200   # walked left: engine heading 0x800 = world -x
+- assert gap player p1 80 260
+- key down right
+- wait 40
+- key up right
+- wait 150
+- screenshot fw_03_turned.png
+- assert gap player p1 80 260
+- quit

@@ -1,0 +1,11 @@
+; tel_b16i message 2 (inn): E1 0x12 = lines 1, 2 of the PS1 page ("It is 0G per night. / Would you like to stay?" is one question line there); the EN question takes
+; two lines, so the options are lines 2 and 3 and the hand must not sit on the question.
+0 wait 5
+- wait text night
+- wait 150
+- assert choiceline 2
+- screenshot choice_remap_0.png
+- tap down
+- wait 20
+- assert choiceline 3
+- quit

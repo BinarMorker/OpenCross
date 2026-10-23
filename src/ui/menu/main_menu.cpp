@@ -1,0 +1,373 @@
+#include "ui/menu/main_menu.h"
+#include "ui/menu/main_menu_impl.h"
+
+#include <SDL3/SDL_gamepad.h>
+#include <SDL3/SDL_scancode.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <map>
+
+#include "core/log.h"
+#include "ui/lowres.h"
+#include "ui/menu/menu_common.h"
+#include "ui/ps1_font.h"
+
+namespace oc::ui {
+
+const char* menu_screen_name(MenuScreen screen) {
+  switch (screen) {
+    case MenuScreen::Main: return "main";
+    case MenuScreen::Status: return "status";
+    case MenuScreen::ElementChoice: return "element_choice";
+    case MenuScreen::ElementUse: return "element_use";
+    case MenuScreen::ElementGrid: return "element_grid";
+    case MenuScreen::Equip: return "equip";
+    case MenuScreen::KeyItems: return "key_items";
+    case MenuScreen::Settings: return "settings";
+    case MenuScreen::Save: return "save";
+  }
+  return "?";
+}
+
+// ===================================================== setup
+bool MainMenu::Impl::init(render::GpuContext& context, const vfs::Vfs& files, render::SpriteBatch& sprite_batch, render::TextBatch& text_batch,
+          const data::GameTables& game_tables, import::Lang language) {
+  ctx = &context;
+  vfs = &files;
+  sprites = &sprite_batch;
+  text = &text_batch;
+  tables = &game_tables;
+  lang = language;
+  lt.init(&files);
+  if (!texs.init(context, files, sprite_batch, "menu")) return false;
+  lowres.init(context, sprite_batch);
+  fonts.init(files, text_batch);
+  select_fonts();
+  cursor_tex = texs.load("hd/menu/menutest_cur.png");
+  ready = face_gn != render::kNoFace;
+  if (!ready) log::error("menu: no usable font");
+  return ready;
+}
+
+void MainMenu::Impl::select_fonts() {
+  const int art_mode = static_cast<int>(mode);
+  if (art_mode == fonts_mode || !vfs) return;
+  fonts_mode = art_mode;
+  const bool classic = mode != ArtMode::Hd;
+  fonts.set_classic(classic);
+  face_gn = fonts.face(font::kBn);
+  face_kb = fonts.face(font::kKb);
+  face_ik = lang == import::Lang::Jp ? fonts.face(font::kIk) : render::kNoFace;
+  gn = font::load(*vfs, font::member(font::kBn, classic));
+}
+
+void MainMenu::Impl::shutdown() {
+  texs.shutdown();
+  cursor_tex = nullptr;
+  lowres.shutdown();
+  ctx = nullptr;
+}
+
+// ===================================================== text lookups
+std::string MainMenu::Impl::menu_str(u32 addr, const char* fallback) {
+  if (const std::string* row = lt.menu_text(addr, lang); row && !trim(*row).empty()) return trim(*row);
+  return fallback;
+}
+
+std::u32string MainMenu::Impl::char_name(int id) {
+  auto it = name_cache.find(id);
+  if (it != name_cache.end()) return it->second;
+  std::u32string name = lt.default_name(id, lang);
+  if (name.empty()) name = utf32(tables->char_name(id));
+  return name_cache[id] = name;
+}
+
+std::u32string MainMenu::Impl::item_name(int id) {
+  if (id <= 0) return utf32("-");
+  std::u32string name = lt.item_name(id, lang);
+  return name.empty() ? utf32(tables->item_name(id)) : name;
+}
+
+std::u32string MainMenu::Impl::element_name(int id) {
+  if (const std::string* row = lt.sysmes((0x17u << 16) | static_cast<u32>(id), lang); row && !row->empty()) return utf32(*row);
+  return utf32(tables->element_name(id));
+}
+
+std::u32string MainMenu::Impl::key_item_name(int id) {
+  if (const std::string* row = lt.sysmes((0x18u << 16) | static_cast<u32>(id), lang); row) return utf32(*row);
+  return utf32(id < static_cast<int>(tables->key_item_names.size()) ? tables->key_item_names[static_cast<size_t>(id)] : "?");
+}
+
+std::string MainMenu::Impl::table_row(std::string_view table, int key) {
+  if (const import::TextTable* rows = lt.table(table))
+    if (const std::string* row = rows->get(static_cast<u64>(key), lang)) return *row;
+  return {};
+}
+
+int MainMenu::Impl::cur_char() const {
+  const std::vector<int> members = gs->party();
+  return members.empty() ? 0 : members[static_cast<size_t>(member) % members.size()];
+}
+
+void MainMenu::Impl::cycle_member(int step) {
+  const std::vector<int> members = gs->party();
+  if (members.size() < 2) return;
+  member = (member + step + static_cast<int>(members.size())) % static_cast<int>(members.size());
+  sfx(1);
+}
+
+void MainMenu::Impl::sfx(int id) {
+  if (sfx_fn) sfx_fn(id);
+}
+
+void MainMenu::Impl::say(const std::string& message_text, int duration_frames) {
+  msg = message_text;
+  msg_frames = duration_frames;
+}
+
+// ===================================================== input
+Nav MainMenu::Impl::poll(const platform::Input& in) {
+  Nav nav;
+  auto key_down = [&](int scancode) { return in.key_down[static_cast<size_t>(scancode)]; };
+  auto key_pressed = [&](int scancode) { return in.key_pressed[static_cast<size_t>(scancode)]; };
+  auto pad_down = [&](int button) { return in.pad_down[static_cast<size_t>(button)]; };
+  auto pad_pressed = [&](int button) { return in.pad_pressed[static_cast<size_t>(button)]; };
+  const float axis_x = in.pad_axis[SDL_GAMEPAD_AXIS_LEFTX], axis_y = in.pad_axis[SDL_GAMEPAD_AXIS_LEFTY];
+  const bool dir[4] = {key_down(SDL_SCANCODE_UP) || key_down(SDL_SCANCODE_W) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_UP) || axis_y < -0.6f,
+                       key_down(SDL_SCANCODE_DOWN) || key_down(SDL_SCANCODE_S) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || axis_y > 0.6f,
+                       key_down(SDL_SCANCODE_LEFT) || key_down(SDL_SCANCODE_A) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || axis_x < -0.6f,
+                       key_down(SDL_SCANCODE_RIGHT) || key_down(SDL_SCANCODE_D) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || axis_x > 0.6f};
+  bool fire[4]{};
+  repeat.poll(dir, fire);
+  nav.up = fire[0], nav.down = fire[1], nav.left = fire[2], nav.right = fire[3];
+  nav.ok = key_pressed(SDL_SCANCODE_RETURN) || key_pressed(SDL_SCANCODE_Z) || key_pressed(SDL_SCANCODE_SPACE) || key_pressed(SDL_SCANCODE_KP_ENTER) ||
+           pad_pressed(SDL_GAMEPAD_BUTTON_SOUTH);
+  nav.cancel = key_pressed(SDL_SCANCODE_X) || key_pressed(SDL_SCANCODE_BACKSPACE) || pad_pressed(SDL_GAMEPAD_BUTTON_EAST);
+  nav.tri = key_pressed(SDL_SCANCODE_C) || pad_pressed(SDL_GAMEPAD_BUTTON_NORTH);
+  nav.sq = key_pressed(SDL_SCANCODE_V) || pad_pressed(SDL_GAMEPAD_BUTTON_WEST);
+  nav.l1 = key_pressed(SDL_SCANCODE_Q) || key_pressed(SDL_SCANCODE_PAGEUP) || pad_pressed(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+  nav.r1 = key_pressed(SDL_SCANCODE_E) || key_pressed(SDL_SCANCODE_PAGEDOWN) || pad_pressed(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+  return nav;
+}
+
+// ===================================================== open / navigation
+void MainMenu::Impl::open(GameState& state, bool allow_save) {
+  gs = &state;
+  saved = false;
+  can_save = allow_save;
+  closed = false;
+  screen = MenuScreen::Main;
+  sub = 0;
+  main_cur = gs->option(opt::kCursorMemory) ? mem_cur : 0;
+  member = pick_cur = 0;
+  focus = 0;
+  popup = Popup::None;
+  msg.clear();
+  frames = 0;
+  hand_list = -1, hand_settled = 0, hand_step = 0, hand_angle = table_angle(0, 0);
+  repeat.reset();
+}
+
+// Switches to a screen with its cursors at their start positions.
+void MainMenu::Impl::enter(MenuScreen target) {
+  screen = target;
+  msg.clear();
+  switch (target) {
+    case MenuScreen::Status: break;
+    case MenuScreen::ElementChoice: choice_cur = 0; break;
+    case MenuScreen::ElementUse: use_cur = use_scroll = target_cur = 0; use_target = false; break;
+    case MenuScreen::ElementGrid:
+      focus = 0, list_cur = list_scroll = 0, carry = -1, popup = Popup::None, swap_row = -1;
+      cell_row = gs->first_open_row(cur_char());
+      cell_col = first_col(cell_row);
+      break;
+    case MenuScreen::Equip: eslot = 0, eq_cur = eq_scroll = 0, eq_list = false; break;
+    case MenuScreen::KeyItems: ki_cur = ki_scroll = 0; break;
+    case MenuScreen::Settings: set_cur = 0, skin_pick = false; break;
+    case MenuScreen::Save: save_cur = 0, load_cur = 1, top_cur = can_save ? 0 : 1, save_phase = 0, load_mode = false, save_confirm = false, load_previews(); break;
+    default: break;
+  }
+}
+
+void MainMenu::Impl::back_to_main(int cursor) {
+  screen = MenuScreen::Main;
+  sub = 0;
+  main_cur = cursor;
+  msg.clear();
+}
+
+// First unlocked cell of a grid row of the current member, else its first existing cell.
+int MainMenu::Impl::first_col(int row) const {
+  const int character = cur_char();
+  for (int col = 0; col < GameState::kCols; ++col)
+    if (gs->cell_available(character, row, col)) return col;
+  for (int col = 0; col < GameState::kCols; ++col)
+    if (gs->cell_exists(character, row, col)) return col;
+  return 0;
+}
+
+// ===================================================== update
+// The menu loop runs once per 60 Hz vsync: the animations (pointer roll, cursor pulse, needle) count sim ticks, not frames.
+// The first 4 ticks after opening ignore input. Pad input selects the pad button glyphs, any key event the keyboard key caps.
+void MainMenu::Impl::update(const platform::Input& in, int ticks) {
+  if (closed || !gs || !ready) return;
+  frames += std::max(ticks, 0);
+  {
+    bool any_pad = false, any_key = false;
+    for (bool pressed : in.pad_pressed) any_pad = any_pad || pressed;
+    for (bool pressed : in.key_pressed) any_key = any_key || pressed;
+    if (any_pad || std::fabs(in.pad_axis[SDL_GAMEPAD_AXIS_LEFTX]) > 0.5f || std::fabs(in.pad_axis[SDL_GAMEPAD_AXIS_LEFTY]) > 0.5f) kb_mode = false;
+    if (any_key) kb_mode = true;
+  }
+  if (msg_frames > 0 && --msg_frames == 0) msg.clear();
+  const Nav nav = poll(in);
+  if (frames < 4) return;
+  switch (screen) {
+    case MenuScreen::Main: update_main(nav); break;
+    case MenuScreen::Status: update_status(nav); break;
+    case MenuScreen::ElementChoice: update_choice(nav); break;
+    case MenuScreen::ElementUse: update_use(nav); break;
+    case MenuScreen::ElementGrid: update_grid(nav); break;
+    case MenuScreen::Equip: update_equip(nav); break;
+    case MenuScreen::KeyItems: update_keyitems(nav); break;
+    case MenuScreen::Settings: update_settings(nav, in); break;
+    case MenuScreen::Save: update_save(nav); break;
+  }
+  // the needle eases once per frame on the screens that draw a dial (main list, Use / Allocate toggle, Save / Load list)
+  if (screen == MenuScreen::Main) hand_tick(0, main_cur, table_angle(0, main_cur));
+  else if (screen == MenuScreen::ElementChoice) hand_tick(1, choice_cur, table_angle(1, choice_cur));
+  else if (screen == MenuScreen::Save) hand_tick(3, top_cur, save_list_angle(top_cur));
+}
+
+// Needle angles per list (4096 = 2 pi): 0 main, 1 Use / Allocate, 2 popup, 3 Save / Load.
+int MainMenu::Impl::table_angle(int list, int sel) {
+  static const int kAngle[4][6] = {{-576, -768, -960, -1104, -1248, -1434}, {-576, -960, 0, 0, 0, 0}, {-1104, -1248, -1434, 0, 0, 0}, {-768, -1104, 0, 0, 0, 0}};
+  return kAngle[std::clamp(list, 0, 3)][std::clamp(sel, 0, 5)];
+}
+
+// When the list changes the needle snaps to entry 0's angle; while the selection differs from the settled one,
+// angle += ((target - angle) / 10) * step with step counting 0..10 once per frame (integer division: 10 %, 20 % ... of the remaining
+// way, the 11th frame lands exactly), then the selection settles. A selection settled earlier is drawn at its exact angle.
+void MainMenu::Impl::hand_tick(int list, int sel, int target) {
+  if (list != hand_list) hand_angle = list == 3 ? save_list_angle(0) : table_angle(list, 0), hand_list = list;
+  if (sel == hand_settled) {
+    hand_angle = target;
+    return;
+  }
+  hand_angle += ((target - hand_angle) / 10) * hand_step;
+  if (hand_step < 10) ++hand_step;
+  else hand_step = 0, hand_settled = sel;
+}
+
+void MainMenu::Impl::scroll_to(int cur, int& scroll, int rows) {
+  if (cur < scroll) scroll = cur;
+  if (cur >= scroll + rows) scroll = cur - rows + 1;
+}
+
+// ================================================================================================================
+MainMenu::MainMenu() : impl_(std::make_unique<Impl>()) {}
+MainMenu::~MainMenu() { shutdown(); }
+
+bool MainMenu::init(render::GpuContext& ctx, const vfs::Vfs& vfs, render::SpriteBatch& sprites, render::TextBatch& text,
+                    const data::GameTables& tables, import::Lang lang) {
+  return impl_->init(ctx, vfs, sprites, text, tables, lang);
+}
+void MainMenu::shutdown() {
+  if (impl_ && impl_->ctx) impl_->shutdown();
+}
+void MainMenu::set_model_view(MenuModelView* view) { impl_->model_view = view; }
+void MainMenu::set_rules(const MenuRules* rules) { impl_->rules = rules; }
+void MainMenu::set_mode(ArtMode mode) { impl_->mode = mode; }
+ArtMode MainMenu::mode() const { return impl_->mode; }
+void MainMenu::set_language(import::Lang lang) {
+  impl_->lang = lang;
+  impl_->name_cache.clear();
+  // JP adds the ik_70 face.
+  impl_->fonts_mode = -1;
+}
+void MainMenu::set_portrait_set(const std::string& set) { impl_->portrait_set = set == "1999" ? "1999" : "2021"; }
+void MainMenu::set_save_target(save::SaveDat* dat, std::filesystem::path out) {
+  impl_->save_dat = dat;
+  impl_->save_out = std::move(out);
+}
+void MainMenu::set_sfx(std::function<void(int)> fn) { impl_->sfx_fn = std::move(fn); }
+void MainMenu::set_save_locked(bool on) { impl_->save_locked = on; }
+void MainMenu::set_wide_columns(float columns) { impl_->wide_cols = std::max(0.0f, columns); }
+bool MainMenu::save_locked() const { return impl_->save_locked; }
+void MainMenu::open(GameState& state, bool can_save) { impl_->open(state, can_save); }
+void MainMenu::close() { impl_->closed = true; }
+bool MainMenu::closed() const { return impl_->closed; }
+bool MainMenu::saved() const { return impl_->saved; }
+MenuScreen MainMenu::screen() const { return impl_->screen; }
+std::optional<MainMenu::LoadRequest> MainMenu::take_load_request() {
+  Impl& impl = *impl_;
+  if (!impl.load_pending) return std::nullopt;
+  impl.load_pending = false;
+  const save::MemCard* card = impl.save_dat ? impl.save_dat->card(1) : nullptr;
+  if (!card) return std::nullopt;
+  try {
+    LoadRequest request;
+    request.slot = impl.load_slot;
+    request.block = impl.load_block;
+    request.data = save::read_slot(*card, impl.load_block);
+    return request;
+  } catch (const std::exception& error) {
+    log::warn("menu: load slot {}: {}", impl.load_slot, error.what());
+    return std::nullopt;
+  }
+}
+void MainMenu::update(const platform::Input& in, int ticks) {
+  impl_->pad_present = in.pad_connected;
+  impl_->update(in, ticks);
+}
+void MainMenu::draw(const render::Frame& frame, float vw, float vh, bool resume) { impl_->draw(frame, vw, vh, resume); }
+
+void MainMenu::debug_show(MenuScreen screen, int variant) {
+  Impl& impl = *impl_;
+  if (!impl.gs) return;
+  impl.member = 0;
+  impl.sub = 0;
+  impl.msg.clear();
+  impl.enter(screen);
+  impl.frames = 10;
+  // For screenshots: a fixed turn (the two hands of the weapon grip side by side).
+  impl.model_yaw = 0.9f;
+  impl.model_clock = {};
+  if (screen == MenuScreen::ElementGrid) {
+    impl.list_cur = 2;
+    impl.focus = 0;
+  }
+  // Variant 1 of the grid: carrying an element over the grid.
+  if (screen == MenuScreen::ElementGrid && variant == 1) {
+    const auto list = impl.grid_list();
+    impl.list_cur = std::min(2, static_cast<int>(list.size()) - 1);
+    impl.carry = list.size() > 1 && list[static_cast<size_t>(impl.list_cur)] >= 0
+                     ? impl.gs->slot.elements[static_cast<size_t>(list[static_cast<size_t>(impl.list_cur)])].id
+                     : 0;
+    impl.focus = 1;
+  }
+  if (screen == MenuScreen::ElementGrid && variant == 2) impl.popup = Popup::Menu, impl.pop_cur = 1;
+  if (screen == MenuScreen::Equip && variant == 1) impl.eq_list = true, impl.eq_cur = 1;
+  if (screen == MenuScreen::Main && variant == 1) impl.sub = 1;
+  // Variant 1 of Settings: the Custom Window Frame picker.
+  if (screen == MenuScreen::Settings && variant == 1) impl.set_cur = 1, impl.skin_pick = true;
+  if (screen == MenuScreen::Save && variant != 4) impl.can_save = true;
+  if (screen == MenuScreen::Save && variant >= 1 && variant <= 3) {
+    impl.save_phase = 1;
+    impl.load_mode = variant >= 2;
+    if (impl.load_mode)
+      for (int k = 1; k < 15; ++k)
+        if (impl.prev[static_cast<size_t>(k)].used) {
+          impl.load_cur = k;
+          break;
+        }
+    impl.save_confirm = variant == 3;
+    impl.confirm_cur = 0;
+  }
+  if (screen == MenuScreen::Save && variant == 4) impl.can_save = false, impl.top_cur = 1;
+}
+
+}  // namespace oc::ui

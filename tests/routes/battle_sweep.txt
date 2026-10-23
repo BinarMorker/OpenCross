@@ -1,0 +1,101 @@
+# Battle sweep: Continue, the party at full HP, then forced scenes (encounter id 0x200 + scene) incl. scene 100 and boss scenes 389 / 398 / 425 / 445 / 470,
+# each fought by the auto player. The log lists per fight the outcome, the script events and `battle: stub hit` lines (rules / script paths not done).
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down                            # slot 5
+- wait 10
+- tap confirm
+- wait flow field 600
+- wait idle 600
+- set hp 0 999
+- set hp 1 999
+- set hp 2 999
+- set hp 3 999
+- log sweep scene 3
+- request battle 515
+- wait battle start 600
+- wait 240
+- tap confirm
+- fight 12000
+- wait 120
+- set hp 0 999
+- set hp 1 999
+- set hp 2 999
+- set hp 3 999
+- log sweep scene 100
+- request battle 612
+- wait battle start 600
+- wait 240
+- tap confirm
+- fight 12000
+- wait 120
+- set hp 0 999
+- set hp 1 999
+- set hp 2 999
+- set hp 3 999
+- log sweep scene 389
+- request battle 901
+- wait battle start 600
+- wait 240
+- tap confirm
+- fight 12000
+- wait 120
+- set hp 0 999
+- set hp 1 999
+- set hp 2 999
+- set hp 3 999
+- log sweep scene 398
+- request battle 910
+- wait battle start 600
+- wait 240
+- tap confirm
+- fight 12000
+- wait 120
+- set hp 0 999
+- set hp 1 999
+- set hp 2 999
+- set hp 3 999
+- log sweep scene 425
+- request battle 937
+- wait battle start 600
+- wait 240
+- tap confirm
+- fight 12000
+- wait 120
+- set hp 0 999
+- set hp 1 999
+- set hp 2 999
+- set hp 3 999
+- log sweep scene 445
+- request battle 957
+- wait battle start 600
+- wait 240
+- tap confirm
+- fight 12000
+- wait 120
+- set hp 0 999
+- set hp 1 999
+- set hp 2 999
+- set hp 3 999
+- log sweep scene 470
+- request battle 982
+- wait battle start 600
+- wait 240
+- tap confirm
+- fight 12000
+- wait 120
+- quit

@@ -1,0 +1,15 @@
+# Dragon Shrine (gal_b11i) opening: with three party members, nobody stands inside another member when the first line opens, and the followers stay on the mesh.
+0 wait idle
+- request party_add 1
+- request party_add 22
+- load gal_b11i 2
+- wait room gal_b11i 300
+- wait dialogue open 1200
+- log first line open: nobody inside another member
+- assert gap player p1 60 260
+- assert gap player p2 60 260
+- assert gap p1 p2 40 400
+- assert offmesh p1 0
+- assert offmesh p2 0
+- assert height p1 -2000 2000
+- quit

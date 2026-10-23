@@ -1,0 +1,20 @@
+# opn_a04i (dream Fort Dragonia hall): the crystal's room-prd mesh effect (`elem`, purple prism) and the hik6 column; visual check only.
+0 wait idle
+- request party_add 1
+- request party_add 22
+- load opn_a04i 0
+- wait room opn_a04i 300
+- wait idle 300
+- wait 60
+- key down run
+- key down up
+- wait 150
+- screenshot beam_opn_01.png
+- wait 120
+- screenshot beam_opn_02.png
+- wait 120
+- key up up
+- key up run
+- wait 60
+- screenshot beam_opn_03.png
+- quit

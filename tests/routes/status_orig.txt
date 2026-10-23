@@ -1,0 +1,34 @@
+# Status screen route: title -> Continue -> slot 5 -> field -> main menu -> Status (the rotating 3D menu model on the right).
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV first
+- tap confirm                         # skip it
+- wait movie end 300
+- wait 150
+- tap confirm                         # any button: the menu
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down
+- wait 10
+- tap confirm
+- wait flow field 600
+- wait idle 900
+- tap tab                             # the menu key
+- wait menu open 120
+- wait 40
+- tap confirm                         # Status: member pick
+- wait 20
+- tap confirm                         # the status screen of the first member
+- wait 90
+- screenshot st_02_status_orig.png
+- tap cancel
+- tap cancel
+- wait menu closed 300
+- quit

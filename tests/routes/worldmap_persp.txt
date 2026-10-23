@@ -1,0 +1,23 @@
+# World-map perspective: the party stands upright (no lean forward / lying down) at the top and at the bottom of the map. The pitch op
+# (OP27 #3584 = -45 deg) acts in the WORLD frame, after the yaw. Entrance 1 = north-west corner, 14 = south-east corner. Screenshots are the check.
+0 wait idle 600
+- load wld_a01 1
+- wait room wld_a01 300
+- wait idle 600
+- wait 30
+- screenshot wm_01_top.png
+- key down right
+- wait 40
+- key up right
+- wait 20
+- screenshot wm_02_top_walking_east.png
+- load wld_a01 14
+- wait idle 600
+- wait 30
+- screenshot wm_03_bottom.png
+- key down left
+- wait 40
+- key up left
+- wait 20
+- screenshot wm_04_bottom_walking_west.png
+- quit

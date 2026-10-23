@@ -1,0 +1,10 @@
+# Chronos room (alu_a03i) with var 0x80 = 2: traces the player for 60 ticks and asserts it never clips the room geometry.
+0 wait 5
+- request party_add 1
+- set var 0x00 8
+- set var 0x80 2
+- load alu_a03i 0
+- trace 5 60
+- assert traceclip 0 0
+- wait 90
+- quit

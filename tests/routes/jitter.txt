@@ -1,0 +1,15 @@
+# Diagonal-walk camera jitter: one integer scroll per tick, interpolated sub-pixel for the HD layers and actors alike. Screenshot pairs
+# one tick apart while walking up-right in Arni; compare jit_a / jit_b (background and actor move together, no 1 px stutter).
+0 wait idle 600
+- wait 30
+- key down up
+- key down right
+- wait 60
+- screenshot jit_a.png
+- wait 1
+- screenshot jit_b.png
+- wait 1
+- screenshot jit_c.png
+- key up up
+- key up right
+- quit

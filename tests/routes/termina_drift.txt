@@ -1,0 +1,19 @@
+; tel_b04f message 95 (Termina, the man in the shade): PS1 page 3 is "<2 question lines> / choice / choice" (E1 0x23 = lines 2, 3); the EN text has ONE
+; question line, so the options are lines 1 and 2. RDE maps the script row to the translated line; the hand starts on "Understood".
+0 wait 5
+- wait text get my drift
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 150
+- assert choiceline 1
+- screenshot termina_drift_0.png
+- tap down
+- wait 20
+- assert choiceline 2
+- screenshot termina_drift_1.png
+- tap down
+- wait 20
+- assert choiceline 1
+- quit

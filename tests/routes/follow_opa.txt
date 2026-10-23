@@ -1,0 +1,32 @@
+# Party followers in Opassa (the starting area): spawn on the leader, replay the trail with the engine's free step, never
+# left behind; off-mesh ticks are only corner cuts between two ring entries (bounded loosely).
+0 wait idle
+- request party_add 1
+- request party_add 22
+- load opa_a03f 0
+- wait room opa_a03f 300
+- wait idle 300
+- wait 60
+- key down run
+- key down up
+- wait 120
+- key up up
+- key down left
+- wait 120
+- key up left
+- key down down
+- wait 150
+- key up down
+- key down right
+- wait 150
+- key up right
+- key down up
+- wait 100
+- key up up
+- key up run
+- wait 240
+- assert gap player p1 0 230
+- assert gap p1 p2 0 230
+- assert offmesh p1 120
+- assert offmesh p2 120
+- quit

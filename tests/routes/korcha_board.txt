@@ -1,0 +1,30 @@
+# Korcha's ferry at Termina (tel_b23e): scenario past 36, the "Viper Manor" ride offered (bits 5193 / 5195 set), pay 100G, board.
+0 wait 5
+- request party_add 1
+- request party_add 2
+- request money 5000
+- set var 0x00 30
+- set var 0x144 0x2A00
+- load tel_b23e 0
+- wait room tel_b23e 300
+- wait 60
+- dump
+- put -2260 2290
+- approach 9 30 300
+- wait 20
+- action
+- wait 320
+- skip 600
+- skip 600
+- skip 600
+- skip 600
+- skip 600
+- skip 600
+- skip 600
+- skip 600
+- log after-skips
+- wait 320
+- assert near player -2700 2067 320
+- wait room tel_b22e 3000
+- log done
+- quit

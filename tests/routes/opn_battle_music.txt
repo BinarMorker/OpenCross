@@ -1,0 +1,15 @@
+# opn_a02i: the room's own song is id 2 (BGM003). A C9 flag 1 battle (Cybot 4's collision) keeps the field song: after the run the log must hold
+# 'battle audio: field music kept' and no 'battle theme' line (check: powershell tests\routes\run.ps1 opn_battle_music, then grep the log).
+0 wait idle
+- request party_add 1
+- request party_add 22
+- load opn_a02i 0
+- wait room opn_a02i 300
+- wait idle 300
+- wait 30
+- put -1400 -1100
+- wait 20
+- wait battle start 1500
+- wait 120
+- log music check after battle start
+- quit

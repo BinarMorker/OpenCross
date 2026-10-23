@@ -1,0 +1,19 @@
+# Termina, Skelly's grandmother's house (tel_b11i, room 92). Talking to the grandmother in the chair must not freeze the game.
+# Her first-talk ON_ACTION (ent 4, 00D8..0135) sets $room[6] = 1 and runs `08 RUN_SCRIPT_AND_WAIT ent5, 0x64`: ent 5 script 4
+# loops (SET_ANIMATION 1 / WAIT_FRAME) while $room[6] == 1, and only ent 4 clears it after the dialogue. Op 08
+# waits until the child record is the target's running record (+0x22C) or idle - not until it ends (that is 09).
+0 wait 5
+- request party_add 1
+- walk 500 0 40 400
+- approach 4 60 600
+- action
+- wait text Who might you be
+- wait 90
+- action
+- wait 20
+- wait text Grandma, they are travelers
+- skip
+- wait idle 1200
+- assert var 0x40C 0                 # ent 4 cleared $room[6] (the ent-5 loop ended)
+- assert var 0x402 1                 # first talk done ($room[1])
+- quit

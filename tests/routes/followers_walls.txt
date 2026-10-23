@@ -1,0 +1,36 @@
+# The leader runs a zig-zag past walls and corners (Termina tel_a01f). Followers replay the leader's ring with the engine's free step
+# (no probe / slide), so they are never wedged on a corner and left behind: after the walk each stands within the
+# 200-unit stand distance of the member it follows (+ one step). Off-mesh ticks are only the corner cuts between two ring entries (bounded loosely).
+0 wait idle
+- request party_add 1
+- request party_add 22
+- load tel_a01f 0
+- wait room tel_a01f 300
+- wait idle 300
+- wait 60
+- key down run
+- key down left
+- wait 90
+- key up left
+- key down up
+- wait 90
+- key up up
+- key down right
+- wait 140
+- key up right
+- key down down
+- wait 120
+- key up down
+- key down left
+- wait 120
+- key up left
+- key down up
+- wait 100
+- key up up
+- key up run
+- wait 240
+- assert gap player p1 0 230
+- assert gap p1 p2 0 230
+- assert offmesh p1 120
+- assert offmesh p2 120
+- quit

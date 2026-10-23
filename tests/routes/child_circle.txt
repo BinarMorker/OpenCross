@@ -1,0 +1,9 @@
+# Termina child (tel_a03f ent 4) runs a circle of radius 200: every UPDATE adds 32 to the angle and starts WALK_TO_XZ_2 (timer 1) to the
+# next point, ~10 units away (below the S/8 = 16 arrival distance, so every walk snaps on its first tick). The facing +0xFA is set by the
+# start form (bearing to the target unless slot flag +0x126 or +0x24E is 0) and the model yaw +0xFC chases it at +0x24E per
+# tick, so the yaw must sweep all the way round. One step per 2 ticks: the 9-op UPDATE
+# runs 8 instructions in the first tick (the 8-instruction budget) and releases at its STOP in the second.
+0 wait idle 600
+- trace 4 600
+- assert traceyaw 200 8
+- quit

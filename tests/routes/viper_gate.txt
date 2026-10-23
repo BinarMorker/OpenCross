@@ -1,0 +1,16 @@
+# Viper Manor hall (jac_b22i): interacting with the gate / door on the right opens it and the game must stay playable.
+# Door ent 14 ON_ACTION (09 4D): SFX, BG layers 6 -> 7 -> 8, SETUP_FLAG, then `3B STOP_EXEC` (no DISABLE_CONTROLS). 3B parks the class-3 record
+# for good; parking clears the kActionRunning marker (as the original does when the id-2 record is first selected), so controls_free() returns.
+0 wait 5
+- request party_add 1
+- set var 0x00 45
+- set var 0x108 256                  # the patrolling guard (ent 4) is gone / the corridor is open
+- load jac_b22i 3
+- wait room jac_b22i 600
+- wait idle 600
+- approach 14 30 3000                # the door's collision rect blocks the walk: approach ends when blocked in its action range
+- action
+- wait 120
+- wait idle 600                      # controls must come back
+- assert dialogue closed
+- quit

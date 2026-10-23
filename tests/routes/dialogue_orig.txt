@@ -1,0 +1,38 @@
+# Original art. Dialogue frame + portraits in the opening (opn_a01i): default skin w04, face from the speaker.
+# New game route: title -> New Game -> name entry "Serge" -> opening (opn_a01i ...) -> first field room.
+0 wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV (a07b_ite)
+- wait 60
+- screenshot dlo_n0_title_movie.png
+- tap confirm                         # skippable
+- wait movie end 300
+- wait 150                            # the logo scene with its pulsing "Push START" prompt
+- screenshot dlo_n1_title_prompt.png
+- tap confirm                         # any button: the menu appears
+- wait 60
+- screenshot dlo_n2_title_menu.png
+- tap confirm                         # New Game (fades out)
+- wait 20
+- tap confirm                         # the vibration page: On
+- wait flow name 600                  # RDE user guide (two pages) before the name entry
+- wait 90
+- tap confirm
+- wait 90
+- tap confirm
+- wait 90
+- screenshot dlo_n3_name_entry.png     # default name "Serge" is already in the buffer
+- tap tab                             # Start: accept the name
+- wait room opn_a01i 900
+- wait dialogue open 1500
+- wait 60
+- screenshot dlo_01_first.png
+- tap confirm
+- wait 90
+- screenshot dlo_02_second.png
+- tap confirm
+- wait 90
+- screenshot dlo_03_third.png
+- tap confirm
+- wait 90
+- screenshot dlo_04_fourth.png
+- quit

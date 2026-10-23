@@ -1,0 +1,27 @@
+# Viper Manor disguise. The disguise model is byte 0x3B = fieldobj/player/adk_sp (D9 #59 in jac_b22i). The
+# byte lives in the character record (+0x2D); a flag 4 battle (C9 #406 #10 #4 in jac_b25i) writes it into every party member but
+# Poshul / Mojo, so the party comes back from the fight in the soldier outfit.
+# Shots: vd_01 disguised (D9 + DA), vd_02 after a flag 4 battle from normal clothes.
+0 wait 10
+- request party_add 1
+- request party_add 2
+- wait 30
+- set model 0 59
+- set model 1 59
+- set model 2 59
+- wait 30
+- screenshot vd_01_disguised.png
+- set model 0 0
+- set model 1 1
+- set model 2 2
+- wait 20
+- request battle_disguise 1
+- wait battle start 600
+- wait 240
+- tap confirm
+- fight 1800
+- wait battle end 1800
+- wait idle 1200
+- wait 30
+- screenshot vd_02_after_battle.png
+- quit

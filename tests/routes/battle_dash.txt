@@ -1,0 +1,22 @@
+# Dash & Slash (element 147) kills the last enemy: the cast plays out before the battle ends.
+# Env hacks (battle_dash.env): grid cell 0 = 147, the other enemies down, the target at 1 HP when the element is confirmed.
+0 wait 30
+- tap confirm
+- wait 90
+- tap confirm
+- wait 20
+- tap confirm
+- wait 150
+- tap confirm
+- wait 150
+- tap down
+- wait 6
+- tap down
+- wait 6
+- tap confirm
+- wait 20
+- tap confirm
+- wait 20
+- tap confirm
+- wait 1200
+- quit

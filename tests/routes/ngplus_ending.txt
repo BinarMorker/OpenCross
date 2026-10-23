@@ -1,0 +1,24 @@
+# The ending's save prompt: any button -> "Save?" Yes -> FE 85 strips the roster's gear / grids and sets
+# variable 0x7E = 3 -> FE 61 opens the save list -> file 1 -> SAVE_RESULT 0 -> SET_NEXT_ROOM 8 (the title room).
+# Check afterwards: python -I tools\py\cc_save.py slots tmp\r40d\end\save.dat (slot 1: location 9, head 0x42 = 3, head 0x206 = 3).
+0 wait 5
+- request money 4321
+- wait 900                            # fade in, song 15, WAIT 255, then the any-button loop
+- tap confirm
+- choose 0 900                        # "Save?" -> Yes
+- wait menu open 300
+- assert var 0x7E 3
+- wait 30
+- screenshot ne_01_save_list.png
+- tap confirm                         # Save a File -> the file list (cursor on file 1)
+- wait 20
+- tap confirm                         # empty file 1: saved at once
+- wait 60
+- tap cancel
+- wait 20
+- tap cancel
+- wait 20
+- tap cancel
+- wait menu closed 300
+- wait room opening 900
+- quit

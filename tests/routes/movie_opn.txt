@@ -1,0 +1,6 @@
+# FMV route: opn_a05i plays 7E #3 = row 3 of the field.prg movie table = movie number 3 = a03kidfb.
+0 mash until movie start 4000
+- wait 60
+- screenshot mv_03_opn_a05i.png
+- assert movie playing
+- quit

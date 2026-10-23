@@ -1,0 +1,26 @@
+# Termina shrine path (tel_b23e): the shrine guard (ent 15) walks up the path (UPDATE 42 / 42 01) and intercepts the party with its
+# ON_COLLISION box (8D 02, 200 x 600, msg 57 "What business brings you here?"). The guard must stop for
+# the dialogue, not walk on. A walk only moves while its own script record runs (the wait form sets the velocity); the class-4
+# trigger script preempts the class-7 UPDATE, so the guard stops in front of the party and resumes afterwards.
+0 wait 5
+- request party_add 1
+- set var 0x00 32
+- load tel_b23e 0
+- wait room tel_b23e 300
+- wait 1
+- walk -1500 3700 30 400
+- walk -1500 2700 30 400
+- wait text What business brings you here
+- assert near player -1501 2726 40
+- assert near 15 -1697 2362 40
+- assert ent 15 paused 1
+- wait 60
+- assert near 15 -1697 2362 40         # still standing there while it talks
+- assert ent 15 paused 1
+- mark ent 15
+- skip
+- wait idle 600
+- wait 90
+- assert ent 15 paused 0
+- assert moved 15 200                   # walks on (to -1970,2872 then the town gate)
+- quit

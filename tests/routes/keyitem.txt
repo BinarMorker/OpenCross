@@ -1,0 +1,9 @@
+# Key item 5 given through FieldWorld::give_item (route request). Retail has no pickup panel (the room script
+# shows its own "received" message window), so the field must stay idle (not held by a modal panel) and log the item.
+0 wait idle 600
+- wait 60
+- request keyitem 5
+- wait 10
+- wait idle 20
+- screenshot ki_01_given.png
+- quit

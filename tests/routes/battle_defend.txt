@@ -1,0 +1,17 @@
+# Battle Defend: Serge (slot 0) defends; the menu must pass to Kid (slot 1, fixed order) and Serge holds the guard
+# pose from the idle script (ctrl flag 0x200). Shots: bd_01 top menu, bd_02 cursor on Defend, bd_03 Kid's menu with Serge guarding.
+0 wait 30
+- tap confirm                         # skip the intro shots
+- wait 90
+- screenshot bd_01_top.png
+- tap down
+- wait 8
+- tap down
+- wait 8
+- screenshot bd_02_cursor_defend.png
+- tap confirm                         # Defend
+- wait 90
+- screenshot bd_03_next_pc.png
+- wait 60
+- screenshot bd_04_next_pc_later.png
+- quit

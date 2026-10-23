@@ -1,0 +1,10 @@
+# Kid's bend-down / lean-back laugh during her Lynx dialogue (opn_a01i msgs 3-4): shots every 8 ticks around it, compared with o7 frames 2150-2250.
+0 wait 5
+- request party_add 1
+- request party_add 39
+- load opn_a01i 0
+- wait room opn_a01i 300
+- wait 590
+- autoshot 8 24 lh_
+- mash until idle x 4000
+- quit

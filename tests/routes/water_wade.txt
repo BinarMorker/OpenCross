@@ -1,0 +1,7 @@
+# Wading actors: in the attract-demo swamp (dem_05 = hid_a02f's layers) the party walks
+# through the pool. Faces with a corner below the op-66 level (WORLD y) take the op-87 colour and are filed (layer 0's z)
+# slots back: the legs sit under the additive water layer instead of on top of it; no shadow on water triangles (flags 0x6E000).
+0 wait 30
+- autoshot 60 8 ww_
+- wait 500
+- quit

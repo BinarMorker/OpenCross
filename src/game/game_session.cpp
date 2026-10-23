@@ -1,0 +1,258 @@
+#include "game/game_session.h"
+
+#include <algorithm>
+
+#include "battle/rng.h"
+#include "battle/rules.h"
+#include "core/log.h"
+#include "game/new_game.h"
+
+namespace oc::game {
+
+namespace {
+
+constexpr size_t kStarOff = save::head::kStarsTotal, kCounterOff = save::head::kStarsCurrent;
+
+// bonus[] layout: C0 snap ATK, C1 pending ATK, C2 snap HIT, C3 pending HIT, C4/C5 DEF, C6/C7 EVD, C8/C9 MAG, CA/CB MDEF.
+// Stat order (PartyMember): HP, ATK, DEF, HIT, EVD, MAG, MDEF.
+constexpr int kBonusIndex[7] = {-1, 0, 4, 2, 6, 8, 10};
+
+int stat_of(const save::SaveChar& save_char, int k) {
+  switch (k) {
+    case 0: return save_char.max_hp;
+    case 1: return save_char.atk;
+    case 2: return save_char.def;
+    case 3: return save_char.hit;
+    case 4: return save_char.evd;
+    case 5: return save_char.mag;
+    default: return save_char.mdef;
+  }
+}
+
+void set_stat(save::SaveChar& save_char, int k, int value) {
+  switch (k) {
+    case 0: save_char.max_hp = static_cast<u16>(std::clamp(value, 1, 999)); break;
+    case 1: save_char.atk = static_cast<u8>(std::clamp(value, 0, 127)); break;
+    case 2: save_char.def = static_cast<u8>(std::clamp(value, 0, 127)); break;
+    case 3: save_char.hit = static_cast<u8>(std::clamp(value, 0, 127)); break;
+    case 4: save_char.evd = static_cast<u8>(std::clamp(value, 0, 127)); break;
+    case 5: save_char.mag = static_cast<u8>(std::clamp(value, 0, 127)); break;
+    default: save_char.mdef = static_cast<u8>(std::clamp(value, 0, 127)); break;
+  }
+}
+
+void read_growth(const save::SaveChar& save_char, battle::PartyMember& member) {
+  member.snap[0] = save_char.hp_extra;
+  member.pending[0] = save_char.unk_be;
+  for (int k = 1; k < 7; ++k) {
+    member.snap[static_cast<size_t>(k)] = save_char.bonus[static_cast<size_t>(kBonusIndex[k])];
+    member.pending[static_cast<size_t>(k)] = save_char.bonus[static_cast<size_t>(kBonusIndex[k] + 1)];
+  }
+}
+
+void write_growth(save::SaveChar& save_char, const battle::PartyMember& member) {
+  save_char.hp_extra = static_cast<u16>(std::clamp(member.snap[0], 0, 999));
+  save_char.unk_be = static_cast<u16>(std::clamp(member.pending[0], 0, 999));
+  for (int k = 1; k < 7; ++k) {
+    save_char.bonus[static_cast<size_t>(kBonusIndex[k])] = static_cast<u8>(std::clamp(member.snap[static_cast<size_t>(k)], 0, 127));
+    save_char.bonus[static_cast<size_t>(kBonusIndex[k] + 1)] = static_cast<u8>(std::clamp(member.pending[static_cast<size_t>(k)], 0, 127));
+  }
+}
+
+}  // namespace
+
+std::string utf8_from_u32(std::u32string_view text) {
+  std::string out;
+  for (char32_t code_point : text) {
+    if (code_point < 0x80) {
+      out += static_cast<char>(code_point);
+    } else if (code_point < 0x800) {
+      out += static_cast<char>(0xC0 | (code_point >> 6));
+      out += static_cast<char>(0x80 | (code_point & 0x3F));
+    } else if (code_point < 0x10000) {
+      out += static_cast<char>(0xE0 | (code_point >> 12));
+      out += static_cast<char>(0x80 | ((code_point >> 6) & 0x3F));
+      out += static_cast<char>(0x80 | (code_point & 0x3F));
+    } else {
+      out += static_cast<char>(0xF0 | (code_point >> 18));
+      out += static_cast<char>(0x80 | ((code_point >> 12) & 0x3F));
+      out += static_cast<char>(0x80 | ((code_point >> 6) & 0x3F));
+      out += static_cast<char>(0x80 | (code_point & 0x3F));
+    }
+  }
+  return out;
+}
+
+int session_star(const ui::GameState& gs) { return std::min<int>(gs.slot.head[kStarOff], 99); }
+
+battle::PartyMember party_member_from_state(const data::GameTables& tables, const ui::GameState& gs, int char_id,
+                                            const std::map<int, std::u32string>* names) {
+  const int star = session_star(gs);
+  // The record set of the state: the dream (char20.bin) until FE 3F, else char.bin (SaveSlot::dream_records, game/new_game.h).
+  const bool dream = gs.slot.dream_records && tables.char_sets.count("char20") != 0;
+  battle::PartyMember member = battle::make_party_member(tables, char_id, star, dream ? "char20" : "char");
+  if (char_id < 0 || char_id >= save::kNumChars) return member;
+  // Pip's forms: the evolution rewrites only the record's growth column (3 3 3 4 5 6 for kinds 0x2B..0x30 = char.bin 43..48) and
+  // the 2-3 tech cells; the grid layout stays record 43's (identical in 43..48). The kind comes from the record's model id.
+  member.growth_col = static_cast<u8>(newgame::growth_column(&tables, gs.slot, char_id, dream));
+  if (gs.slot.chars[static_cast<size_t>(char_id)].max_hp > 0) member.kind = gs.slot.chars[static_cast<size_t>(char_id)].model_id;
+  const save::SaveChar& save_char = gs.slot.chars[static_cast<size_t>(char_id)];
+  // A record that was never filled keeps the table defaults.
+  if (save_char.max_hp > 0) {
+    for (int k = 0; k < 7; ++k) member.stat[static_cast<size_t>(k)] = stat_of(save_char, k);
+    member.hp = std::min<int>(save_char.cur_hp, member.stat[0]);
+    if (save_char.colour_bit) member.innate = save_char.colour_bit;
+    member.eq = battle::make_equip(tables, save_char.weapon, save_char.armour, save_char.accessory);
+    // Grid: the saved element per cell and the saved unlocks (on top of the starting kit the core applies).
+    const auto kit = member.unlocked;
+    member.cells.fill(0);
+    member.unlocked.fill(false);
+    for (int row = 0; row < ui::GameState::kRows; ++row)
+      for (int col = 0; col < ui::GameState::kCols; ++col) {
+        const size_t cell = static_cast<size_t>(row * ui::GameState::kCols + col);
+        if (cell >= member.cells.size()) continue;
+        member.cells[cell] = static_cast<u16>(gs.cell_element(char_id, row, col));
+        member.unlocked[cell] = (gs.cell_available(char_id, row, col) || (kit[cell] && row <= 1)) && member.cells[cell] != 0;
+      }
+    battle::unlock_grid(member, tables, star);
+    for (int row = 0; row < ui::GameState::kRows; ++row)
+      for (int col = 0; col < ui::GameState::kCols; ++col) {
+        const size_t cell = static_cast<size_t>(row * ui::GameState::kCols + col);
+        if (cell < member.qty.size() && (member.cells[cell] & 0x3FFF) != 0 && (member.cells[cell] & 0x3FFF) < tables.elements.size() && (tables.elements[member.cells[cell] & 0x3FFF].flags0() & 0x10))
+          member.qty[cell] = static_cast<u8>(std::max(1, gs.cell_count(char_id, row, col)));
+      }
+    member.lo_persist = save_char.status & battle::st::kPersist;
+    read_growth(save_char, member);
+    const bool fresh = save_char.hp_extra == 0 && save_char.unk_be == 0 && std::all_of(save_char.bonus.begin(), save_char.bonus.end(), [](u8 bonus) { return bonus == 0; });
+    if (fresh) {
+      member.snap = member.stat;
+      battle::GameRng rng(0x5EED0000u + static_cast<u32>(char_id) * 977u);
+      member.pending[0] = battle::next_pending_hp(rng, member.stat[0], member.lv99[0], star);
+      for (size_t k = 1; k < 7; ++k) member.pending[k] = battle::next_pending_stat(rng, member.stat[k], member.lv99[k], star);
+    }
+  }
+  if (names) {
+    auto it = names->find(char_id);
+    if (it != names->end() && !it->second.empty()) member.name = utf8_from_u32(it->second);
+  }
+  return member;
+}
+
+BattleSetup battle_setup(const data::GameTables& tables, const ui::GameState& gs, const std::vector<int>& party_ids, int progress,
+                         const std::map<int, std::u32string>* names) {
+  BattleSetup out;
+  out.ng_plus = gs.slot.new_game_plus();
+  out.growth.star = session_star(gs);
+  out.growth.progress = progress;
+  out.growth.counter = gs.slot.head[kCounterOff];
+  for (int char_id = 0; char_id < save::kNumChars; ++char_id) {
+    if (std::find(party_ids.begin(), party_ids.end(), char_id) != party_ids.end()) continue;
+    if (!gs.slot.recruited(char_id) || gs.slot.chars[static_cast<size_t>(char_id)].max_hp == 0) continue;
+    out.bench.push_back(party_member_from_state(tables, gs, char_id, names));
+  }
+  return out;
+}
+
+namespace {
+
+// Grid unlocks of the (new) star for one character, written into the save's per-row masks.
+void write_unlocks(ui::GameState& gs, const data::GameTables& tables, int char_id, int star) {
+  battle::PartyMember member = party_member_from_state(tables, gs, char_id);
+  battle::unlock_grid(member, tables, star);
+  save::SaveChar& save_char = gs.slot.chars[static_cast<size_t>(char_id)];
+  for (int row = 0; row < ui::GameState::kRows; ++row)
+    for (int col = 0; col < ui::GameState::kCols; ++col)
+      if (member.unlocked[static_cast<size_t>(row * ui::GameState::kCols + col)] && gs.cell_exists(char_id, row, col))
+        save_char.unlocked[static_cast<size_t>(row)] |= static_cast<u16>(1u << col);
+}
+
+}  // namespace
+
+BattleSummary apply_battle_result(ui::GameState& gs, const data::GameTables& tables, const battle::Battle& finished_battle, int* progress) {
+  BattleSummary sum;
+  const bool victory = finished_battle.outcome() == battle::Outcome::Victory;
+  const auto& party = finished_battle.party();
+  for (const battle::PartyMember& member : party) {
+    if (member.char_id < 0 || member.char_id >= save::kNumChars) continue;
+    save::SaveChar& save_char = gs.slot.chars[static_cast<size_t>(member.char_id)];
+    for (int k = 0; k < 7; ++k) set_stat(save_char, k, member.stat[static_cast<size_t>(k)]);
+    save_char.cur_hp = static_cast<u16>(std::clamp(member.hp, 1, static_cast<int>(save_char.max_hp)));
+    save_char.status = static_cast<u8>(member.lo_persist & battle::st::kPersist);
+    write_growth(save_char, member);
+    if (member.evolved && battle::pip_form(member.kind)) {
+      // Pip's form change, written into the record at once: the kind byte (its growth column follows it,
+      // newgame::growth_column) and the tech cells (row 2 / 4 / 6, column 7; the third only for a second form).
+      save_char.model_id = static_cast<u16>(member.kind);
+      for (size_t k = 0; k < battle::kPipTechCells.size(); ++k) {
+        if (k == 2 && member.kind <= 0x2D) break;
+        const int cell = battle::kPipTechCells[k];
+        const int idx = gs.cell_index(member.char_id, cell / ui::GameState::kCols, cell % ui::GameState::kCols);
+        if (idx >= 0) save_char.grid[static_cast<size_t>(idx)] = static_cast<u16>(member.cells[static_cast<size_t>(cell)] & 0x1FF);
+      }
+      log::info("session: {} keeps form {:#x}", member.name, member.kind);
+    }
+    // Consumable stacks the fight counted down (the battle's per-cell counter); a stack that ran out empties its grid cell.
+    for (size_t cell = 0; cell < member.qty.size(); ++cell) {
+      if ((member.cells[cell] & 0x3FFF) == 0 || (member.cells[cell] & 0x3FFF) >= tables.elements.size() || !(tables.elements[member.cells[cell] & 0x3FFF].flags0() & 0x10)) continue;
+      const int k = gs.cell_index(member.char_id, static_cast<int>(cell) / ui::GameState::kCols, static_cast<int>(cell) % ui::GameState::kCols);
+      if (k < 0) continue;
+      const u8 before = static_cast<u8>(std::max<int>(1, save_char.equipped_qty[static_cast<size_t>(k)]));
+      if (member.qty[cell] >= before) continue;
+      save_char.equipped_qty[static_cast<size_t>(k)] = member.qty[cell];
+      if (member.qty[cell] == 0) save_char.grid[static_cast<size_t>(k)] = static_cast<u16>(save_char.grid[static_cast<size_t>(k)] & 0xC000);
+    }
+  }
+  if (progress) *progress = finished_battle.growth().progress;
+  const battle::Rewards& rewards = finished_battle.rewards();
+  // Element traps (pgdat mode 5), written during the battle whatever its outcome: an enemy cast caught by the party's trap
+  // goes into the element stock (id & 0xFF, 0xC0 slots, count cap 99); a PC cast caught by the enemy's trap destroys its grid
+  // cell in the save record (the battle cell -> record cell index map is GameState::cell_index).
+  int trapped = 0, lost = 0;
+  for (u16 id : rewards.trapped)
+    if (gs.add_element(id & 0xFF)) ++trapped;
+  for (const auto& [slot, cell] : rewards.lost_cells) {
+    if (slot < 0 || static_cast<size_t>(slot) >= party.size()) continue;
+    const int char_id = party[static_cast<size_t>(slot)].char_id;
+    if (char_id < 0 || char_id >= save::kNumChars) continue;
+    const int k = gs.cell_index(char_id, cell / ui::GameState::kCols, cell % ui::GameState::kCols);
+    if (k < 0) continue;
+    u16& grid_word = gs.slot.chars[static_cast<size_t>(char_id)].grid[static_cast<size_t>(k)];
+    grid_word = static_cast<u16>(grid_word & 0xC000);
+    ++lost;
+  }
+  if (trapped || lost) log::info("session: element traps: {} element(s) taken into the stock, {} grid cell(s) lost", trapped, lost);
+  // Pilfered loot (mode 30, added at the end of the loop, whatever the outcome): bit 15 = element stock, else the item stock.
+  for (u16 loot : rewards.stolen) {
+    if (loot & 0x8000) gs.add_element(loot & 0x7F);
+    else if (loot) gs.add_item(loot);
+  }
+  if (!victory) return sum;
+  sum.gold = rewards.gold;
+  gs.set_gold(static_cast<u32>(std::min<u64>(9999999ull, static_cast<u64>(gs.gold()) + static_cast<u64>(std::max(0, rewards.gold)))));
+  for (u16 id : rewards.items)
+    if (gs.add_item(id)) ++sum.items;
+  for (u16 id : rewards.elements)
+    if (gs.add_element(id & 0x7F)) ++sum.elements;
+  if (rewards.star_up) {
+    sum.star_up = true;
+    // The core ran from the real star: its growth state is the new one (stars 0..99, counter wraps with the byte).
+    gs.slot.head[kStarOff] = static_cast<u8>(std::min(99, finished_battle.growth().star));
+    gs.slot.head[kCounterOff] = static_cast<u8>(std::min(255, finished_battle.growth().counter));
+    const int star = session_star(gs);
+    for (const battle::PartyMember& member : party)
+      if (member.char_id >= 0 && member.char_id < save::kNumChars) write_unlocks(gs, tables, member.char_id, star);
+    // The bench got its old pending deltas and a new roll (stats / snapshots / pending in `bench()`).
+    for (const battle::PartyMember& member : finished_battle.bench()) {
+      if (member.char_id < 0 || member.char_id >= save::kNumChars) continue;
+      save::SaveChar& save_char = gs.slot.chars[static_cast<size_t>(member.char_id)];
+      for (int k = 0; k < 7; ++k) set_stat(save_char, k, member.stat[static_cast<size_t>(k)]);
+      write_growth(save_char, member);
+      write_unlocks(gs, tables, member.char_id, star);
+    }
+  }
+  log::info("session: battle result written back (gold +{}, {} items, {} elements{}; star {} progress {})", sum.gold, sum.items, sum.elements,
+            sum.star_up ? ", star up" : "", finished_battle.growth().star, finished_battle.growth().progress);
+  return sum;
+}
+
+}  // namespace oc::game

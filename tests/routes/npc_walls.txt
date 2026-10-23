@@ -1,0 +1,6 @@
+# NPCs keep to the walk mesh: Arni (alu_a01f) runs its wander scripts for 4000 ticks, then no model entity may stand off the mesh.
+0 wait idle 600
+- wait 4000
+- dump
+- assert offmesh npcs 0
+- quit

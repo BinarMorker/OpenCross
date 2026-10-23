@@ -1,0 +1,39 @@
+# Party wipe route: Continue, every party member at 1 HP, encounter 1, auto fight; a wipe in a fight that is not losable loads map 9
+# instead of returning to the field; the battle ends without a result screen.
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down                            # slot 5
+- wait 10
+- tap confirm
+- wait flow field 600
+- wait idle 600
+- set hp 0 1
+- set hp 1 1
+- set hp 2 1
+- set hp 3 1
+- request battle 1
+- wait battle start 600
+- wait 240
+- tap confirm                         # skip the intro shots
+- fight 6000
+- wait 200
+- assert battle inactive
+- assert result 1
+- assert room ending                   # map 9 = the game-over room
+- wait 1800
+- screenshot bw_gameover.png
+- quit

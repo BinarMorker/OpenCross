@@ -1,0 +1,28 @@
+# Field features in Arni (alu_a01f): room effects, the menu key, a shop opened from a script (merchant = entity 10).
+0 wait idle 600
+- wait 120
+- screenshot ft_01_arni_effects.png   # the room's emitters (.prd): sparkles / petals drawn at their depth
+- assert menu closed
+- tap tab                             # the menu key
+- wait menu open 120
+- wait 30
+- screenshot ft_02_menu_from_field.png
+- assert menu open
+- tap cancel
+- wait menu closed 200
+- wait idle 300
+- walk_ent 10 95 1800                 # the merchant (entity 10, ON_ACTION runs FE 5E / FE 68 through its dialogue)
+- action
+- choose 1 1500                       # "..." -> the second option: the element shop (FE 5E #0 then FE 61)
+- mash until shop open 900           # "Sure! Just one second...": confirm until the shop screen is up
+- wait 40
+- screenshot ft_03_element_shop.png
+- assert shop open
+- tap cancel
+- tap cancel
+- tap cancel
+- wait shop closed 600
+- wait dialogue open 300
+- skip 900
+- assert shop closed
+- quit

@@ -1,0 +1,23 @@
+# Termina shrine (tel_b23e): the guard's talk, then the walk to the Einlanzer cutscene. Checks: the party walks to its spots (Kid moves),
+# the sword stands in the ground (pitch op 27), names resolve, the camera stays inside the layer bounds, the leaf cursor shows.
+# Screenshots tm_s*.png (every 90 ticks): the walk-to, the sword, Glenn's lines.
+0 wait 5
+- request party_add 1
+- request party_add 39
+- set var 0x00 32
+- load tel_b23e 0
+- wait room tel_b23e 300
+- wait 60
+- walk -1496 2850 50 1500
+- wait dialogue open 600
+- mash until idle x 3000
+- wait 30
+- autoshot 90 30 tm_s
+- mark ent 2
+- walk 450 665 40 3000
+- wait dialogue open 1500
+- assert moved 2 150
+- dump
+- mash until idle x 6000
+- assert offmesh p1 20
+- quit
