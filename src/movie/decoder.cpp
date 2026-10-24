@@ -28,32 +28,61 @@ std::string av_err(int error) {
 
 inline u8 clamp8(int value) { return static_cast<u8>(value < 0 ? 0 : (value > 255 ? 255 : value)); }
 
-// Bink YUV is full-range BT.601: R = Y + 1.402 Cr', G = Y - 0.344136 Cb' - 0.714136 Cr', B = Y + 1.772 Cb'
-// (Cb', Cr' centred on 0). 16.16 fixed point. Chroma subsampling through the shifts (4:2:0 -> 1,1).
-void yuv_to_rgba(const AVFrame& frame, int cw_shift, int ch_shift, const u8* alpha_plane, int alpha_stride, u8* out) {
+// YUV -> RGB in 16.16 fixed point: R = g (Y - off) + cr_r Cr', G = g (Y - off) - cb_g Cb' - cr_g Cr', B = g (Y - off) + cb_b Cb'
+// (Cb', Cr' centred on 0). Limited range scales luma by 255/219 and chroma by 255/224 around the matrix.
+struct YuvMatrix {
+  int luma_offset, luma_gain, cr_r, cb_g, cr_g, cb_b;
+};
+constexpr YuvMatrix kFull601{0, 65536, 91881, 22554, 46802, 116130};
+constexpr YuvMatrix kLimited601{16, 76309, 104597, 25675, 53279, 132201};
+constexpr YuvMatrix kFull709{0, 65536, 103206, 12276, 30679, 121609};
+constexpr YuvMatrix kLimited709{16, 76309, 117489, 13975, 34925, 138438};
+
+// Bink is always full-range BT.601. Other codecs follow the stream's tags; untagged they are limited range, BT.709 from 720 lines up.
+const YuvMatrix& yuv_matrix(const AVFrame& frame, bool bink) {
+  if (bink) return kFull601;
+  const bool full = frame.color_range == AVCOL_RANGE_JPEG || frame.format == AV_PIX_FMT_YUVJ420P;
+  const bool bt709 = frame.colorspace == AVCOL_SPC_BT709 || frame.colorspace == AVCOL_SPC_BT2020_NCL ||
+                     (frame.colorspace == AVCOL_SPC_UNSPECIFIED && frame.height >= 720);
+  if (bt709) return full ? kFull709 : kLimited709;
+  return full ? kFull601 : kLimited601;
+}
+
+// Sample: u8 planes, or u16 planes of `depth` bits (shifted down to 8). Chroma subsampling through the shifts (4:2:0 -> 1,1).
+template <typename Sample>
+void yuv_to_rgba(const AVFrame& frame, const YuvMatrix& matrix, int depth, int cw_shift, int ch_shift, const u8* alpha_plane,
+                 int alpha_stride, u8* out) {
+  const int down = depth - 8;
+  auto row = [&](int plane, int line) {
+    return reinterpret_cast<const Sample*>(frame.data[plane] + static_cast<ptrdiff_t>(line) * frame.linesize[plane]);
+  };
   for (int y = 0; y < frame.height; ++y) {
-    const u8* py = frame.data[0] + static_cast<ptrdiff_t>(y) * frame.linesize[0];
-    const u8* pu = frame.data[1] + static_cast<ptrdiff_t>(y >> ch_shift) * frame.linesize[1];
-    const u8* pv = frame.data[2] + static_cast<ptrdiff_t>(y >> ch_shift) * frame.linesize[2];
+    const Sample* py = row(0, y);
+    const Sample* pu = row(1, y >> ch_shift);
+    const Sample* pv = row(2, y >> ch_shift);
     const u8* pa = alpha_plane ? alpha_plane + static_cast<ptrdiff_t>(y) * alpha_stride : nullptr;
     u8* dst = out + static_cast<size_t>(y) * static_cast<size_t>(frame.width) * 4;
     for (int x = 0; x < frame.width; ++x, dst += 4) {
-      const int luma = py[x] << 16, cb = pu[x >> cw_shift] - 128, cr = pv[x >> cw_shift] - 128;
-      dst[0] = clamp8((luma + 91881 * cr + 32768) >> 16);
-      dst[1] = clamp8((luma - 22554 * cb - 46802 * cr + 32768) >> 16);
-      dst[2] = clamp8((luma + 116130 * cb + 32768) >> 16);
+      const int luma = ((py[x] >> down) - matrix.luma_offset) * matrix.luma_gain;
+      const int cb = (pu[x >> cw_shift] >> down) - 128, cr = (pv[x >> cw_shift] >> down) - 128;
+      dst[0] = clamp8((luma + matrix.cr_r * cr + 32768) >> 16);
+      dst[1] = clamp8((luma - matrix.cb_g * cb - matrix.cr_g * cr + 32768) >> 16);
+      dst[2] = clamp8((luma + matrix.cb_b * cb + 32768) >> 16);
       dst[3] = pa ? pa[x] : 255;
     }
   }
 }
 
-bool convert(const AVFrame& frame, std::vector<u8>& out) {
+bool convert(const AVFrame& frame, bool bink, std::vector<u8>& out) {
   out.resize(static_cast<size_t>(frame.width) * static_cast<size_t>(frame.height) * 4);
+  const YuvMatrix& matrix = yuv_matrix(frame, bink);
   switch (frame.format) {
-    case AV_PIX_FMT_YUV420P: yuv_to_rgba(frame, 1, 1, nullptr, 0, out.data()); return true;
-    case AV_PIX_FMT_YUVA420P: yuv_to_rgba(frame, 1, 1, frame.data[3], frame.linesize[3], out.data()); return true;
-    case AV_PIX_FMT_YUV422P: yuv_to_rgba(frame, 1, 0, nullptr, 0, out.data()); return true;
-    case AV_PIX_FMT_YUV444P: yuv_to_rgba(frame, 0, 0, nullptr, 0, out.data()); return true;
+    case AV_PIX_FMT_YUV420P: yuv_to_rgba<u8>(frame, matrix, 8, 1, 1, nullptr, 0, out.data()); return true;
+    case AV_PIX_FMT_YUV422P: yuv_to_rgba<u8>(frame, matrix, 8, 1, 0, nullptr, 0, out.data()); return true;
+    case AV_PIX_FMT_YUV444P: yuv_to_rgba<u8>(frame, matrix, 8, 0, 0, nullptr, 0, out.data()); return true;
+    case AV_PIX_FMT_YUVJ420P: yuv_to_rgba<u8>(frame, matrix, 8, 1, 1, nullptr, 0, out.data()); return true;
+    case AV_PIX_FMT_YUVA420P: yuv_to_rgba<u8>(frame, matrix, 8, 1, 1, frame.data[3], frame.linesize[3], out.data()); return true;
+    case AV_PIX_FMT_YUV420P10LE: yuv_to_rgba<u16>(frame, matrix, 10, 1, 1, nullptr, 0, out.data()); return true;
     default: log::error("movie: unsupported pixel format {}", frame.format); return false;
   }
 }
@@ -130,6 +159,7 @@ struct Decoder::Impl {
   AVFrame* frame = nullptr;
   int vstream = -1, astream = -1;
   u64 vcount = 0;
+  bool bink = false;
   bool demux_done = false, flushed = false;
   // Linear resampler state (source rate -> 48 kHz): rs_pos is the source position of the next output sample, relative to the next
   // chunk's sample 0; rs_prev the last source frame of the previous chunk (source index -1); src a scratch of interleaved stereo.
@@ -161,7 +191,7 @@ bool Decoder::open(Bytes file) {
   state.mem = {state.file.data(), state.file.size(), 0};
   constexpr int kBuf = 1 << 16;
   state.io = avio_alloc_context(static_cast<unsigned char*>(av_malloc(kBuf)), kBuf, 0, &state.mem, io_read, nullptr, io_seek);
-  return probe();
+  return probe("movie.bk2");
 }
 
 bool Decoder::open_file(const std::filesystem::path& path) {
@@ -174,16 +204,16 @@ bool Decoder::open_file(const std::filesystem::path& path) {
   // Large reads: the source is a multi-hundred-MB file.
   constexpr int kBuf = 1 << 20;
   state.io = avio_alloc_context(static_cast<unsigned char*>(av_malloc(kBuf)), kBuf, 0, state.fp, file_read, nullptr, file_seek);
-  return probe();
+  return probe(path.filename().string());
 }
 
-bool Decoder::probe() {
+bool Decoder::probe(const std::string& name) {
   Impl& state = *impl_;
   state.fmt = avformat_alloc_context();
   if (!state.io || !state.fmt) return false;
   state.fmt->pb = state.io;
   state.fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
-  int error = avformat_open_input(&state.fmt, "movie.bk2", nullptr, nullptr);
+  int error = avformat_open_input(&state.fmt, name.c_str(), nullptr, nullptr);
   if (error < 0) {
     log::error("movie: open failed: {}", av_err(error));
     return false;
@@ -210,11 +240,13 @@ bool Decoder::probe() {
     }
     ctx = avcodec_alloc_context3(codec);
     if (!ctx || avcodec_parameters_to_context(ctx, params) < 0) return false;
+    if (idx == state.vstream) ctx->thread_count = 0;
     const int result = avcodec_open2(ctx, codec, nullptr);
     if (result < 0) log::error("movie: decoder open failed: {}", av_err(result));
     return result >= 0;
   };
   if (!open_codec(state.vstream, state.vctx)) return false;
+  state.bink = state.vctx->codec_id == AV_CODEC_ID_BINKVIDEO || state.vctx->codec_id == AV_CODEC_ID_BINKVIDEO2;
   if (state.astream >= 0 && open_codec(state.astream, state.actx)) has_audio_ = true;
   width_ = static_cast<u32>(state.vctx->width);
   height_ = static_cast<u32>(state.vctx->height);
@@ -236,7 +268,7 @@ bool Decoder::step() {
       VideoFrame video_frame;
       video_frame.index = state.vcount++;
       video_frame.pts = static_cast<double>(video_frame.index) / fps_;
-      if (convert(*state.frame, video_frame.rgba)) video_.push_back(std::move(video_frame));
+      if (convert(*state.frame, state.bink, video_frame.rgba)) video_.push_back(std::move(video_frame));
       av_frame_unref(state.frame);
     }
   };
@@ -259,9 +291,9 @@ bool Decoder::step() {
         }
         // Output sample at source position p interpolates src[floor(p)] and src[floor(p)+1]; index -1 is rs_prev.
         const double ratio = static_cast<double>(frame.sample_rate ? frame.sample_rate : 44100) / kAudioRate;
-        // p must stay <= n-1 so src[i0+1] exists.
+        // p must stay below n-1 so src[i0+1] exists; p = n-1 is produced by the next chunk from rs_prev.
         const double limit = static_cast<double>(sample_count) - 1.0;
-        while (state.rs_pos <= limit) {
+        while (state.rs_pos < limit) {
           const long i0 = static_cast<long>(std::floor(state.rs_pos));
           const float frac = static_cast<float>(state.rs_pos - static_cast<double>(i0));
           for (size_t channel = 0; channel < 2; ++channel) {

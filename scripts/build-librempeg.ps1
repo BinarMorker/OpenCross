@@ -1,4 +1,4 @@
-# Builds librempeg (GPL-3 FFmpeg fork with the Bink 2 decoder) into third_party\librempeg\{include,lib} (gitignored).
+# Builds librempeg (GPL-3 FFmpeg fork with the Bink 2 decoder; also HEVC / H.264 for mod movies) into third_party\librempeg\{include,lib} (gitignored).
 # Needs Git for Windows (bash), GNU make (make / mingw32-make) and NASM; point -NasmDir / -MakeDir at them if not on PATH.
 # Takes a few minutes (a clone plus a ~6 MB-source static build, 4 libs).
 param(

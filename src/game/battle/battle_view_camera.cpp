@@ -73,13 +73,11 @@ bool BattleView::Cam::project(float x, float y, float z, float& cx, float& cy) c
   return true;
 }
 
-// The command-menu camera (the stage shot is not used): the eye orbits the acting PC at 2400 units, height (model height word + 0x100), the target is
-// the PC at 2/3 of its height, H = 0x200. The angle is `(((yaw_byte) + 0x30) & 0x3F) * 0x40 + 2 * tick` in 4096 = turn, where the unit byte is the
-// unit's yaw / 64 (0x10 for a PC facing yaw 1024); eye = (x - cos a * d, y, z + sin a * d). The attack-target and element menus use the stage `zen0`.
-bool BattleView::command_orbit(CamPose& pose) const {
-  if (ui_ != Ui::Top || active_pc_ < 0 || act_.phase != Act::Phase::None || !queue_.empty() || finish_ != Finish::None) return false;
+// The command-menu orbit: the eye circles the acting PC at 2400 units, height (model height word + 0x100), the target is the PC at 2/3 of its
+// height, H = 0x200. The angle is `(((yaw_byte) + 0x30) & 0x3F) * 0x40 + 2 * tick` in 4096 = turn, where the unit byte is the unit's yaw / 64
+// (0x10 for a PC facing yaw 1024); eye = (x - cos a * d, y, z + sin a * d).
+CamPose BattleView::orbit_pose() const {
   const Visual& visual = vis_[static_cast<size_t>(active_pc_)];
-  if (!visual.has_model) return false;
   // Unit yaw in PS1 units (place_units: face = (-sin yaw, -cos yaw), 4096 = turn), truncated to the unit's yaw byte (yaw / 64).
   float yaw_units = std::atan2(-visual.face_x, -visual.face_z) * (4096.0f / (2.0f * kPi));
   if (yaw_units < 0.0f) yaw_units += 4096.0f;
@@ -87,25 +85,18 @@ bool BattleView::command_orbit(CamPose& pose) const {
   const int angle_units = ((yaw_byte + 0x30) & 0x3F) * 0x40 + 2 * tick_count_;
   const float angle = static_cast<float>(angle_units) * (2.0f * kPi / 4096.0f) + kOrbitBias;
   const float dist = 2400.0f;
+  CamPose pose;
   pose.eye = {visual.x - std::cos(angle) * dist, visual.height + 256.0f, visual.z + std::sin(angle) * dist};
   pose.target = {visual.x, visual.height * (2.0f / 3.0f), visual.z};
   pose.h = 512.0f;
   pose.roll_deg = 0.0f;
-  return true;
+  return pose;
 }
 
-// Target selection in the DYNAMIC camera mode (toggled by Triangle): the camera does not orbit but re-aims whenever the cursor moves to another unit:
-// target = the target's anchor 3 (attach point 1), eye = the PC's anchor 2 (attach point 0; when the PC targets itself: 0x900 behind it);
-// if the eye is closer than 0xA00 to the target it is pushed out to 0x900 along the same direction; H = 0x200; the shot glides over 20 frames.
-// NORMAL mode keeps the stage `zen0` shot.
-bool BattleView::target_camera(CamPose& pose) {
-  const bool on = ui_ == Ui::Target && cam_dynamic_ && active_pc_ >= 0 && !targets_.empty() && act_.phase == Act::Phase::None && queue_.empty() &&
-                  finish_ == Finish::None;
-  if (!on) {
-    dyn_.valid = false;
-    return false;
-  }
-  const int tgt = targets_[static_cast<size_t>(std::clamp(target_cursor_, 0, static_cast<int>(targets_.size()) - 1))];
+// The DYNAMIC target shot: target = the target's anchor 3 (attach point 1), eye = the PC's anchor 2 (attach point 0; when the PC targets
+// itself: 0x900 in front of it, looking back); if the eye is closer than 0xA00 to the target it is pushed out to 0x900 along the same
+// direction; H = 0x200.
+CamPose BattleView::dynamic_pose(int target) const {
   auto point = [&](int unit, int attach) {
     const Visual& visual = vis_[static_cast<size_t>(unit)];
     // A lifted / steered unit carries its anchors with it.
@@ -120,41 +111,73 @@ bool BattleView::target_camera(CamPose& pose) {
     }
     return out;
   };
-  if (!dyn_.valid || dyn_.target != tgt) {
-    const Visual& active = vis_[static_cast<size_t>(active_pc_)];
-    std::array<float, 3> aim = point(tgt, 3), eye = point(active_pc_, 2);
-    if (tgt == active_pc_) {
-      eye[0] -= active.face_x * 2304.0f;
-      eye[2] -= active.face_z * 2304.0f;
-    }
-    const float dx = eye[0] - aim[0], dy = eye[1] - aim[1], dz = eye[2] - aim[2];
-    if (std::sqrt(dx * dx + dy * dy + dz * dz) < 2560.0f) {
-      const float length = std::max(1.0f, std::hypot(dx, dz));
-      eye[0] = aim[0] + dx / length * 2304.0f;
-      eye[2] = aim[2] + dz / length * 2304.0f;
-    }
-    dyn_.goal.eye = eye;
-    dyn_.goal.target = aim;
-    dyn_.goal.h = 512.0f;
-    dyn_.goal.roll_deg = 0;
-    if (!dyn_.valid) {
-      dyn_.cur = dyn_.goal;
-      dyn_.left = 0;
-    } else {
-      dyn_.left = 20;
-    }
-    dyn_.valid = true;
-    dyn_.target = tgt;
+  const Visual& active = vis_[static_cast<size_t>(active_pc_)];
+  std::array<float, 3> aim = point(target, 3), eye = point(active_pc_, 2);
+  if (target == active_pc_) {
+    eye[0] += active.face_x * 2304.0f;
+    eye[2] += active.face_z * 2304.0f;
   }
-  pose = dyn_.cur;
-  return true;
+  const float dx = eye[0] - aim[0], dy = eye[1] - aim[1], dz = eye[2] - aim[2];
+  if (std::sqrt(dx * dx + dy * dy + dz * dz) < 2560.0f) {
+    const float length = std::max(1.0f, std::hypot(dx, dz));
+    eye[0] = aim[0] + dx / length * 2304.0f;
+    eye[2] = aim[2] + dz / length * 2304.0f;
+  }
+  CamPose pose;
+  pose.eye = eye;
+  pose.target = aim;
+  pose.h = 512.0f;
+  pose.roll_deg = 0.0f;
+  return pose;
+}
+
+// The menu camera runs only while no camera task and no timeline is alive (a running shot keeps the picture). Top menu: the orbit pose is
+// written every tick (a cut when it starts or the PC changes). Target selection in NORMAL mode, and any all-targets selection: one glide
+// from the pose on screen to `zen0`'s first key at 0x40 / 256 per tick. DYNAMIC mode with a cursor: a glide at 0x14 / 256 per tick to the
+// DYNAMIC shot whenever the cursor unit changes. Other menus (element list, waiting) keep what is on screen.
+void BattleView::menu_camera() {
+  if (ui_ == Ui::Intro || ui_ == Ui::Result || camera_.task_running() || camera_.sequence_running()) {
+    orbit_pc_ = -1;
+    return;
+  }
+  const bool idle = active_pc_ >= 0 && act_.phase == Act::Phase::None && queue_.empty() && finish_ == Finish::None;
+  const bool top = idle && ui_ == Ui::Top && vis_[static_cast<size_t>(active_pc_)].has_model;
+  const bool target = idle && ui_ == Ui::Target && !targets_.empty();
+  const bool all_targets = target && (tgt_mode_ == Tgt::EnemyAll || tgt_mode_ == Tgt::AllyAll);
+  if (target && (!cam_dynamic_ || all_targets)) {
+    orbit_pc_ = -1;
+    if (!menu_glide_) {
+      CamPose goal;
+      if (camera_.key_pose("zen0", goal)) camera_.glide_to(goal, 0x40);
+      menu_glide_ = true;
+      dyn_target_ = -1;
+    }
+    return;
+  }
+  menu_glide_ = false;
+  if (top) {
+    camera_.write_pose(orbit_pose(), orbit_pc_ != active_pc_);
+    orbit_pc_ = active_pc_;
+    dyn_target_ = -1;
+    return;
+  }
+  orbit_pc_ = -1;
+  if (target) {
+    const int tgt = targets_[static_cast<size_t>(std::clamp(target_cursor_, 0, static_cast<int>(targets_.size()) - 1))];
+    if (tgt != dyn_target_) {
+      camera_.glide_to(dynamic_pose(tgt), 0x14);
+      dyn_target_ = tgt;
+    }
+  }
+}
+
+void BattleView::select_approach() {
+  if (!camera_.select(apr_pick(cam_dynamic_)) && cam_dynamic_) camera_.select(apr_pick(false));
 }
 
 void BattleView::apply_camera(float alpha) {
   camera_.clear_free_pose();
   CamPose pose = camera_.pose(alpha);
-  command_orbit(pose);
-  target_camera(pose);
   // Debug tab free camera: the pose is the free one (the shot / orbit above only seed it); H = 512 x FovDeg.
   if (FreeCam& free_camera = free_cam(); free_camera.on()) {
     if (free_camera.needs_init()) free_camera.init_from(pose.eye, pose.target);
@@ -175,11 +198,18 @@ void BattleView::apply_camera(float alpha) {
   // Camera up, negated to down.
   std::array<float, 3> down = cross(forward, right);
   for (float& component : down) component = -component;
+  // A positive roll turns the picture clockwise.
   const float cr = std::cos(pose.roll_deg * kPi / 180.0f), sr = std::sin(pose.roll_deg * kPi / 180.0f);
   for (size_t i = 0; i < 3; ++i) {
-    const float ri = right[i] * cr + down[i] * sr, di = -right[i] * sr + down[i] * cr;
+    const float ri = right[i] * cr - down[i] * sr, di = right[i] * sr + down[i] * cr;
     right[i] = ri;
     down[i] = di;
+  }
+  // An anchored shot keeps the ground under the eye at least 256 units below the view centre line: the view is raised along its own up axis.
+  if (camera_.ground_lift() && !free_cam().on()) {
+    const float ground_y = dot(down, {0.0f, -pose.eye[1], 0.0f});
+    if (ground_y < 256.0f)
+      for (size_t i = 0; i < 3; ++i) cam_.eye[i] -= down[i] * (256.0f - ground_y);
   }
   cam_.fwd = forward;
   cam_.right = right;
@@ -196,8 +226,8 @@ void BattleView::tick() {
   // Effect slow motion skips the game tick.
   if (fx_slow_skip()) return;
   ++tick_count_;
-  // The RDE hand-over's cross-fade (t 64..127) outlasts the `fade` cut at 91.
-  if (white_ticks_ >= 0 && ++white_ticks_ > (rde_hand_ ? std::max(kStartFadeEnd, encstrips::kBlackAt) : kStartFadeEnd)) {
+  // The RDE hand-over's clock includes the load before the party intro, so its `fade` cut comes that much later.
+  if (white_ticks_ >= 0 && ++white_ticks_ > (rde_hand_ ? encstrips::kLoadHold + kStartFadeEnd : kStartFadeEnd)) {
     white_ticks_ = -1;
     // The `fade` cut: the feed-back of the hand-over ends, the next frame is the clean scene.
     if (rde_hand_) {
@@ -209,14 +239,6 @@ void BattleView::tick() {
   }
   if (hand_tick_ >= 0 && ++hand_tick_ > kHandTicks) hand_tick_ = -1;
   tick_camera();
-  // DYNAMIC target camera glide (over 20 frames).
-  if (dyn_.left > 0) {
-    for (size_t k = 0; k < 3; ++k) {
-      dyn_.cur.eye[k] += (dyn_.goal.eye[k] - dyn_.cur.eye[k]) / static_cast<float>(dyn_.left);
-      dyn_.cur.target[k] += (dyn_.goal.target[k] - dyn_.cur.target[k]) / static_cast<float>(dyn_.left);
-    }
-    --dyn_.left;
-  }
   stage_scene_.tick();
   tick_units();
   showcase_tick();
@@ -236,6 +258,28 @@ void BattleView::tick() {
   std::erase_if(pops_, [](const Pop& pop) { return pop.age > static_cast<float>(pop.end); });
   pop_rects_.tick();
   if (finish_ != Finish::None) tick_finish();
+}
+
+// The stage intro (`bti*` / 'boss') and 'fade'. Without the RDE hand-over the battle starts where the load ends, so the effect tasks' load-time
+// ticks run here at once (the subtractive 'fade' flat, COLOR 4090, rate -34 / tick, LIFE 120, blend 3 = B - F, then shows only its last ticks;
+// the timelines' early 0x4C sounds are played); under the hand-over they run live.
+void BattleView::start_stage_intro(bool preroll) {
+  intro_started_ = true;
+  if (!intro_pending_.empty()) {
+    camera_.play_sequence(intro_pending_);
+    log::info("battle: intro timeline {}", intro_pending_);
+    intro_pending_.clear();
+  }
+  if (field_battle_ && bank_.sequence("fade")) camera_.play_sequence("fade");
+  if (!preroll) return;
+  for (int i = 0; i < kBtlinitLoadTicks; ++i) {
+    CamEvents cam_events;
+    camera_.tick(cam_events);
+    // The intro's 0x2B / 0x2C layer tasks step with the timelines.
+    fx_screen_tick();
+    stage_scene_.tick();
+    for (const std::string& tag : cam_events.sounds) play_tag_sound(tag, 127);
+  }
 }
 
 // A random `pli*`: the running shots / timelines (and the warp bracket) go, the party intro starts.
@@ -269,8 +313,27 @@ void BattleView::tick_camera() {
   cam_ui_ = ui_;
   if (ui_ == Ui::Intro) {
     ++intro_ticks_;
-    // Scripted battle: `pli*` after the `bti*` intro.
-    if (!pli_pending_.empty() && !camera_.sequence_running() && !camera_.shot_running()) {
+    const bool rde_load = rde_hand_ && white_ticks_ >= 0;
+    if (!intro_started_ && (!rde_load || white_ticks_ >= encstrips::kIntroStart)) start_stage_intro(!rde_load);
+    // The load ends (under the RDE hand-over: kLoadHold ticks after the take-over): the first PC is placed; a field battle's `pli*` starts now,
+    // a held intro's after the `bti*` timeline and its shot.
+    if (intro_started_ && pli_after_load_ && (!rde_load || white_ticks_ >= encstrips::kLoadHold)) {
+      pli_after_load_ = false;
+      int first = -1;
+      for (int i = 0; i < battle::kPcSlots; ++i)
+        if (unplaced_[static_cast<size_t>(i)] && (first < 0 || battle_->unit(i).src_id < battle_->unit(first).src_id)) first = i;
+      if (first >= 0) {
+        unplaced_[static_cast<size_t>(first)] = false;
+        vis_[static_cast<size_t>(first)].pose.play(1, 0);
+        start_spawn(first);
+      }
+      if (field_battle_ && !camera_.intro_hold()) {
+        const std::string pli = pli_pending_;
+        pli_pending_.clear();
+        start_party_intro(pli);
+      }
+    }
+    if (!pli_pending_.empty() && !pli_after_load_ && !camera_.sequence_running() && !camera_.task_running()) {
       const std::string pli = pli_pending_;
       pli_pending_.clear();
       start_party_intro(pli);
@@ -278,10 +341,13 @@ void BattleView::tick_camera() {
     // The command phase starts once no camera shot task and no timeline but 'loop' is alive; then every stage emitter named `bti0` is
     // stopped and its live objects freed - bg_00's sea (nea5 / nea6 / the nea7 sheen), birds and fish exist only during the
     // intro (the `near` / `far` / `roof` / `ring` layers stay). The outro starts them again before 'bto0' (battle_view_action.cpp).
-    // The load-time zen0 default is not an intro camera task.
-    const bool intro_shot = camera_.shot_running() && camera_.shot_name() != "zen0";
-    if ((!camera_.sequence_running() && !intro_shot && intro_ticks_ > 8) || intro_ticks_ > 1500 || debug_ui_ != 0 || dbg_.cast_element > 0 || dbg_.weapon >= 0) {
+    if ((intro_started_ && pli_pending_.empty() && !camera_.sequence_running() && !camera_.task_running() && intro_ticks_ > 8) || intro_ticks_ > 1500 || debug_ui_ != 0 || dbg_.cast_element > 0 ||
+        dbg_.weapon >= 0) {
       // A cut intro (dev casts / debug UI / the cap) never reached the party intro: place them now.
+      pli_pending_.clear();
+      pli_after_load_ = false;
+      intro_started_ = true;
+      intro_pending_.clear();
       for (int i = 0; i < battle::kPcSlots; ++i)
         if (unplaced_[static_cast<size_t>(i)]) {
           unplaced_[static_cast<size_t>(i)] = false;
@@ -291,12 +357,14 @@ void BattleView::tick_camera() {
       // At the end of the intro a cut `pli*` (dev casts / debug UI) must not leave its 3E..40 warp on.
       fx_warp_.on = false;
       fx_stage_layer("bti0", false, false);
-      camera_.select("zen0");
+      // The camera holds the party intro's last pose until the menu camera takes over.
+      camera_.kill_shot();
       camera_.reset_fade();
       // update() moves to Top once nothing is queued; the held script stream (script_pump) starts now.
       ui_ = Ui::Wait;
     }
   }
+  menu_camera();
 }
 
 }  // namespace oc::game

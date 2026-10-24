@@ -426,7 +426,8 @@ void BattleView::fx_warp_end(const render::Frame& frame, const render::Letterbox
   // still takes it to black.
   // The strip pass of the hand-over.
   if (hand_strips) {
-    const u8 kb = static_cast<u8>(128.0f * kHandKeep + 0.5f);
+    // Once the battle shows through (the cross-fade), the smear holds its level instead of decaying further.
+    const u8 kb = static_cast<u8>(128.0f * (ht >= encstrips::kDarkFrom ? 1.0f : kHandKeep) + 0.5f);
     particles_.quad(src, 0, qx, qy, qu, qv, kb, kb, kb, 0.0f);
     particles_.end();
     sprites_->begin(af, fw, fh, true);
@@ -619,7 +620,7 @@ float BattleView::fx_slow_alpha(float alpha) const {
 void BattleView::fx_tick() {
   // OC_FXDBG: log what can draw a second copy, and the positions of the acting / hit units.
   if (static const bool dbg = std::getenv("OC_FXDBG") != nullptr; dbg && (fx_ || fx_warp_.on))
-    log::debug("fxdbg: tick {} pack {} warp {} seq {} shot {}", tick_count_, fx_ != nullptr, fx_warp_.on, camera_.sequence_running(), camera_.shot_running());
+    log::debug("fxdbg: tick {} pack {} warp {} seq {} shot {}", tick_count_, fx_ != nullptr, fx_warp_.on, camera_.sequence_running(), camera_.task_running());
   if (static const bool dbg2 = std::getenv("OC_FXDBG") != nullptr; dbg2 && act_.actor >= 0 && tick_count_ % 5 == 0) {
     std::string text;
     for (int unit : {act_.actor, act_.targets.empty() ? -1 : act_.targets.front()})
@@ -629,7 +630,7 @@ void BattleView::fx_tick() {
     log::debug("fxdbg: tick {} units{}", tick_count_, text);
   }
   // In the command flow: no shot and no timeline running (and no pack) ends the warp.
-  if (!fx_ && fx_warp_.on && !camera_.sequence_running() && !camera_.shot_running()) fx_warp_.on = false;
+  if (!fx_ && fx_warp_.on && !camera_.sequence_running() && !camera_.task_running()) fx_warp_.on = false;
   if (fx_lens_wait_ > 0 && --fx_lens_wait_ == 0)
     if (effects::EmitterSystem* se = stage_scene_.emitters()) se->lens_on();
   // The idle camera handler (per frame while no shot / timeline runs), in its command-orbit branch, switches the depth cue

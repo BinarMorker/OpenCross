@@ -239,12 +239,13 @@ void BattleView::begin_engage(int pc, int target) {
   act_.targets = {target};
   engaged_target_ = target;
   engage_arrive_ = true;
+  engage_interrupted_ = false;
   Visual& visual = vis_[static_cast<size_t>(pc)];
   audio_.activate(visual.sound_key);
   camera_.stop_sequences();
   camera_.set_bank(visual.scripts ? &visual.scripts->cam : &bank_);
   face_toward(pc, target);
-  camera_.select(apr_pick());
+  select_approach();
   act_.phase = Act::Phase::Approach;
   if (!(visual.scripts && visual.scripts->has_s5 && start_script(pc, &visual.scripts->s5, 2, 0, kApproach))) {
     visual.script_done = true;

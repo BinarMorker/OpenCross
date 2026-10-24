@@ -57,12 +57,13 @@ bool parse_camera(const import::DrpEntry& entry, assets::StageCamera& cam) {
   return true;
 }
 
-// A type 0x10 timeline: commands from +0x14, each a u32 word (op = bits 0-8, length in bytes = bits 9-14, delay = high half) followed by its
+// A type 0x10 timeline: u32 header flags, commands from +0x14, each a u32 word (op = bits 0-8, length in bytes = bits 9-14, delay = high half) followed by its
 // operands; a 4-char tag at +0xC when the command is 16 bytes or longer; the fade ops 0x2B / 0x2C carry frames, mode and colour. 0x21 ends it.
 bool parse_seq(const import::DrpEntry& entry, CamSeq& seq) {
   const ByteSpan data = entry.data;
   seq = {};
   seq.name = entry.name;
+  seq.flags = rd32(data, 0);
   size_t offset = 0x14;
   while (offset + 4 <= data.size()) {
     const u32 word = rd32(data, offset);
@@ -91,6 +92,13 @@ bool parse_seq(const import::DrpEntry& entry, CamSeq& seq) {
     if (op == 0x21) break;
   }
   return !seq.cmds.empty();
+}
+
+// The battle loop runs one game frame per kFrameTicks 60 Hz ticks; a per-frame fraction of the distance left, as the same motion per tick.
+constexpr float kFrameTicks = 2.0f;
+float per_tick(float per_frame) {
+  if (per_frame >= 1.0f) return 1.0f;
+  return 1.0f - std::pow(1.0f - std::max(0.0f, per_frame), 1.0f / kFrameTicks);
 }
 
 }  // namespace
@@ -253,9 +261,10 @@ CamPose BattleCamera::eval(const assets::StageCamera& shot, float eased) {
   return pose;
 }
 
-// Selecting a shot. A shot whose flags bits 1-3 are 2 is dropped while a multi-key shot's task still runs; single-key shots never create a
-// task. Mode 1 queues the new shot behind the whole list without touching the pose registers. Any other select pushes the running head
-// back (it ends or resumes on its own progress) and takes the head; the first select and a cut (w8 high half >= 0x100) load the pose registers at once.
+// Selecting a shot. A shot whose flags bits 1-3 are 2 is dropped while any camera task is alive. Every other select ends a glide, records the
+// name and, unless its mode is 1, cuts the pose to its first key placed in its frame. A shot of 2+ keys then becomes a task: mode 1 queues it
+// at the tail of the list (the head when the list is empty, still without touching the pose), any other mode pushes the running head back (it
+// ends or resumes on its own progress) and takes the head. A single-key shot never creates a task and leaves the list as it is.
 bool BattleCamera::select(const std::string& name) {
   if (!bank_) {
     battle_audit_note("camera select '" + name + "': no camera bank");
@@ -266,39 +275,18 @@ bool BattleCamera::select(const std::string& name) {
     battle_audit_note("camera select '" + name + "': shot missing from the bank");
     return false;
   }
-  const bool head_runs = shot_ && shot_->keys.size() > 1 && progress_ < 4096.0f;
   const unsigned select_mode = (shot->flags >> 1) & 7u;
-  if (select_mode == 2u && head_runs) {
-    log::debug("camera: select '{}' dropped (mode-2 shot while '{}' runs)", name, shot_->name);
+  if (select_mode == 2u && task_running()) {
+    log::debug("camera: select '{}' dropped (mode-2 shot while '{}' runs)", name, shot_ ? shot_->name : bg_.front().shot->name);
     return false;
   }
-  if (select_mode == 1u && head_runs && shot->keys.size() > 1) {
-    Task task;
-    task.shot = shot;
-    make_frame(*shot, task.frozen, task.frozen_scale);
-    bg_.push_back(task);
-    log::debug("camera: select '{}' queued behind '{}' (mode 1)", name, shot_->name);
-    return true;
-  }
-  if (head_runs && shot->keys.size() > 1) {
-    Task task;
-    task.shot = shot_;
-    task.progress = progress_;
-    task.frozen = frozen_;
-    task.frozen_scale = frozen_scale_;
-    bg_.insert(bg_.begin(), task);
-  } else {
-    bg_.clear();
-  }
-  shot_ = shot;
-  progress_ = 0;
-  frozen_ = {};
-  frozen_scale_ = 1.0f;
-  make_frame(*shot, frozen_, frozen_scale_);
-  const bool first = !have_;
-  have_ = true;
+  glide_rate_ = 0;
+  last_name_ = name;
+  CamFrame frame;
+  float scale = 1.0f;
+  make_frame(*shot, frame, scale);
   CamPose goal;
-  goal_pose(goal);
+  const bool placed = place(*shot, 0.0f, frame, scale, goal);
   if (std::getenv("OC_CAM_KEYS"))
     for (const auto& key : shot->keys)
       log::debug("camera:   key eye {:.0f} {:.0f} {:.0f} tgt {:.0f} {:.0f} {:.0f} H {:.0f} roll {:.1f}", key.eye[0], key.eye[1], key.eye[2], key.target[0], key.target[1], key.target[2], key.projection, key.roll_deg);
@@ -306,13 +294,59 @@ bool BattleCamera::select(const std::string& name) {
     const auto& first_key = shot->keys.front();
     log::debug("camera: select '{}' ref {}/{}/{}/{} flags {:x} dur {} mode {} w8 {:x} keys {} key0 eye {:.0f} {:.0f} {:.0f} tgt {:.0f} {:.0f} {:.0f} H {:.0f}; frame {} ({:.0f} {:.0f} {:.0f} yaw {:.2f} pitch {:.2f} x{:.2f} m{:.3f}) -> eye {:.0f} {:.0f} {:.0f} tgt {:.0f} {:.0f} {:.0f}",
                name, shot->ref[0], shot->ref[1], shot->ref[2], shot->ref[3], shot->flags, shot->duration, shot->mode, shot->w8, shot->keys.size(), first_key.eye[0], first_key.eye[1], first_key.eye[2], first_key.target[0],
-               first_key.target[1], first_key.target[2], first_key.projection, frozen_.valid ? 1 : 0, frozen_.x, frozen_.y, frozen_.z, frozen_.yaw, frozen_.pitch, frozen_scale_, frozen_.mscale, goal.eye[0], goal.eye[1],
+               first_key.target[1], first_key.target[2], first_key.projection, frame.valid ? 1 : 0, frame.x, frame.y, frame.z, frame.yaw, frame.pitch, scale, frame.mscale, goal.eye[0], goal.eye[1],
                goal.eye[2], goal.target[0], goal.target[1], goal.target[2]);
   }
-  if (first || ((shot->w8 >> 16) & 0xFFFF) >= 0x100) {
+  if (select_mode != 1u && (placed || !shot->ref[0])) {
     prev_ = cur_ = goal;
+    lift_ = false;
   }
+  if (shot->keys.size() < 2) return true;
+  const bool list_alive = task_running();
+  if (select_mode == 1u && list_alive) {
+    Task task;
+    task.shot = shot;
+    task.frozen = frame;
+    task.frozen_scale = scale;
+    bg_.push_back(task);
+    log::debug("camera: select '{}' queued behind '{}' (mode 1)", name, shot_ ? shot_->name : bg_.front().shot->name);
+    return true;
+  }
+  if (shot_ && progress_ < 4096.0f) {
+    Task task;
+    task.shot = shot_;
+    task.progress = progress_;
+    task.frozen = frozen_;
+    task.frozen_scale = frozen_scale_;
+    bg_.insert(bg_.begin(), task);
+  }
+  shot_ = shot;
+  progress_ = 0;
+  frozen_ = frame;
+  frozen_scale_ = scale;
   return true;
+}
+
+bool BattleCamera::key_pose(const std::string& name, CamPose& out) const {
+  const assets::StageCamera* shot = bank_ ? bank_->camera(name) : nullptr;
+  if (!shot || shot->keys.empty()) return false;
+  CamFrame frame;
+  float scale = 1.0f;
+  make_frame(*shot, frame, scale);
+  return place(*shot, 0.0f, frame, scale, out) || !shot->ref[0];
+}
+
+void BattleCamera::write_pose(const CamPose& pose, bool cut) {
+  glide_rate_ = 0;
+  lift_ = false;
+  cur_ = pose;
+  if (cut) prev_ = pose;
+}
+
+void BattleCamera::glide_to(const CamPose& goal, int rate) {
+  glide_goal_ = goal;
+  glide_rate_ = rate;
+  cur_.roll_deg = 0.0f;
 }
 
 bool BattleCamera::play_sequence(const std::string& name) {
@@ -337,7 +371,8 @@ void BattleCamera::start_fade(float to, int frames, std::array<u8, 3> rgb) {
 
 // The frame of a shot's ref bytes (type, attach, type, attach). One anchor: that unit's frame. Two anchors: the origin is their midpoint, local
 // +X points from the first toward the second (yaw) and is pitched toward it (dy in the PS1 sense, y down), and the x / z axes are scaled by
-// distance / (2048 cos pitch); the model scale of flag 0x20 is defined for single-anchor frames only.
+// distance / (2048 cos pitch); a second anchor without a frame counts as the origin. The model scale of flag 0x20 is defined for single-anchor
+// frames only.
 bool BattleCamera::make_frame(const assets::StageCamera& shot, CamFrame& frame, float& scale) const {
   scale = 1.0f;
   frame = {};
@@ -350,18 +385,21 @@ bool BattleCamera::make_frame(const assets::StageCamera& shot, CamFrame& frame, 
   }
   frame = frame0;
   if (type1) {
-    const CamFrame frame1 = anchor_(type1, attach1);
-    if (frame1.valid) {
-      frame.x = (frame0.x + frame1.x) * 0.5f;
-      frame.y = (frame0.y + frame1.y) * 0.5f;
-      frame.z = (frame0.z + frame1.z) * 0.5f;
-      const float dx = frame1.x - frame0.x, dz = frame1.z - frame0.z, dy = -(frame1.y - frame0.y);
-      const float horizontal = std::sqrt(dx * dx + dz * dz);
-      frame.yaw = -std::atan2(dz, dx);
-      frame.pitch = std::atan2(dy, horizontal);
-      frame.mscale = 1.0f;
-      scale = std::max(0.25f, horizontal / 2048.0f / std::max(0.05f, std::cos(frame.pitch)));
+    CamFrame frame1 = anchor_(type1, attach1);
+    // A missing second anchor is the world origin.
+    if (!frame1.valid) {
+      battle_audit_note("camera second anchor type " + std::to_string(type1) + " attach " + std::to_string(attach1) + " is invalid: the origin stands in");
+      frame1 = {};
     }
+    frame.x = (frame0.x + frame1.x) * 0.5f;
+    frame.y = (frame0.y + frame1.y) * 0.5f;
+    frame.z = (frame0.z + frame1.z) * 0.5f;
+    const float dx = frame1.x - frame0.x, dz = frame1.z - frame0.z, dy = -(frame1.y - frame0.y);
+    const float horizontal = std::sqrt(dx * dx + dz * dz);
+    frame.yaw = -std::atan2(dz, dx);
+    frame.pitch = std::atan2(dy, horizontal);
+    frame.mscale = 1.0f;
+    scale = horizontal / 2048.0f / std::max(0.05f, std::cos(frame.pitch));
   }
   if (!(shot.flags & 0x20u)) frame.mscale = 1.0f;
   return true;
@@ -370,15 +408,16 @@ bool BattleCamera::make_frame(const assets::StageCamera& shot, CamFrame& frame, 
 // The shot's pose at its current progress, placed into its frame: the local eye / target are scaled (x, z by the two-anchor distance scale,
 // all three by the model scale), rotated by Ry * Rz of the frame in the PS1 sense (y down) and translated to the frame origin in our y-up world.
 void BattleCamera::goal_pose(CamPose& out) const {
-  if (!shot_) return;
-  const float eased = ease(shot_->mode, std::min(progress_, 4096.0f) / 4096.0f);
-  out = eval(*shot_, eased);
-  CamFrame frame = frozen_;
-  float scale = frozen_scale_;
-  if (shot_->flags & 1u) {
-    if (!make_frame(*shot_, frame, scale)) return;
+  if (shot_) place(*shot_, progress_, frozen_, frozen_scale_, out);
+}
+
+bool BattleCamera::place(const assets::StageCamera& shot, float progress, CamFrame frame, float scale, CamPose& out) const {
+  const float eased = ease(shot.mode, std::min(progress, 4096.0f) / 4096.0f);
+  out = eval(shot, eased);
+  if (shot.flags & 1u) {
+    if (!make_frame(shot, frame, scale)) return false;
   } else if (!frame.valid) {
-    return;
+    return false;
   }
   const float cos_yaw = std::cos(frame.yaw), sin_yaw = std::sin(frame.yaw);
   const float cos_pitch = std::cos(frame.pitch), sin_pitch = std::sin(frame.pitch);
@@ -389,6 +428,7 @@ void BattleCamera::goal_pose(CamPose& out) const {
   };
   to_world(out.eye);
   to_world(out.target);
+  return true;
 }
 
 // One timeline command other than the shot picks (0x23) and the end (0x21), which run() handles itself.
@@ -415,6 +455,13 @@ void BattleCamera::exec(const CamCmd& cmd, CamEvents& events) {
       fade_left_ = events.fade_frames;
       break;
     }
+    case 0x2F:  // start another timeline of the bank; it steps from the next tick on
+      if (const CamSeq* child = bank_ && !cmd.name.empty() ? bank_->sequence(cmd.name) : nullptr) {
+        Runner runner;
+        runner.seq = child;
+        spawned_.push_back(runner);
+      }
+      break;
     case 0x3E: case 0x3F: case 0x40:  // the screen copy warp ("frame afterimage"), drawn by the view
       if (warp_hook_) warp_hook_(cmd);
       break;
@@ -424,17 +471,31 @@ void BattleCamera::exec(const CamCmd& cmd, CamEvents& events) {
     case 0x73:  // intro hold: the party intro waits for this timeline's shot
       intro_hold_ = true;
       break;
-    default: break;  // loop markers (0x4D / 0x4E) and anything else
+    default: break;
   }
+}
+
+bool BattleCamera::next_target(Runner& runner) const {
+  if (!(runner.seq->flags & 1u) || !target_hook_ || !target_hook_(runner.target + 1)) return false;
+  ++runner.target;
+  return true;
 }
 
 // One tick of a timeline: the wait counter takes each command's delay before the next one executes; consecutive 0x23 commands (and the
 // non-0x23 commands between them) up to the first non-zero delay form one group, of which one pick is selected at random.
+// A jump back for the next target (0x4D, or the step after the end) and a stall end the tick with the wait reset, the step's overshoot dropped:
+// a jump runs its loop body on the next tick, a stall (0x50) or a yield (0x67) waits exactly one tick whatever its delay.
 void BattleCamera::run(Runner& runner, CamEvents& events) {
   --runner.wait;
   if (runner.wait > 0) return;
   const int overshoot = -runner.wait;
   runner.wait = 0;
+  if (runner.ended) {
+    runner.ended = false;
+    if (next_target(runner)) runner.pos = runner.loop_pos;
+    else runner.seq = nullptr;
+    return;
+  }
   while (runner.seq && runner.wait == 0) {
     if (runner.pos >= runner.seq->cmds.size()) {
       runner.seq = nullptr;
@@ -443,8 +504,33 @@ void BattleCamera::run(Runner& runner, CamEvents& events) {
     const CamCmd& cmd = runner.seq->cmds[runner.pos];
     runner.wait += cmd.delay;
     if (cmd.op == 0x21) {
+      // A per-target timeline is restarted or dropped by the next step.
+      if (runner.seq->flags & 1u) {
+        runner.ended = true;
+        return;
+      }
       runner.seq = nullptr;
       break;
+    }
+    if (cmd.op == 0x4E) {
+      runner.loop_pos = runner.pos + 1;
+      runner.target = 0;
+      ++runner.pos;
+      continue;
+    }
+    if (cmd.op == 0x4D && next_target(runner)) {
+      runner.pos = runner.loop_pos;
+      runner.wait = 0;
+      return;
+    }
+    if (cmd.op == 0x50 && actor_busy_hook_ && actor_busy_hook_()) {
+      runner.wait = 1;
+      return;
+    }
+    if (cmd.op == 0x67) {
+      ++runner.pos;
+      runner.wait = 1;
+      return;
     }
     if (cmd.op == 0x23) {
       std::vector<const CamCmd*> picks;
@@ -473,8 +559,8 @@ void BattleCamera::run(Runner& runner, CamEvents& events) {
   runner.wait -= overshoot;
 }
 
-// One 60 Hz tick: the screen fade, every timeline, then the shot list. Every task advances 4096 / duration; the tasks behind the head are
-// unlinked silently once past the end, the head chases its goal pose by smoothing / 256 (w8 high half) per tick, then an anchored shot without
+// One 60 Hz tick: the screen fade, every timeline, a glide, then the shot list. Every task advances its progress step; the tasks behind the head are
+// unlinked silently once past the end, the head's eye / target chase its goal by smoothing / 256 (w8 high half) per game frame, then an anchored shot without
 // flag bit 4 clamps the eye to the ground and flag bit 6 pulls the eye in to 6144 from the world origin. When the head ends the next task of
 // the list resumes at its own progress; an ended head with no task behind it holds the pose registers.
 void BattleCamera::tick(CamEvents& events) {
@@ -486,31 +572,45 @@ void BattleCamera::tick(CamEvents& events) {
 
   for (size_t i = 0; i < runners_.size(); ++i) run(runners_[i], events);
   std::erase_if(runners_, [](const Runner& runner) { return runner.seq == nullptr; });
+  runners_.insert(runners_.end(), spawned_.begin(), spawned_.end());
+  spawned_.clear();
+
+  prev_ = cur_;
+  // The glide steps once per game frame (rate / 256 of the distance left); it ends when such a step times the rate is under 256 for both
+  // eye and target. Spread over the 60 Hz ticks of a frame.
+  if (glide_rate_ > 0) {
+    const float frame_rate = static_cast<float>(glide_rate_) / 256.0f, rate = per_tick(frame_rate);
+    float eye_left = 0, target_left = 0;
+    for (size_t i = 0; i < 3; ++i) {
+      cur_.eye[i] += (glide_goal_.eye[i] - cur_.eye[i]) * rate;
+      cur_.target[i] += (glide_goal_.target[i] - cur_.target[i]) * rate;
+      eye_left += (glide_goal_.eye[i] - cur_.eye[i]) * (glide_goal_.eye[i] - cur_.eye[i]);
+      target_left += (glide_goal_.target[i] - cur_.target[i]) * (glide_goal_.target[i] - cur_.target[i]);
+    }
+    cur_.h += (glide_goal_.h - cur_.h) * rate;
+    lift_ = false;
+    const float rate_units = static_cast<float>(glide_rate_);
+    if (std::sqrt(eye_left) * frame_rate * rate_units < 256.0f && std::sqrt(target_left) * frame_rate * rate_units < 256.0f) glide_rate_ = 0;
+  }
 
   if (shot_) {
-    for (Task& task : bg_) task.progress = std::min(4096.0f, task.progress + 4096.0f / static_cast<float>(std::max<u16>(1, task.shot->duration)));
+    for (Task& task : bg_) task.progress = std::min(4096.0f, task.progress + static_cast<float>(progress_step(*task.shot)));
     std::erase_if(bg_, [](const Task& task) { return task.progress >= 4096.0f; });
     const bool was_running = progress_ < 4096.0f;
-    if (progress_ < 4096.0f) progress_ = std::min(4096.0f, progress_ + 4096.0f / static_cast<float>(std::max<u16>(1, shot_->duration)));
-    if (!was_running) {
-      prev_ = cur_;
-      return;
-    }
+    if (!was_running) return;
+    progress_ = std::min(4096.0f, progress_ + static_cast<float>(progress_step(*shot_)));
     CamPose goal;
     goal_pose(goal);
-    prev_ = cur_;
-    const float smoothing = std::min(1.0f, static_cast<float>((shot_->w8 >> 16) & 0xFFFF) / 256.0f);
-    if (smoothing >= 1.0f) {
-      cur_ = goal;
-    } else {
-      for (size_t i = 0; i < 3; ++i) {
-        cur_.eye[i] += (goal.eye[i] - cur_.eye[i]) * smoothing;
-        cur_.target[i] += (goal.target[i] - cur_.target[i]) * smoothing;
-      }
-      cur_.h += (goal.h - cur_.h) * smoothing;
-      cur_.roll_deg += (goal.roll_deg - cur_.roll_deg) * smoothing;
+    // The chase runs once per game frame: smoothing / 256 per frame, spread over its 60 Hz ticks (0x100 = exact).
+    const float smoothing = per_tick(std::min(1.0f, static_cast<float>((shot_->w8 >> 16) & 0xFFFF) / 256.0f));
+    for (size_t i = 0; i < 3; ++i) {
+      cur_.eye[i] += (goal.eye[i] - cur_.eye[i]) * smoothing;
+      cur_.target[i] += (goal.target[i] - cur_.target[i]) * smoothing;
     }
-    if (!(shot_->flags & 0x10u) && shot_->ref[0] != 0 && cur_.eye[1] < 0) cur_.eye[1] = 0;
+    cur_.h = goal.h;
+    cur_.roll_deg = goal.roll_deg;
+    lift_ = !(shot_->flags & 0x10u) && shot_->ref[0] != 0;
+    if (lift_ && cur_.eye[1] < 0) cur_.eye[1] = 0;
     if (shot_->flags & 0x40u) {
       const float radius = std::sqrt(cur_.eye[0] * cur_.eye[0] + cur_.eye[2] * cur_.eye[2]);
       if (radius > 6144.0f) {

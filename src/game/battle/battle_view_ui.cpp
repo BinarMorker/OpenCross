@@ -625,11 +625,10 @@ void BattleView::enter_target(Tgt mode) {
     }
   }
   ui_ = Ui::Target;
-  // The attack-target / element-target menus show the stage `zen0` in NORMAL mode, and the command setup rewrote the
-  // acting list; a cast leaves the pack's last shot (framed on the caster) and its 7A/86 unit behind, so the previous PC's frame must not survive.
+  // The command setup rewrote the acting list the menu camera's `zen0` / DYNAMIC shots are framed on; a cast leaves the pack's last shot (framed
+  // on the caster) and its 7A/86 unit behind, so the previous PC's frame must not survive.
   script_actor_ = -1;
   anchor_actors_ = {active_pc_};
-  if (!cam_dynamic_ && camera_.shot_name() != "zen0") camera_.select("zen0");
 }
 
 // ------------------------------------------------------------------------------------------------------------- input
@@ -738,11 +737,7 @@ void BattleView::handle_input(const platform::Input& in) {
     // Back in the list or a menu: the float restarts at the next confirm.
     else hdr_on_ = false;
   }
-  if (ui_ == Ui::Intro) {
-    // Skip the intro shots.
-    if (ok || cancel) intro_ticks_ = 100000;
-    return;
-  }
+  if (ui_ == Ui::Intro) return;
   // A battle-script message window takes the buttons.
   if (smsg_input(ok || cancel || auto_confirm_)) return;
   if (ui_ == Ui::Result) {
@@ -1073,11 +1068,12 @@ void BattleView::handle_input(const platform::Input& in) {
         // The target cursor tick.
         if (target_cursor_ != before) audio_.play_menu(1);
       }
-      // Triangle in the attack / element target selection flips the camera mode (NORMAL <-> DYNAMIC) and plays SFX 0x16.
+      // Triangle in the attack / element target selection flips the camera mode (NORMAL <-> DYNAMIC), ends the running camera shot and plays
+      // SFX 0x16; the menu camera glides to the new mode's shot.
       if (triangle) {
         cam_dynamic_ = !cam_dynamic_;
+        camera_.kill_shot();
         audio_.play_menu(0x16);
-        if (!cam_dynamic_) camera_.select("zen0");
       }
       if (cancel) {
         audio_.play_menu(6);

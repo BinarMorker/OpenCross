@@ -1,6 +1,7 @@
 // BattleView rendering: HUD op replay and the scene / UI draw passes.
 #include "game/battle/battle_view.h"
 #include "game/free_cam.h"
+#include "game/encounter_strips.h"
 #include "game/battle/battle_view_util.h"
 #include "game/battle/battle_view_op.h"
 
@@ -328,8 +329,8 @@ void BattleView::draw_scene_3d(const render::Frame& frame, const render::Letterb
     if (ghosted(i) && !entry_shown_[static_cast<size_t>(i)]) continue;
     // DYNAMIC target camera: the eye is the acting PC's own attach point 0, i.e. inside its model. The GTE/GPU drop the polygons that
     // close to the eye (SZ ~ 0, packets wider than 1023 px), so none of its hair / hat is seen; the model is skipped while the eye is in it.
-    if (i == active_pc_ && ui_ == Ui::Target && cam_dynamic_ && dyn_.valid &&
-        std::hypot(dyn_.cur.eye[0] - visual.x, dyn_.cur.eye[2] - visual.z) < 400.0f && dyn_.cur.eye[1] < visual.y + visual.height + 300.0f)
+    if (const CamPose& eye_pose = camera_.current(); i == active_pc_ && ui_ == Ui::Target && cam_dynamic_ && dyn_target_ >= 0 &&
+        std::hypot(eye_pose.eye[0] - visual.x, eye_pose.eye[2] - visual.z) < 400.0f && eye_pose.eye[1] < visual.y + visual.height + 300.0f)
       continue;
     const float x = lerp(visual.px, visual.x, alpha_), z = lerp(visual.pz, visual.z, alpha_), yl = lerp(visual.py, visual.y, alpha_);
     const float fx = lerp(visual.pface_x, visual.face_x, alpha_), fz = lerp(visual.pface_z, visual.face_z, alpha_);
@@ -442,14 +443,17 @@ void BattleView::draw_scene_3d(const render::Frame& frame, const render::Letterb
   anm_draw(frame, lb);
   frame.set_scissor(frame.full());
   // The miya `fade` quad lives in the effect OT, UNDER the 3E strip pass (which runs last in the frame), so it is part of the picture the
-  // strips feed back: drawn here, inside the warp target when the bracket is on. No subtractive dip under the RDE hand-over (a seamless
-  // blend, never black). The emitter spawns one tick after the battle starts: the first battle frame is unfaded.
-  if (white_ticks_ >= 2 && !rde_hand_ && white_.set) {
+  // strips feed back: drawn here, inside the warp target when the bracket is on. SUBTRACTIVE, colour 4090 - 34 t of 4096, t = 27 + 0.65 * battle
+  // tick (the emitter spawns one tick after the battle starts: the first battle frame is unfaded). Under the RDE hand-over the stage intro runs
+  // live and the 'fade' timeline's own emitter draws the flat.
+  float fade_level = 0.0f;
+  if (!rde_hand_ && white_ticks_ >= 2) {
+    const float fade_tick = kStartFadeLead + kStartFadeRate * static_cast<float>(white_ticks_);
+    fade_level = std::clamp((4090.0f - 34.0f * fade_tick) / 4096.0f, 0.0f, 1.0f);
+  }
+  if (fade_level > 0.0f && white_.set) {
     const float vw = static_cast<float>(frame.extent.width), vh = static_cast<float>(frame.extent.height);
     sprites_->begin(frame, vw, vh, true);
-    // The miya `fade` quad: SUBTRACTIVE, colour 4090 - 34 t of 4096, t = 27 + 0.65 * battle tick, gone at battle tick 91.
-    const float fade_tick = kStartFadeLead + kStartFadeRate * static_cast<float>(white_ticks_);
-    const float fade_level = std::clamp((4090.0f - 34.0f * fade_tick) / 4096.0f, 0.0f, 1.0f);
     // The screen in use (widescreen: the widened frame).
     const render::Letterbox::Rect veil = render::Letterbox::veil_rect(vw, vh);
     const u8 grey = static_cast<u8>(255.0f * fade_level + 0.5f);

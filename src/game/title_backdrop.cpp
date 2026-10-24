@@ -338,9 +338,10 @@ effects::ViewParams TitleBackdrop::view(float alpha) const {
   V3 right = norm3(cross3({0, 1, 0}, forward), {1, 0, 0});
   V3 down = cross3(forward, right);
   for (float& comp : down) comp = -comp;
+  // A positive roll turns the picture clockwise.
   const float cr = std::cos(pose.roll_deg * kPi / 180.0f), sr = std::sin(pose.roll_deg * kPi / 180.0f);
   for (size_t i = 0; i < 3; ++i) {
-    const float ri = right[i] * cr + down[i] * sr, di = -right[i] * sr + down[i] * cr;
+    const float ri = right[i] * cr - down[i] * sr, di = right[i] * sr + down[i] * cr;
     right[i] = ri;
     down[i] = di;
   }

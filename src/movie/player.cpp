@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 #include "audio/mixer.h"
 #include "core/log.h"
@@ -10,13 +11,26 @@
 
 namespace oc::movie {
 
+namespace {
+
+// The movie table counts frames of the original 15 fps movies.
+constexpr double kTableFps = 15.0;
+
+}  // namespace
+
 std::string resolve_member(const vfs::Vfs& fs, std::string_view name, std::string_view lang) {
   std::string base(name);
   if (base.size() > 4 && base.compare(base.size() - 4, 4, ".bk2") == 0) base.resize(base.size() - 4);
-  std::string localized = "movie/" + base + "_" + std::string(lang) + ".bk2";
-  if (!lang.empty() && fs.exists(localized)) return localized;
-  std::string plain = "movie/" + base + ".bk2";
-  return fs.exists(plain) ? plain : std::string();
+  std::vector<std::string> stems;
+  if (!lang.empty()) stems.push_back("movie/" + base + "_" + std::string(lang));
+  stems.push_back("movie/" + base);
+  for (const std::string& stem : stems) {
+    for (const char* ext : {".mp4", ".mkv"}) {
+      if (fs.loose_file(stem + ext)) return stem + ext;
+    }
+    if (fs.exists(stem + ".bk2")) return stem + ".bk2";
+  }
+  return {};
 }
 
 bool Player::open(const vfs::Vfs& fs, std::string_view name, std::string_view lang, u32 start, u32 end) {
@@ -46,9 +60,11 @@ bool Player::open(const vfs::Vfs& fs, std::string_view name, std::string_view la
   has_audio_ = dec_->has_audio() && mixer_;
   if (has_audio_) mixer_->movie_start();
   log::info("movie: {} {}x{} @ {:.2f} fps{}", member_, width_, height_, fps_, dec_->has_audio() ? " + audio" : "");
-  // Bink frames are 1-based in the game's BinkGoto(max(start, 1)); our decoder indices are 0-based.
-  start_ = start > 1 ? start - 1 : 0;
-  end_ = end > start_ ? end : 0;
+  // Table frames are 1-based (the first shown is max(start, 1)); decoder indices are 0-based, at the file's own rate.
+  const double rate_scale = fps_ / kTableFps;
+  start_ = start > 1 ? static_cast<u32>(std::lround((start - 1) * rate_scale)) : 0;
+  const u32 scaled_end = static_cast<u32>(std::lround(end * rate_scale));
+  end_ = scaled_end > start_ ? scaled_end : 0;
   skip_floats_ = static_cast<size_t>(static_cast<double>(start_) / fps_ * Decoder::kAudioRate) * 2;
   limit_floats_ = end_ ? static_cast<size_t>(static_cast<double>(end_ - start_) / fps_ * Decoder::kAudioRate) * 2 : 0;
   seen_floats_ = kept_floats_ = 0;

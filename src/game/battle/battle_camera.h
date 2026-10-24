@@ -1,13 +1,20 @@
 #pragma once
 // Battle camera: keyframe shots (drp type 0x0C) and the timeline scripts that select them (type 0x10).
 //
-// Shot: progress advances 4096 / duration per 60 Hz tick, u = ease(progress, mode) (0 linear, 1 sin, 2 1-cos, 3 sin half-steps, 4 cosine
-// S-curve); eye / target / (H, roll) are read at u from the smoothed key tracks, then the previous pose chases the goal by smoothing / 256 per
-// tick (w8 >> 16: 0x100 = cut). Shots with ref bytes are in a unit-relative frame: origin at the unit, yaw of the unit; two refs = midpoint
-// frame scaled by distance / 2048. The frame is taken when the shot is selected; flag bit 0 makes it follow the units every tick.
+// Shot: selecting one (other than select mode 1) cuts the pose to its first key; a shot of 2+ keys then runs as a camera task whose progress
+// advances by the whole step (0x40000 / duration) >> 6 per 60 Hz tick, u = ease(progress, mode) (0 linear, 1 sin, 2 1-cos, 3 sin half-steps,
+// 4 cosine S-curve); eye / target are read at u from the smoothed key tracks and the previous pose chases them by smoothing / 256 per tick
+// (w8 >> 16: 0x100 = exact); H and roll are taken as read. Shots with ref bytes are in a unit-relative frame: origin at the unit, yaw of the
+// unit; two refs = midpoint frame scaled by distance / 2048. The frame is taken when the shot is selected; flag bit 0 makes it follow the
+// units every tick.
+//
+// Glide: the menu cameras move the pose toward a goal by rate / 256 of the distance per tick (eye, target and H) until the step is under a
+// unit; any select ends it.
 //
 // Timeline: wait counter += delay (the high half of the command word) before executing the next command; consecutive 0x23 commands whose
-// delays are 0 form a random choice group; 0x2B / 0x2C screen fades, 0x4C sound by tag, 0x4D / 0x4E loop marker / jump back.
+// delays are 0 form a random choice group; 0x2B / 0x2C screen fades, 0x4C sound by tag, 0x2F starts another timeline. A timeline with header flag bit 0 repeats per target:
+// 0x4E marks the loop start (target 0), 0x4D jumps back to it while a next target exists, and the end restarts it the same way. 0x50 stalls
+// while the actor's script runs, 0x67 yields one tick; 0x42 (CD idle) and 0x7A (music switch done) never stall here.
 //
 // Keys: 3+ keys are smoothed by the retail cubic B-spline and stamped by the chord length of the master track; frame anchors use the unit
 // position + height and yaw only.
@@ -43,6 +50,8 @@ struct CamCmd {
 };
 struct CamSeq {
   std::string name;
+  // Header word; bit 0 = repeat per target.
+  u32 flags = 0;
   std::vector<CamCmd> cmds;
 };
 
@@ -100,34 +109,47 @@ class BattleCamera {
   void set_warp_hook(std::function<void(const CamCmd&)> fn) { warp_hook_ = std::move(fn); }
   // Timeline ops 0x2B / 0x2C (the screen colour layers 0 / 1, shared with the effect packs; the view draws them).
   void set_screen_hook(std::function<void(const CamCmd&)> fn) { screen_hook_ = std::move(fn); }
+  // Timeline op 0x50: true while the first actor's script still runs (the timeline stalls and re-tests next tick).
+  void set_actor_busy_hook(std::function<bool()> fn) { actor_busy_hook_ = std::move(fn); }
+  // The per-target repeat (header flag bit 0): true when the target list has an entry `index`.
+  void set_target_hook(std::function<bool(int index)> fn) { target_hook_ = std::move(fn); }
   // Set by timeline op 0x73 and cleared by a new BattleCamera: the battle start waits for the intro timeline / its shot before the party intro
   // when it is set, even in a field battle.
   bool intro_hold() const { return intro_hold_; }
 
-  // Hard cut to a shot (the default "zen0" etc.). Returns false when the shot does not exist.
+  // Selects a shot (cut to its first key unless select mode 1; a task when it has 2+ keys). Returns false when the shot does not exist or a
+  // mode-2 shot is dropped.
   bool select(const std::string& name);
+  // The pose of a shot's first key placed in its frame now, without selecting it.
+  bool key_pose(const std::string& name, CamPose& out) const;
+  // Writes the pose directly (the command-menu orbit); `cut` also drops the render interpolation from the previous tick.
+  void write_pose(const CamPose& pose, bool cut);
+  // Starts a glide from the current pose to `goal` at `rate` / 256 per tick.
+  void glide_to(const CamPose& goal, int rate);
+  // The pose at the end of the last tick.
+  const CamPose& current() const { return cur_; }
+  // The view is lifted so the ground under the eye stays 256 units below the eye's view centre line (anchored shots without flag 0x10).
+  bool ground_lift() const { return lift_; }
   // Starts a timeline script (several can run at once, like the engine's script tasks); its 0x23 commands call select().
   bool play_sequence(const std::string& name);
-  void stop_sequences() { runners_.clear(); }
-  bool sequence_running() const { return !runners_.empty(); }
+  void stop_sequences() { runners_.clear(); spawned_.clear(); }
+  bool sequence_running() const { return !runners_.empty() || !spawned_.empty(); }
   // Screen fade to black (to = 1) or back (to = 0) over `frames` ticks.
   void start_fade(float to, int frames, std::array<u8, 3> rgb = {0, 0, 0});
-  bool shot_running() const { return shot_ != nullptr && progress_ < 4095.0f; }
-  // A camera task is alive. A single-key shot (zen0) never creates one, so it is not counted however long its duration word is; a multi-key head
-  // before its end or any queued task is.
-  bool task_running() const { return (shot_ != nullptr && shot_->keys.size() > 1 && progress_ < 4096.0f) || !bg_.empty(); }
+  // A camera task is alive: a multi-key head before its end or any queued task (a single-key shot never creates one).
+  bool task_running() const { return (shot_ != nullptr && progress_ < 4096.0f) || !bg_.empty(); }
   float progress() const { return progress_; }
   // Ends the running shot at its last key (a later mode-2 select is no longer dropped): the confirm cut apr0 / apr1 gives way to the charge shot.
   void finish_shot() { bg_.clear(); if (shot_) progress_ = 4096.0f; }
-  // The charge -> element pack hand-over unlinks every camera task; the pose registers keep their last values, so the camera holds where it is
-  // until the next select.
-  void kill_shot() { bg_.clear(); if (shot_) { prev_ = cur_; shot_ = nullptr; } }
+  // Unlinks every camera task and ends a glide; the pose keeps its last value, so the camera holds where it is until the next select.
+  void kill_shot() { bg_.clear(); glide_rate_ = 0; if (shot_) { prev_ = cur_; shot_ = nullptr; } }
   // Task birth credit (dev harness, OC_FX_DT): the camera task a pack command creates is run at once with the pass delta, so it starts `ticks`
   // ahead of the select.
   void credit_ticks(int ticks) {
-    if (shot_ && ticks > 0 && progress_ < 4096.0f) progress_ = std::min(4096.0f, progress_ + static_cast<float>(ticks) * 4096.0f / static_cast<float>(std::max<u16>(1, shot_->duration)));
+    if (shot_ && ticks > 0 && progress_ < 4096.0f) progress_ = std::min(4096.0f, progress_ + static_cast<float>(ticks * progress_step(*shot_)));
   }
-  const std::string& shot_name() const { return shot_ ? shot_->name : empty_; }
+  // The last selected shot's name (single-key shots included).
+  const std::string& shot_name() const { return last_name_; }
 
   void tick(CamEvents& events);
   CamPose pose(float alpha) const;
@@ -146,16 +168,26 @@ class BattleCamera {
   static float ease(int mode, float progress);
   // Evaluates a shot at u in 0..1 (keys in the shot's own frame, no anchoring).
   static CamPose eval(const assets::StageCamera& shot, float eased);
+  // Progress added per tick (of 4096); 0 for a zero duration.
+  static int progress_step(const assets::StageCamera& shot) { return shot.duration == 0 ? 0 : (0x40000 / shot.duration) >> 6; }
 
  private:
   struct Runner {
     const CamSeq* seq = nullptr;
     size_t pos = 0;
     int wait = 0;
+    // Per-target repeat: the command after the last 0x4E (else the first) and the target being served.
+    size_t loop_pos = 0;
+    int target = 0;
+    // The end was reached; the next step restarts it for the next target or drops it.
+    bool ended = false;
   };
+  bool next_target(Runner& runner) const;
   void exec(const CamCmd& cmd, CamEvents& events);
   void run(Runner& runner, CamEvents& events);
   void goal_pose(CamPose& out) const;
+  // The shot at `progress` in `frame`; flag bit 0 re-anchors it now. False when it has no usable frame (the pose is the shot's own).
+  bool place(const assets::StageCamera& shot, float progress, CamFrame frame, float scale, CamPose& out) const;
   bool make_frame(const assets::StageCamera& shot, CamFrame& frame, float& scale) const;
 
   const CamBank* bank_ = nullptr;
@@ -163,6 +195,8 @@ class BattleCamera {
   std::function<void(const std::string&)> emitter_hook_;
   std::function<void(const CamCmd&)> warp_hook_;
   std::function<void(const CamCmd&)> screen_hook_;
+  std::function<bool()> actor_busy_hook_;
+  std::function<bool(int)> target_hook_;
   // Set by timeline op 0x73.
   bool intro_hold_ = false;
   // The camera task list: shot_ is the HEAD (the one that drives the pose registers); bg_ holds the tasks behind it, which keep advancing
@@ -180,15 +214,19 @@ class BattleCamera {
   // Head progress, 0..4096.
   float progress_ = 0;
   CamPose prev_, cur_;
-  bool have_ = false;
+  std::string last_name_;
+  bool lift_ = false;
+  CamPose glide_goal_;
+  int glide_rate_ = 0;
   CamPose free_;
   bool has_free_ = false;
   // The frame at the moment the shot was selected; only flag bit 0 shots keep tracking the units.
   CamFrame frozen_;
   float frozen_scale_ = 1.0f;
-  std::string empty_;
 
   std::vector<Runner> runners_;
+  // Timelines started by op 0x2F this tick (they join the list after it).
+  std::vector<Runner> spawned_;
 
   float fade_prev_ = 0, fade_cur_ = 0, fade_to_ = 0;
   int fade_left_ = 0;

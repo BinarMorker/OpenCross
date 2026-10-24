@@ -371,9 +371,14 @@ class BattleView {
   bool showcase_on_ = false;
   std::vector<ShowcaseModel> showcase_;
   void apply_camera(float alpha);
-  bool command_orbit(CamPose& pose) const;
-  // Target selection in the DYNAMIC camera mode (Triangle toggles it).
-  bool target_camera(CamPose& pose);
+  // The command-menu orbit around the active PC at this tick.
+  CamPose orbit_pose() const;
+  // The DYNAMIC target-selection shot from the active PC toward `target`.
+  CamPose dynamic_pose(int target) const;
+  // The menu camera, once per tick while no camera task and no timeline is alive.
+  void menu_camera();
+  // The approach shot of an attack: apr0 / apr1 at random, apr2 / apr3 in the DYNAMIC camera mode.
+  void select_approach();
   // The next PC with an open menu in slot order pc+1, pc+2, pc; -1 = none.
   int next_pc_after(int pc) const;
 
@@ -803,13 +808,22 @@ class BattleView {
   // The attack-hand toggle starts at 1 with the battle overlay: the first attack plays hand 0 ("_s00").
   int hand_toggle_ = 1;
   int intro_ticks_ = 0;
-  // Ticks the intro timelines / stage emitters run while the PS1 loads the battle behind the field's last frame.
-  static constexpr int kBtlinitLoadTicks = 80;
-  // Scripted battle: the party intro timeline waiting for the bti* intro to end.
+  // Ticks the intro timelines / stage emitters run while the battle loads behind the field transition (the `bti*` pan is cut ~88 ticks in).
+  static constexpr int kBtlinitLoadTicks = 88;
+  // The party intro timeline waiting for the load to end (pli_after_load_, a field battle) or for the bti* intro to end (scripted / held).
   std::string pli_pending_;
+  bool pli_after_load_ = false;
+  // The stage intro timeline picked at the start, until start_stage_intro runs it.
+  std::string intro_pending_;
+  bool intro_started_ = false;
+  void start_stage_intro(bool preroll);
   enum class Finish { None, Victory, Wiped, Fled } finish_ = Finish::None;
   // A wipe: 14 + 14 idle frames, then the fade to black over 0x3C ticks.
   static constexpr int kWipeIdle = 28, kWipeFade = 0x3C;
+  // Running away: `bto0` starts ~62 ticks after the Run confirm (the party runs, then the 14 + 14 teardown frames); kFledFade = the fade of a stage
+  // without `bto0`.
+  static constexpr int kRunTicks = 34, kOutroDelay = 28, kFledFade = 60, kOutroCap = 600;
+  bool fled_outro_ = false;
   int finish_ticks_ = 0;
 
   // ui
@@ -840,6 +854,8 @@ class BattleView {
   // engaged spot: return afterwards; engage_arrive_ = the approach act is running.
   bool engaged_ = false;
   int engaged_target_ = -1;
+  // An enemy action ran while the PC stood at its target: its next attack selects the approach shot again.
+  bool engage_interrupted_ = false;
   bool engaged_after_cast_ = false;
   bool engage_arrive_ = false;
   std::vector<int> chain_;
@@ -872,13 +888,10 @@ class BattleView {
   int menu_face_pc_ = -2, tgt_face_unit_ = -2;
   // Target selection camera mode: false NORMAL (zen0), true DYNAMIC.
   bool cam_dynamic_ = false;
-  // The DYNAMIC shot glides to its goal over 20 frames.
-  struct DynCam {
-    bool valid = false;
-    int target = -1;
-    CamPose cur, goal;
-    int left = 0;
-  } dyn_;
+  // Menu camera state: the PC orbited last tick (-1 = none, the next orbit pose is a cut), the target the DYNAMIC glide aims at (-1 = none),
+  // the NORMAL glide to zen0 started for this target menu.
+  int orbit_pc_ = -1, dyn_target_ = -1;
+  bool menu_glide_ = false;
   float time_ = 0;
   int auto_delay_ = 0;
   // BattleAuto rotation state.

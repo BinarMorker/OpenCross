@@ -44,10 +44,10 @@ inline std::array<float, 3> normalize(std::array<float, 3> vec, const std::array
   return vec;
 }
 
-// apr0 / apr1 at random; `OC_CAM_PICK=aprN` forces one.
-inline std::string apr_pick() {
+// apr0 / apr1 at random (apr2 / apr3 when `dynamic`); `OC_CAM_PICK=aprN` forces one.
+inline std::string apr_pick(bool dynamic) {
   if (const char* want = std::getenv("OC_CAM_PICK"); want && want[0] == 'a' && want[1] == 'p' && want[2] == 'r') return want;
-  return std::format("apr{}", std::rand() & 1);
+  return std::format("apr{}", (dynamic ? 2 : 0) + (std::rand() & 1));
 }
 
 }  // namespace oc::game::bv

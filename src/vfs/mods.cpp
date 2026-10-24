@@ -159,6 +159,7 @@ bool loads_on(ModLoadOn load_on, ModArt art) {
 // Mod folders are collected in name order, then reordered by the saved priority. Each file is classified in turn: a <archive>.dat
 // that is a ZIP = whole-archive replacement; textures\<category>\...png = a dumped texture's replacement; an .mp3 under voices\ (or
 // anywhere in a mod called "voices") = a voice line (its "voices/<name>" target is not a VFS target, kept for the count / display);
+// an .mp4 / .mkv named after a shipped movie (a01op_de.mp4 for a01op_de.bk2) = its replacement, kept as "movie/<name>.mp4|.mkv";
 // everything else is resolved against the shipped member index.
 void ModManager::scan(const Vfs& vfs, const fs::path& mods_dir, const std::vector<ModPref>& prefs) {
   dir_ = mods_dir;
@@ -224,7 +225,13 @@ void ModManager::scan(const Vfs& vfs, const fs::path& mods_dir, const std::vecto
           continue;
         }
       }
-      if (fname.size() > 4 && fname.ends_with(".mp3") && (rel.size() > 1 && rel[0] == "voices" ? true : lower(mod.name) == "voices")) {
+      if (fname.size() > 4 && (fname.ends_with(".mp4") || fname.ends_with(".mkv")) &&
+          idx.by_name.contains(fname.substr(0, fname.size() - 4) + ".bk2")) {
+        mod_file.target = "movie/" + fname;
+        mod.files.push_back(std::move(mod_file));
+        continue;
+      }
+      if (fname.size() > 4 && fname.ends_with(".mp3") &&(rel.size() > 1 && rel[0] == "voices" ? true : lower(mod.name) == "voices")) {
         mod_file.target = "voices/" + fname;
         mod.voices.push_back(std::move(mod_file));
         continue;

@@ -31,6 +31,8 @@ void BattleView::begin_group() {
     log::info("deathtrace: tick {} group actor {} element {} mode {}{}", tick_count_, e0.actor, e0.element, e0.kind == battle::ActionEvent::Kind::Element && static_cast<size_t>(e0.element) < tables_->elements.size() ? tables_->elements[static_cast<size_t>(e0.element)].mode() : -1, trace);
   }
   act_.actor = e0.actor;
+  // An enemy action while a PC stands at its target resets that PC's menu: its next attack confirms the target again.
+  if (engaged_ && e0.actor >= battle::kPcSlots) engage_interrupted_ = true;
   // Pip's form element (mode 45): tumaru 0x181 swaps the model.
   if (e0.evolve_form >= 0) pending_evolve_unit_ = e0.actor;
   Visual& actor_visual = vis_[static_cast<size_t>(act_.actor)];
@@ -84,14 +86,15 @@ void BattleView::begin_group() {
       // Weapon pick: both face each other (unless a unit's pose word is 8 = dead), and the target KEEPS that facing afterwards (the Sand Squirt
       // stays turned from the approach through the hit and the HIT% box).
       if (e0.target != act_.actor) face_toward(e0.target, act_.actor);
-      // Already standing at the target: hit at once.
+      // Already standing at the target: hit at once (the approach shot again only when an enemy action interrupted the turn).
       if (engaged_ && act_.actor == active_pc_ && e0.target == engaged_target_) {
+        if (engage_interrupted_) select_approach();
+        engage_interrupted_ = false;
         act_.phase = Act::Phase::Hit;
         start_hit();
         break;
       }
-      // apr0 / apr1 at random.
-      camera_.select(apr_pick());
+      select_approach();
       if (actor_visual.scripts && actor_visual.scripts->has_s5 && start_script(act_.actor, &actor_visual.scripts->s5, 2, 0, kApproach)) {
         act_.phase = Act::Phase::Approach;
       } else {
@@ -114,9 +117,9 @@ void BattleView::begin_group() {
       // the cast pose, no hop. The hop starts S5 entry 3 (return: crouch, the 16-tick arc hop to the stand position, clips 4 / 17 / 16 / 1)
       // on every acting unit and the cast waits for it, so a PC standing at the enemy hops home first and casts from there. The script
       // itself has no distance test (JumpT always arcs), the decision is the caller's flag. Enemies never reach this (menu path).
-      // When the PC stands at the enemy the confirm also cuts to apr0 / apr1 - the camera follows the hop home
+      // When the PC stands at the enemy the confirm also cuts to the approach shot - the camera follows the hop home
       // instead of staying on the enemy chain shot. A PC at home keeps the command shot.
-      if (engaged_ && act_.actor == active_pc_) camera_.select(apr_pick());
+      if (engaged_ && act_.actor == active_pc_) select_approach();
       if (engaged_ && act_.actor == active_pc_ && actor_visual.scripts && actor_visual.scripts->has_s5 && start_script(act_.actor, &actor_visual.scripts->s5, 3, 0, kReturn)) {
         act_.phase = Act::Phase::Return;
         act_.cast_after_return = true;
@@ -369,9 +372,8 @@ void BattleView::tick_action() {
       }
       break;
     case Act::Phase::Run:
-      // The party keeps running for ~190 frames before the screen darkens over ~60 frames.
-      if (act_.ticks == 130) camera_.start_fade(1.0f, 60);
-      if (act_.ticks > 200) {
+      // The party runs with the camera untouched; then the battle ends (the outro camera follows, tick_finish).
+      if (act_.ticks > kRunTicks) {
         act_.phase = Act::Phase::Settle;
         act_.ticks = 0;
       }
@@ -380,7 +382,8 @@ void BattleView::tick_action() {
       bool calm = true;
       for (int i = 0; i < battle::kUnits; ++i) {
         const Visual& visual = vis_[static_cast<size_t>(i)];
-        if (!battle_->unit(i).present) continue;
+        // The fleeing party keeps running into the outro.
+        if (!battle_->unit(i).present || visual.script_kind == kRun) continue;
         if (visual.vm.running() && visual.script_kind != kIdle) calm = false;
         if (visual.move.on) calm = false;
       }
@@ -411,9 +414,10 @@ void BattleView::end_group() {
   if (act_.actor >= 0 && !act_.ev.empty() && act_.ev.front().death_cast &&
       std::none_of(queue_.begin(), queue_.end(), [&](const std::vector<battle::ActionEvent>& group) { return !group.empty() && group.front().death_cast && group.front().actor == act_.actor; }))
     vis_[static_cast<size_t>(act_.actor)].death_owed = false;
+  // The fleeing party's run scripts (S5 entry 7: run off, fade out, hide) play on into the outro.
   for (size_t i = 0; i < vis_.size(); ++i) {
     Visual& visual = vis_[i];
-    if (!visual.vm.running() || visual.script_kind == kIdle) continue;
+    if (!visual.vm.running() || visual.script_kind == kIdle || visual.script_kind == kRun) continue;
     visual.vm.stop();
     anm_unit_reset(static_cast<int>(i));
   }
@@ -445,10 +449,7 @@ void BattleView::end_group() {
     sys_pending_ = false;
     smsg_open(sys_req_);
   }
-  if (finish_ == Finish::None && !engaged_ && !cast_end) {
-    camera_.stop_sequences();
-    camera_.select("zen0");
-  }
+  if (finish_ == Finish::None && !engaged_ && !cast_end) camera_.stop_sequences();
   if (queue_.empty()) sync_shown();
   // A unit whose script was cut still has to settle on its idle / KO pose.
   for (int i = 0; i < battle::kUnits; ++i)
@@ -483,15 +484,19 @@ void BattleView::begin_finish() {
       start_script(i, &visual.scripts->s5, 11, 0, kVictory);
     }
     camera_.set_bank(&bank_);
-    // The `bti0` intro layer (bg_00's sea, birds, fish) returns for the outro.
-    fx_stage_layer("bti0", true, true);
-    if (!camera_.play_sequence("bto0")) camera_.select("zen0");
   // Scripted: op 83 ended the fight (no result screen).
-  } else if (outcome == battle::Outcome::Fled || outcome == battle::Outcome::Scripted) {
+  } else if (outcome == battle::Outcome::Fled) {
     finish_ = Finish::Fled;
+    fled_outro_ = false;
+    camera_.set_bank(&bank_);
+  } else if (outcome == battle::Outcome::Scripted) {
+    // No outro: the view ends ~60 ticks later.
+    finish_ = Finish::Fled;
+    fled_outro_ = false;
+    finish_ticks_ = kOutroDelay + 1;
   } else {
-    // Party wiped: the loop ends at once (no pose, no fanfare), the UI idles for 14 + 14 frames, then the exit fades to black over 0x3C ticks
-    // and skips its screen. There is no game-over panel in the battle overlays: the host loads map 9 unless the fight was losable.
+    // Party wiped: the loop ends at once (no pose, no fanfare), the UI idles for 14 + 14 frames, then `bto0` plays while the exit fades to black
+    // over 0x3C ticks and skips its screen. There is no game-over panel in the battle overlays: the host loads map 9 unless the fight was losable.
     finish_ = Finish::Wiped;
   }
 }
@@ -500,6 +505,11 @@ void BattleView::tick_finish() {
   ++finish_ticks_;
   switch (finish_) {
     case Finish::Victory:
+      // After the 14 + 14 teardown frames the `bti0` intro layer (bg_00's sea, birds, fish) returns and the stage outro `bto0` plays.
+      if (finish_ticks_ == kOutroDelay) {
+        fx_stage_layer("bti0", true, true);
+        camera_.play_sequence("bto0");
+      }
       if (ui_ != Ui::Result && finish_ticks_ > 120 && (!camera_.sequence_running() || finish_ticks_ > 360)) {
         camera_.stop_sequences();
         // The host's BattleResults screen follows; no in-battle panel.
@@ -515,21 +525,36 @@ void BattleView::tick_finish() {
       }
       break;
     case Finish::Wiped:
-      if (finish_ticks_ == kWipeIdle) camera_.start_fade(1.0f, kWipeFade);
+      // The same teardown as the other endings: the `bti0` layer and the stage outro `bto0`, under the exit's fade to black.
+      if (finish_ticks_ == kWipeIdle) {
+        camera_.set_bank(&bank_);
+        fx_stage_layer("bti0", true, true);
+        camera_.play_sequence("bto0");
+        camera_.start_fade(1.0f, kWipeFade);
+      }
       if (!finished_ && finish_ticks_ > kWipeIdle + kWipeFade) {
         audio_.stop_music();
         audio_.stop_sounds();
         finished_ = true;
       }
       break;
-    case Finish::Fled:
-      if (!finished_ && finish_ticks_ > 60) {
+    case Finish::Fled: {
+      // After the 14 + 14 teardown frames the `bti0` layer returns and the stage outro `bto0` plays (one of its shots at random; it ends with
+      // its own fade to black); a stage without one fades to black.
+      if (finish_ticks_ == kOutroDelay) {
+        fx_stage_layer("bti0", true, true);
+        fled_outro_ = camera_.play_sequence("bto0");
+        if (!fled_outro_) camera_.start_fade(1.0f, kFledFade);
+      }
+      const bool outro_done = fled_outro_ ? !camera_.sequence_running() || finish_ticks_ > kOutroDelay + kOutroCap : finish_ticks_ > kOutroDelay + kFledFade;
+      if (!finished_ && finish_ticks_ > kOutroDelay && outro_done) {
         // In the field the battle music plays on until the field song replaces it.
         if (!external_results_) audio_.stop_music();
         audio_.stop_sounds();
         finished_ = true;
       }
       break;
+    }
     case Finish::None: break;
   }
 }

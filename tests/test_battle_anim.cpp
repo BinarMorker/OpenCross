@@ -343,11 +343,14 @@ void test_camera() {
   CHECK(cam.select("cam1"));
   CamEvents ev;
   cam.tick(ev);
-  // 1/100 of the way.
-  CHECK(near(cam.pose(1.0f).eye[0], 1000.0f * (1.0f / 100.0f), 0.2f));
-  for (int i = 0; i < 99; ++i) cam.tick(ev);
+  // Duration 100: the whole step (0x40000 / 100) >> 6 = 40 of 4096 per tick.
+  CHECK(BattleCamera::progress_step(*bank.camera("cam1")) == 40);
+  CHECK(near(cam.pose(1.0f).eye[0], 1000.0f * (40.0f / 4096.0f), 0.2f));
+  for (int i = 0; i < 101; ++i) cam.tick(ev);
+  CHECK(cam.task_running());
+  cam.tick(ev);
   CHECK(near(cam.pose(1.0f).eye[0], 1000.0f, 1.0f) && near(cam.pose(1.0f).h, 400.0f, 0.5f));
-  CHECK(!cam.shot_running());
+  CHECK(!cam.task_running());
 
   // timeline: cam1 at tick 0 (delay 5), then the group {cam2, cam3} after the delay 5; the sequence ends 12 ticks later
   CHECK(cam.play_sequence("t1  "));
@@ -361,6 +364,102 @@ void test_camera() {
   CHECK(cam.shot_name() == "cam2" || cam.shot_name() == "cam3");
   for (int i = 0; i < 30; ++i) cam.tick(ev);
   CHECK(!cam.sequence_running());
+}
+
+// The ticks (1-based) on which a timeline played its 0x4C sound, and the first tick after which it no longer runs.
+struct TimelineTrace {
+  std::vector<int> sound_ticks;
+  int end_tick = 0;
+};
+TimelineTrace trace_timeline(BattleCamera& cam, const std::string& name, int ticks) {
+  TimelineTrace trace;
+  CHECK(cam.play_sequence(name));
+  for (int tick = 1; tick <= ticks && cam.sequence_running(); ++tick) {
+    CamEvents ev;
+    cam.tick(ev);
+    if (!ev.sounds.empty()) trace.sound_ticks.push_back(tick);
+    if (!cam.sequence_running()) trace.end_tick = tick;
+  }
+  return trace;
+}
+
+void test_camera_timeline_flow() {
+  // Per-target loop (header flag 1): 0x4E, sound (delay 1), 0x4D (delay 5), end.
+  Bytes loop(0x14, 0);
+  loop[0] = 1;
+  put_cmd(loop, 0x20, 0);
+  put_cmd(loop, 0x4E, 0);
+  put_cmd(loop, 0x4C, 1, "snd1", 16);
+  put_cmd(loop, 0x4D, 5);
+  put_cmd(loop, 0x21, 0);
+  // Per-target restart at the end (header flag 1, no loop marker).
+  Bytes restart(0x14, 0);
+  restart[0] = 1;
+  put_cmd(restart, 0x4C, 0, "snd1", 16);
+  put_cmd(restart, 0x21, 0);
+  // Op 0x50 (delay 2) stalls while the actor is busy; op 0x67 (delay 9) yields one tick.
+  Bytes stall(0x14, 0);
+  put_cmd(stall, 0x50, 2);
+  put_cmd(stall, 0x4C, 0, "snd1", 16);
+  put_cmd(stall, 0x21, 0);
+  Bytes yield(0x14, 0);
+  put_cmd(yield, 0x67, 9);
+  put_cmd(yield, 0x4C, 0, "snd1", 16);
+  put_cmd(yield, 0x21, 0);
+  // Op 0x2F starts the child timeline, which steps from the next tick on.
+  Bytes parent(0x14, 0);
+  put_cmd(parent, 0x2F, 0, "chld", 16);
+  put_cmd(parent, 0x21, 0);
+  Bytes child(0x14, 0);
+  put_cmd(child, 0x4C, 0, "snd1", 16);
+  put_cmd(child, 0x21, 0);
+  CamBank bank;
+  bank.add_drp(make_drp({entry("loop", 0x10, loop), entry("rest", 0x10, restart), entry("stal", 0x10, stall), entry("yiel", 0x10, yield),
+                         entry("prnt", 0x10, parent), entry("chld", 0x10, child)}));
+  CHECK(bank.sequence("loop") && bank.sequence("loop")->flags == 1u);
+
+  BattleCamera cam;
+  cam.set_bank(&bank);
+  // No target list: one pass.
+  TimelineTrace trace = trace_timeline(cam, "loop", 40);
+  CHECK(trace.sound_ticks == std::vector<int>{1});
+  // Three targets: the jump back runs the body on the next tick; the end is dropped one step after the 0x21.
+  cam.set_target_hook([](int index) { return index >= 0 && index < 3; });
+  trace = trace_timeline(cam, "loop", 40);
+  CHECK((trace.sound_ticks == std::vector<int>{1, 3, 5}) && trace.end_tick == 11);
+  cam.set_target_hook([](int index) { return index >= 0 && index < 2; });
+  trace = trace_timeline(cam, "rest", 40);
+  CHECK((trace.sound_ticks == std::vector<int>{1, 3}) && trace.end_tick == 4);
+
+  int busy_ticks = 3;
+  cam.set_actor_busy_hook([&busy_ticks] { return busy_ticks-- > 0; });
+  trace = trace_timeline(cam, "stal", 40);
+  CHECK(trace.sound_ticks == std::vector<int>{6});
+  trace = trace_timeline(cam, "yiel", 40);
+  CHECK(trace.sound_ticks == std::vector<int>{2});
+  trace = trace_timeline(cam, "prnt", 40);
+  CHECK((trace.sound_ticks == std::vector<int>{2}) && trace.end_tick == 2);
+
+  // Two-anchor shot whose second anchor has no frame: the origin stands in (midpoint (500, 0, 0), local +X toward the origin, x / z scaled by
+  // 1000 / 2048), so the key eye (0, 0, 1000) lands at (500, 0, -488.3).
+  Bytes anchored = make_camera(100, 0, 0x100);
+  anchored[12] = 1;
+  anchored[14] = 2;
+  CamBank shots;
+  shots.add_drp(make_drp({entry("anc1", 0x0C, anchored)}));
+  BattleCamera framed;
+  framed.set_bank(&shots);
+  framed.set_anchor([](int type, int) {
+    CamFrame frame;
+    if (type == 1) {
+      frame.valid = true;
+      frame.x = 1000.0f;
+    }
+    return frame;
+  });
+  CamPose pose;
+  CHECK(framed.key_pose("anc1", pose));
+  CHECK(near(pose.eye[0], 500.0f, 0.5f) && near(pose.eye[1], 0.0f, 0.5f) && near(pose.eye[2], -1000.0f * 1000.0f / 2048.0f, 0.5f));
 }
 
 void test_vm_weapon_show() {
@@ -659,6 +758,7 @@ int main() {
   test_vm_jump_up_down();
   test_tags();
   test_camera();
+  test_camera_timeline_flow();
   if (failures == 0) std::printf("battle_anim: all checks passed\n");
   return failures == 0 ? 0 : 1;
 }

@@ -86,14 +86,15 @@ CamFrame BattleView::anchor_frame(int type, int attach) const {
     frame.mscale = model_scale(unit);
   };
   // Types 3 / 4 / 5 / 0x16 / 0x17: the midpoint of the bounding box of the points ((max + min) / 2 per axis, integer division), yaw = the
-  // arithmetic mean of the 12-bit model yaws / n; type 5 uses yaw 0.
-  auto centroid = [&](const std::vector<int>& units, bool mean_yaw = true) {
+  // arithmetic mean of the 12-bit model yaws / n; type 5 uses yaw 0. `home`: the units' home positions instead of their attach points.
+  auto centroid = [&](const std::vector<int>& units, bool mean_yaw = true, bool home = false) {
     std::array<int, 3> lo{32767, 32767, 32767}, hi{-32767, -32767, -32767};
     int ang_sum = 0, count = 0;
     for (int unit : units) {
       std::array<float, 3> point{};
       float yaw = 0;
       if (!unit_point(unit, point, yaw)) continue;
+      if (home) point = {vis_[static_cast<size_t>(unit)].home_x, 0.0f, vis_[static_cast<size_t>(unit)].home_z};
       for (size_t k = 0; k < 3; ++k) {
         // PS1 y is down.
         const int coord = static_cast<int>(k == 1 ? -point[k] : point[k]);
@@ -174,9 +175,9 @@ CamFrame BattleView::anchor_frame(int type, int attach) const {
     if (unit < 0) return world();
     unit_frame(unit);
   };
-  auto centroid_of = [&](const std::vector<int>& list, bool ground) {
+  auto centroid_of = [&](const std::vector<int>& list, bool ground, bool home = false) {
     if (list.empty()) return world();
-    centroid(list);
+    centroid(list, true, home);
     if (ground) frame.y = 0.0f;
   };
   switch (type) {
@@ -188,8 +189,8 @@ CamFrame BattleView::anchor_frame(int type, int attach) const {
     case 14: case 15: case 16: case 17: case 18: case 19: case 20: case 21: frame_of(nth(tgts, type - 13)); break;
     case 3: centroid_of(actors, false); break;
     case 4: centroid_of(tgts, false); break;
-    // The targets' ground centroid, y 0.
-    case 22: case 23: centroid_of(tgts, true); break;
+    // The targets' ground centroid, y 0: 0x16 of their attach points, 0x17 of their home positions.
+    case 22: case 23: centroid_of(tgts, true, type == 23); break;
     case 5: {
       std::vector<int> all;
       for (int i = 0; i < battle::kUnits; ++i) all.push_back(i);

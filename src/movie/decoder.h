@@ -1,9 +1,10 @@
 #pragma once
-// Bink 2 movie decoder over librempeg: demux + video (-> RGBA8) + audio (-> 48 kHz stereo float). No GPU, no threads;
-// the Player drives it from a worker thread, ocmovie dump drives it directly.
+// Movie decoder over librempeg (Bink 2; HEVC / H.264 in mp4 / mkv for mod movies): demux + video (-> RGBA8) + audio (-> 48 kHz
+// stereo float). No GPU; video decodes on the codec's own threads. The Player drives it from a worker thread, ocmovie dump directly.
 #include <deque>
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "core/types.h"
@@ -28,7 +29,8 @@ class Decoder {
 
   // Takes ownership of the .bk2 bytes.
   bool open(Bytes file);
-  // Streams the .bk2 from a file on disk (same probing as open); the file stays open until the decoder is destroyed.
+  // Streams a movie file from disk (same probing as open, the file name as the format hint); the file stays open until the decoder
+  // is destroyed.
   bool open_file(const std::filesystem::path& path);
 
   u32 width() const { return width_; }
@@ -45,8 +47,8 @@ class Decoder {
   std::vector<float>& audio() { return audio_; }
 
  private:
-  // Format / stream / codec setup over the AVIO already in Impl.
-  bool probe();
+  // Format / stream / codec setup over the AVIO already in Impl; `name` hints the container.
+  bool probe(const std::string& name);
   struct Impl;
   std::unique_ptr<Impl> impl_;
   u32 width_ = 0, height_ = 0;

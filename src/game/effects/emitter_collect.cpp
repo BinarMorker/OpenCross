@@ -176,6 +176,22 @@ void EmitterSystem::Impl::collect_builtin(const Object& obj, const ViewParams& v
     float z[4];
     for (int k = 0; k < 4; ++k)
       if (!project(corner[k], quad.x[k], quad.y[k], z[k])) return;
+    // A flat that covers the whole PS1 frame (in the PS1's own projection) is a screen veil: it covers our whole picture too (the widescreen
+    // columns, a wider FovDeg); the draw scissor clips it.
+    const float ps1_scale = 1.0f / render::fov_scale();
+    const float left = view.ox - 160.0f + view.scroll_x, top = view.oy - 112.0f + view.scroll_y;
+    // Each corner must lie beyond a different corner of the frame.
+    int corners_beyond = 0;
+    for (int k = 0; k < 4; ++k) {
+      const float px = view.ox + view.scroll_x + (quad.x[k] - view.ox - view.scroll_x) * ps1_scale, py = view.oy + view.scroll_y + (quad.y[k] - view.oy - view.scroll_y) * ps1_scale;
+      const bool on_left = px <= left + 0.5f, on_right = px >= left + 319.5f, on_top = py <= top + 0.5f, on_bottom = py >= top + 223.5f;
+      if ((on_left || on_right) && (on_top || on_bottom)) corners_beyond |= 1 << ((on_right ? 1 : 0) + (on_bottom ? 2 : 0));
+    }
+    if (corners_beyond == 0xF) {
+      constexpr float kReach = 4096.0f;
+      quad.x[0] = quad.x[2] = left - kReach, quad.x[1] = quad.x[3] = left + 320.0f + kReach;
+      quad.y[0] = quad.y[1] = top - kReach, quad.y[2] = quad.y[3] = top + 224.0f + kReach;
+    }
     quad.r = static_cast<u8>(rgb[0]);
     quad.g = static_cast<u8>(rgb[1]);
     quad.b = static_cast<u8>(rgb[2]);

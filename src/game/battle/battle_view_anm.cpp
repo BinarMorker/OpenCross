@@ -16,6 +16,7 @@
 #include "core/log.h"
 #include "game/battle/battle_view.h"
 #include "game/battle/battle_view_util.h"
+#include "import/container.h"
 #include "import/room_effects.h"
 
 namespace oc::game {
@@ -24,6 +25,8 @@ using namespace bv;
 
 struct BattleView::AnmFx {
   std::shared_ptr<const FxPack> pack;
+  // The unit's nested effect drps (their emitters join the bank).
+  std::vector<std::shared_ptr<const assets::RoomEffects>> subpacks;
   effects::EffectBank bank;
   std::unique_ptr<effects::EmitterSystem> em;
   struct Follower {
@@ -123,6 +126,23 @@ void BattleView::anm_effect(int unit, const bseq::Event& event) {
     // Registered stopped: they run when the script starts them.
     anm->bank.add_library(&pack->fx);
     if (pack->extra) anm->bank.add_library(pack->extra.get());
+    // The nested drps that carry timelines (a fierce attack's at0.prd > <model> > fir1 / fir2 / fir3) link their emitters into the same registry.
+    if (!pack->prd.empty()) {
+      const import::Vram vram = pack->build_vram();
+      std::function<void(ByteSpan)> link = [&](ByteSpan bytes) {
+        auto drp = import::parse_drp(bytes);
+        if (!drp) return;
+        for (const auto& entry : drp->entries) {
+          if (entry.type != 1 || !import::is_drp(entry.data)) continue;
+          auto inner = import::parse_drp(entry.data);
+          if (inner && std::any_of(inner->entries.begin(), inner->entries.end(), [](const import::DrpEntry& sub) { return sub.type == 0x10; }))
+            anm->subpacks.push_back(std::make_shared<assets::RoomEffects>(import::load_battle_effects(entry.data, {}, vram, {})));
+          link(entry.data);
+        }
+      };
+      link(pack->prd);
+      for (const auto& subpack : anm->subpacks) anm->bank.add_library(subpack.get());
+    }
     if (pack->resident)
       for (const auto& resident_pack : pack->resident->packs) anm->bank.add_library(resident_pack.get());
     anm->bank.add_library(&fxlib_.particle_lib());

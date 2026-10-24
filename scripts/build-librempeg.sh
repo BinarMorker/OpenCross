@@ -1,6 +1,6 @@
 #!/bin/bash
 # Called by build-librempeg.ps1 inside a vcvars64 environment. Args: <repo root> <librempeg git url>.
-# Builds only what the movies need: bink demuxer, bink2 video, Bink audio (DCT/RDFT) decoders; static, /MT (matches the project: static CRT, one exe).
+# Builds only what the movies need: bink / mp4 / mkv demuxers, bink2 / HEVC / H.264 video, Bink / AAC / Opus audio decoders; static, /MT (matches the project: static CRT, one exe).
 set -euo pipefail
 LIBREMPEG_COMMIT=25d1ead99068ffb1f11df19cf0707854603d621e
 ROOT=$(cygpath -u "$1")
@@ -23,7 +23,8 @@ export TMPDIR="$BUILD/tmp"; mkdir -p "$TMPDIR"
   --enable-gpl --enable-version3 --enable-static --disable-shared \
   --disable-programs --disable-doc --disable-network --disable-autodetect --enable-w32threads \
   --disable-everything --disable-avdevice --disable-swscale \
-  --enable-demuxer=bink --enable-decoder=bink2,binkaudio_dct,binkaudio_rdft \
+  --enable-demuxer=bink,mov,matroska --enable-decoder=bink2,binkaudio_dct,binkaudio_rdft,hevc,h264,aac,opus \
+  --enable-parser=hevc,h264,aac,opus \
   --extra-cflags="-MT" > "$BUILD/configure.log" 2>&1 || { tail -30 "$BUILD/configure.log"; exit 1; }
 # libavcodec depends on libavfilter in librempeg: disabling avfilter would silently disable avcodec/avformat.
 grep -q '^CONFIG_AVCODEC=yes' ffbuild/config.mak || { echo "configure disabled libavcodec"; exit 1; }

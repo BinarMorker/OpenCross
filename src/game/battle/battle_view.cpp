@@ -118,6 +118,7 @@ void BattleView::unload_scene() {
   script_actor_ = -1;
   engaged_ = engage_arrive_ = engaged_after_cast_ = false;
   engaged_target_ = -1;
+  engage_interrupted_ = false;
   menu_face_ui_ = Ui::Intro;
   menu_face_pc_ = tgt_face_unit_ = -2;
   last_actor_ = -1;
@@ -311,6 +312,8 @@ void BattleView::run_load_step(LoadJob& job) {
   u32 seed = static_cast<u32>(std::chrono::steady_clock::now().time_since_epoch().count());
   // Dev: OC_BATTLE_SEED makes fights repeatable.
   if (const char* env = std::getenv("OC_BATTLE_SEED")) seed = static_cast<u32>(std::strtoul(env, nullptr, 10));
+  // The random camera picks (intro / party intro timelines, their shot groups, the approach shots) differ from battle to battle.
+  std::srand(seed);
   rng_ = std::make_unique<battle::GameRng>(seed, tables_->rng_table);
   spawn_rng_.seed(seed);
   battle_ = std::make_unique<battle::Battle>(*tables_, *rng_, brain_);
@@ -354,7 +357,14 @@ void BattleView::run_load_step(LoadJob& job) {
   camera_ = BattleCamera{};
   camera_.set_bank(&bank_);
   camera_.set_anchor([this](int unit, int point) { return anchor_frame(unit, point); });
-  camera_.set_emitter_hook([this](const std::string& name) { stage_scene_.start_emitter(name); });
+  // Timeline op 0x22: the emitter of that name in the loaded resources: the stage's, else the acting unit's own (a fierce attack's at0.prd timelines).
+  camera_.set_emitter_hook([this](const std::string& name) {
+    if (stage_scene_.start_emitter(name) || act_.actor < 0) return;
+    bseq::Event effect;
+    effect.kind = bseq::Event::Effect;
+    for (size_t i = 0; i < name.size() && i < 4; ++i) effect.tag |= static_cast<u32>(static_cast<u8>(name[i])) << (8 * i);
+    anm_effect(act_.actor, effect);
+  });
   // Timeline ops 0x3E-0x40: the same screen copy warp as the effect packs' (one global state).
   camera_.set_warp_hook([this](const CamCmd& cmd) {
     assets::SeqCmd seq_cmd;
@@ -368,6 +378,14 @@ void BattleView::run_load_step(LoadJob& job) {
     seq_cmd.op = cmd.op;
     seq_cmd.data = cmd.data;
     fx_screen_colour(cmd.op == 0x2C ? 1 : 0, seq_cmd);
+  });
+  // Timeline op 0x50 waits while the acting unit's script runs; a per-target timeline repeats while the action has a next target.
+  camera_.set_actor_busy_hook([this] { return fx_actor_busy(); });
+  camera_.set_target_hook([this](int index) {
+    std::vector<int> targets = act_.targets;
+    std::sort(targets.begin(), targets.end());
+    targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+    return index >= 0 && index < static_cast<int>(targets.size());
   });
   const int scene_bg = tables_->scenes[static_cast<size_t>(scene_id)].bg();
   int bg = (opt.battlefield >= 0 && opt.battlefield < 100) ? opt.battlefield : scene_bg;
@@ -574,6 +592,8 @@ bool BattleView::finish_start() {
   chain_.clear();
   time_ = 0;
   intro_ticks_ = 0;
+  orbit_pc_ = dyn_target_ = -1;
+  menu_glide_ = false;
   auto_delay_ = 0;
   auto_pc_ = auto_target_ = -1;
   auto_step_ = 0;
@@ -592,52 +612,23 @@ bool BattleView::finish_start() {
   else if (!intros.empty()) pick = intros[static_cast<size_t>(std::rand()) % intros.size()];
   // Dev: OC_BATTLE_INTRO forces the intro timeline.
   if (const char* env = std::getenv("OC_BATTLE_INTRO"); env && bank_.sequence(env)) pick = env;
-  if (!pick.empty()) {
-    camera_.play_sequence(pick);
-    log::info("battle: intro timeline {}", pick);
-  }
-  // Party intro (after the units are placed): a random one of the stage's `pli0..pli7` follows the `bti*` timeline. For a
-  // field battle it starts at once: every camera shot is torn down and every timeline but 'loop' ended (the screen-copy warp cleared), so the
-  // `bti*` shot never shows and `pli0` plays, then `zen0` glides in with the command phase at tick ~110. A scripted battle waits for the `bti*`
-  // timeline and its shot first (stepping frames): `pli_pending_` (tick_camera).
-  if (field_battle_ && bank_.sequence("fade")) camera_.play_sequence("fade");
-  // The effect tasks keep stepping while the stage / unit data loads behind the field's last (white) frame, so the
-  // `bti*` / 'fade' timelines and the stage emitters are ~80 ticks old when the battle loop's tick 0 comes. OpenCross loads at once, so it runs
-  // those ticks here; the subtractive 'fade' flat (COLOR 4090, rate -34 / tick, LIFE 120, blend 3 = B - F) then shows only its last ~40 ticks.
-  // The timeline's op 0x4C (sound) runs in those ticks too: a sound named in the first 80 ticks of the
-  // `bti*` timeline (bg_00 bti1 / bti2 "se32" at tick 0..149, bg_06 bti0 "se35" at tick 0, ...) is already requested when the first battle tick
-  // comes, so it is played here; the later ones (the rest of the timeline, cut by the party intro in a field battle) fire from tick_camera.
-  {
-    for (int i = 0; i < kBtlinitLoadTicks; ++i) {
-      CamEvents cam_events;
-      camera_.tick(cam_events);
-      // The intro's 0x2B / 0x2C layer tasks step with the timelines.
-      fx_screen_tick();
-      stage_scene_.tick();
-      for (const std::string& tag : cam_events.sounds) play_tag_sound(tag, 127);
-    }
-  }
+  // The stage intro and 'fade' start in tick_camera (start_stage_intro): at once without the RDE hand-over, when the RDE load reaches them under it.
+  intro_pending_ = pick;
+  intro_started_ = false;
+  // Party intro: a random one of the stage's `pli0..pli7`, when the load ends (tick_camera). In a field battle it cuts the stage intro then
+  // (every camera shot torn down, every timeline but 'loop' ended, the screen-copy warp cleared); when the intro holds (op 0x73) it waits for the
+  // `bti*` timeline and its shot. The party is placed in ascending character id: the first one when the load ends, the others with the party intro.
   std::vector<std::string> party_intros;
   for (int k = 0; k < 8; ++k) {
     const std::string name = std::format("pli{}", k);
     if (bank_.sequence(name)) party_intros.push_back(name);
   }
   pli_pending_.clear();
+  pli_after_load_ = false;
   if (!party_intros.empty()) {
-    const std::string pli = party_intros[static_cast<size_t>(std::rand()) % party_intros.size()];
-    // Frames step while a shot / timeline lives when the battle is scripted or the intro holds (an intro with op 0x73 plays to its end in a
-    // field battle too, e.g. a long 'boss' timeline followed by `pli0` and then the command orbit).
-    if (field_battle_ && !camera_.intro_hold()) {
-      start_party_intro(pli);
-    } else {
-      pli_pending_ = pli;
-      // The party is placed in ascending character id: the first one (model + S5 entry 8) before the wait, the other two after it - they are
-      // not on the field during a held intro.
-      int first = -1;
-      for (int i = 0; i < battle::kPcSlots; ++i)
-        if (battle_->unit(i).present && (first < 0 || battle_->unit(i).src_id < battle_->unit(first).src_id)) first = i;
-      for (int i = 0; i < battle::kPcSlots; ++i) unplaced_[static_cast<size_t>(i)] = battle_->unit(i).present && i != first;
-    }
+    pli_pending_ = party_intros[static_cast<size_t>(std::rand()) % party_intros.size()];
+    pli_after_load_ = true;
+    for (int i = 0; i < battle::kPcSlots; ++i) unplaced_[static_cast<size_t>(i)] = battle_->unit(i).present;
   }
   audio_.start_battle_theme(field_battle_ && (start_flags_ & 1));
 

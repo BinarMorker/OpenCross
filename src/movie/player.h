@@ -1,6 +1,6 @@
 #pragma once
-// FMV player: decodes a movie.dat Bink 2 member on a worker thread, paces frames against the audio clock (the mixer's
-// movie PCM stream; wall clock without a mixer) and exposes the current frame as an RGBA texture.
+// FMV player: decodes a movie.dat Bink 2 member (or a mod's mp4 / mkv replacement) on a worker thread, paces frames against the
+// audio clock (the mixer's movie PCM stream; wall clock without a mixer) and exposes the current frame as an RGBA texture.
 //
 // Usage:  Player p; p.set_mixer(&mixer); p.open(vfs, "a01op", "en"); p.init_gpu(ctx, sprites);
 //         each frame:  p.update(dt);  ...  p.draw(frame, vw, vh);  until p.finished().
@@ -26,7 +26,8 @@ class Vfs;
 
 namespace oc::movie {
 
-// movie.dat member for a movie name: "<name>_<lang>" if that exists (a01op, b28end, final), else "<name>". Empty if absent.
+// Member for a movie name: "<name>_<lang>" if that exists (a01op, b28end, final), else "<name>"; at each, a mod's .mp4 / .mkv
+// replacement before the .bk2. Empty if absent.
 std::string resolve_member(const vfs::Vfs& fs, std::string_view name, std::string_view lang);
 
 class Player {
@@ -38,7 +39,7 @@ class Player {
 
   // Optional, before open(): movie audio goes to this mixer's movie bus and drives the clock.
   void set_mixer(audio::Mixer* mixer) { mixer_ = mixer; }
-  // `start` / `end`: play only movie frames [start, end) (the field movie table's range; start 0 = from the
+  // `start` / `end`: play only movie frames [start, end) at the table's 15 fps (the field movie table's range; start 0 = from the
   // beginning, end 0 = to the end). Earlier frames / audio are decoded and dropped, the clock starts at `start`.
   bool open(const vfs::Vfs& fs, std::string_view name, std::string_view lang = "en", u32 start = 0, u32 end = 0);
   // `keep_frame`: the movie ended on screen - keep the last decoded frame's texture alive so it can be faded into the next scene
