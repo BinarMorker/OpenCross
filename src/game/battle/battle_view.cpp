@@ -281,6 +281,7 @@ void BattleView::prefetch_fonts() {
   // kb_70 / kt_70 are ~190 MB each: read on a worker thread, behind the swirl.
   fonts_.prefetch(ui::font::kKb);
   fonts_.prefetch(ui::font::kBattleJp);
+  fonts_.prefetch(ui::font::kCh);
 }
 
 void BattleView::run_load_step(LoadJob& job) {
@@ -293,7 +294,7 @@ void BattleView::run_load_step(LoadJob& job) {
     job.done = true;
   };
   enum { kRules, kStageRead, kStageScene, kCommon, kUnits0, kFonts = kUnits0 + battle::kUnits };
-  // (kFonts is followed by one more step: the JP face)
+  // (kFonts is followed by two more steps: the JP face and the headline face)
   if (job.step == kRules) {
   unload_scene();
   // Reset the GetHokanFrame chain state and the weapon hand toggle.
@@ -473,16 +474,16 @@ void BattleView::run_load_step(LoadJob& job) {
     bind_unit_model(unit_id);
     return;
   }
-  // kFonts, kFonts + 1: the HUD faces that need the big JP fonts (kb_70 / kt_70 were read by prefetch_fonts); one face per call (each builds its first
-  // glyph atlas: ~10 ms in Release), retried on a later frame while the worker is still reading the file.
-  const bool second = job.step == kFonts + 1;
-  const int slot = second ? ui::font::kBattleJp : ui::font::kKb;
+  // kFonts .. kFonts + 2: the HUD faces read by prefetch_fonts (kb_70, kt_70, the ch_100 command headline); one face per call (each builds its
+  // first glyph atlas: ~10 ms in Release), retried on a later frame while the worker is still reading the file.
+  const int face = job.step - kFonts;
+  const int slot = face == 0 ? ui::font::kKb : face == 1 ? ui::font::kBattleJp : ui::font::kCh;
   if (!job.block && !fonts_.ready(slot)) {
     job.wait = true;
     return;
   }
-  fonts_.prepare(slot, second ? U"♂♀" : U"●");
-  if (second) job.done = true;
+  fonts_.prepare(slot, face == 0 ? U"●" : face == 1 ? U"♂♀" : U"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÉé ");
+  if (face == 2) job.done = true;
 }
 
 // One unit's model, scripts, sound group, weapon mesh and extents from its Unit record: the load step, and a Dopplegang form change.

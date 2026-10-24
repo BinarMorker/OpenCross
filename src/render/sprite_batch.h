@@ -25,7 +25,7 @@ constexpr u32 pack_rgba(u8 r, u8 g, u8 b, u8 a = 255) {
 // Alpha is the normal mode; Multiply (dst *= src colour) and Add (dst += src colour) are for full-screen tints; Subtract: dst -= src colour
 // (PS1 ABR 2); Average: (dst + src) / 2 = alpha blend at 0.5, depth-tested, never written (PS1 ABR 0); Premultiplied: dst = src + dst *
 // (1 - src alpha) (an off-screen UI target composited over the frame).
-enum class BlendMode { Alpha, Multiply, Add, Subtract, Average, Premultiplied };
+enum class BlendMode { Alpha, Multiply, Add, Subtract, Average, Premultiplied, AddAlpha };
 
 // Linear = bilinear whatever the texture's sampler is (four point taps, for the per-category texture filter options).
 enum class SpriteFilter { Sampler = 0, Point = 1, Box = 2, Linear = 3 };
@@ -61,6 +61,7 @@ class SpriteBatch {
   void draw_quad(TexRef texture, const float (&xy)[8], const float (&uv)[8], u32 color = 0xFFFFFFFFu);
   // Switches the blend for the following quads (reset to Alpha by begin()).
   void set_blend(BlendMode mode);
+  BlendMode blend() const { return mode_; }
   // Filtering of the following quads whatever the texture's sampler is (persists across begin() / end() until switched back):
   // Point = the centre of the texel under the pixel (classic art drawn into a PS1-resolution target: every texture nearest);
   // Box = the average of 4 x 4 point taps over the pixel's footprint (an area filter; the pixel-font glyphs in such a target).
@@ -83,7 +84,7 @@ class SpriteBatch {
   Pipeline pipeline_;
   Pipeline pipeline_depth_;
   Pipeline pipeline_mul_, pipeline_add_, pipeline_sub_, pipeline_add_depth_, pipeline_sub_depth_, pipeline_avg_depth_;
-  Pipeline pipeline_pre_;
+  Pipeline pipeline_pre_, pipeline_add_alpha_;
   BlendMode mode_ = BlendMode::Alpha;
   SpriteFilter filter_ = SpriteFilter::Sampler;
   void push_filter();

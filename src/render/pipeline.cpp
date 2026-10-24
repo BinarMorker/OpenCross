@@ -13,7 +13,7 @@ SDL_GPUColorTargetBlendState blend_state(Blend blend) {
   state.color_write_mask = SDL_GPU_COLORCOMPONENT_R | SDL_GPU_COLORCOMPONENT_G | SDL_GPU_COLORCOMPONENT_B | SDL_GPU_COLORCOMPONENT_A;
   if (blend == Blend::None) return state;
   state.enable_blend = true;
-  state.src_color_blendfactor = blend == Blend::Alpha      ? SDL_GPU_BLENDFACTOR_SRC_ALPHA
+  state.src_color_blendfactor = blend == Blend::Alpha || blend == Blend::AdditiveAlpha ? SDL_GPU_BLENDFACTOR_SRC_ALPHA
                                 : blend == Blend::Multiply ? SDL_GPU_BLENDFACTOR_DST_COLOR
                                                            : SDL_GPU_BLENDFACTOR_ONE;
   state.dst_color_blendfactor = blend == Blend::Alpha      ? SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA
@@ -27,6 +27,10 @@ SDL_GPUColorTargetBlendState blend_state(Blend blend) {
     state.src_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_DST_COLOR;
     state.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
     state.color_blend_op = SDL_GPU_BLENDOP_ADD;
+    state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
+    state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+  }
+  if (blend == Blend::AdditiveAlpha) {
     state.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ZERO;
     state.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
   }

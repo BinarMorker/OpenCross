@@ -78,6 +78,8 @@ bool SpriteBatch::init(GpuContext& ctx) {
   pd.depth_test = false;
   pd.blend = Blend::Premultiplied;
   if (!pipeline_pre_.create(ctx, pd)) return false;
+  pd.blend = Blend::AdditiveAlpha;
+  if (!pipeline_add_alpha_.create(ctx, pd)) return false;
 
   if (!create_quad_index_buffer(ctx, index_buffer_, kMaxQuads)) return false;
   return vertices_.create(ctx, sizeof(SpriteVertex) * 4 * kMaxQuads, SDL_GPU_BUFFERUSAGE_VERTEX);
@@ -95,6 +97,7 @@ void SpriteBatch::destroy() {
   pipeline_sub_depth_.destroy();
   pipeline_avg_depth_.destroy();
   pipeline_pre_.destroy();
+  pipeline_add_alpha_.destroy();
   if (ctx_) {
     if (vs_) SDL_ReleaseGPUShader(ctx_->device(), vs_);
     if (fs_) SDL_ReleaseGPUShader(ctx_->device(), fs_);
@@ -199,6 +202,7 @@ void SpriteBatch::bind_pipeline() {
                              : mode_ == BlendMode::Subtract ? (depth_mode_ ? pipeline_sub_depth_ : pipeline_sub_)
                              : mode_ == BlendMode::Average  ? (depth_mode_ ? pipeline_avg_depth_ : pipeline_)
                              : mode_ == BlendMode::Premultiplied ? pipeline_pre_
+                             : mode_ == BlendMode::AddAlpha ? pipeline_add_alpha_
                              : depth_mode_                  ? pipeline_depth_
                                                             : pipeline_;
   SDL_BindGPUGraphicsPipeline(ctx_->pass(), pipeline.handle());
@@ -208,7 +212,8 @@ void SpriteBatch::bind_pipeline() {
 
 void SpriteBatch::push_filter() {
   if (!vertex_data_) return;
-  const s32 filter_block[4] = {static_cast<s32>(filter_), 0, 0, 0};
+  // Second word: a premultiplied composite keeps texels with alpha 0 and colour > 0 (light added with an additive blend).
+  const s32 filter_block[4] = {static_cast<s32>(filter_), mode_ == BlendMode::Premultiplied ? 1 : 0, 0, 0};
   SDL_PushGPUFragmentUniformData(ctx_->cmd(), 0, filter_block, sizeof filter_block);
 }
 

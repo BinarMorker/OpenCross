@@ -62,7 +62,7 @@ std::shared_ptr<const import::SpriteFont> load(const vfs::Vfs& vfs, const std::s
 
 // ---- colours. Colour words are PS1 0x00BBGGRR; 0x80 per channel = 1.0 at k 31.
 // outline doubles as the shadow colour where the helper draws a shadow; shadow = false for H2 / H3 / H5;
-// additive (H5) is drawn with normal blending here: SpriteBatch does not support it.
+// additive (H5): both colours are added with their alpha, nothing is darkened.
 struct Ink {
   u32 normal = render::pack_rgba(233, 233, 233);
   u32 outline = render::pack_rgba(33, 33, 33);

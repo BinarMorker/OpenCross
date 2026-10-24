@@ -1,6 +1,6 @@
 #version 450
 layout(set = 2, binding = 0) uniform sampler2D tex;
-layout(set = 3, binding = 0) uniform Filter { int filter_mode; } pf;
+layout(set = 3, binding = 0) uniform Filter { int filter_mode; int keep_light; } pf;
 layout(location = 0) in vec2 uv;
 layout(location = 1) in vec4 color;
 layout(location = 0) out vec4 out_color;
@@ -31,6 +31,7 @@ void main() {
     t = texture(tex, uv);
   }
   vec4 c = t * color;
-  if (c.a <= 0.0) discard;  // keeps fully transparent texels out of the depth buffer
+  // Keeps fully transparent texels out of the depth buffer; a premultiplied composite keeps added light (alpha 0, colour > 0).
+  if (c.a <= 0.0 && (pf.keep_light == 0 || max(c.r, max(c.g, c.b)) <= 0.0)) discard;
   out_color = c;
 }

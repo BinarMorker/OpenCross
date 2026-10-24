@@ -76,6 +76,7 @@ class TextBatch {
   // px per font pixel) at RDE's exact size through the box (area) filter; every line's baseline on a target row.
   void set_pixel_grid(float gx, float gy) { grid_x_ = gx, grid_y_ = gy; }
   bool pixel_grid() const { return grid_x_ > 0 && grid_y_ > 0; }
+  SpriteBatch* sprites() const { return sprites_; }
 
   enum class Pass { Backdrop, Fill };
   // One glyph at pen position (x, y = top of the line box); move the pen with advance().

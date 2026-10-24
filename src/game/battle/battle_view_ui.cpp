@@ -45,6 +45,7 @@ const char32_t* kCommand[6][4] = {{U"Attack", U"Element", U"Defend", U"Run Away"
                                   {U"Angreifen", U"Element", U"Verteidigen", U"Fliehen"},
                                   {U"Atacar", U"Elementos", U"Defenderse", U"Escapar"},
                                   {U"攻撃", U"エレメント", U"防御", U"逃走"}};
+const char32_t* kCommandCaptionJp[4] = {U"Attack", U"Element", U"Defend", U"RunAway"};
 const char32_t* kHitCaption[6] = {U"HIT%", U"%RÉUS.", U"PREC.", U"TRF%", U"%ACIERTO", U"命中率"};
 const char32_t* kCamNormal[6] = {U"NORMAL", U"NORMALE", U"NORMALE", U"NORMAL", U"NORMAL", U"NORMAL"};
 const char32_t* kCamDynamic[6] = {U"DYNAMIC", U"DYNAMIQUE", U"DINAMICA", U"DYNAMISCH", U"DINÁMICO", U"DYNAMIC"};
@@ -1266,6 +1267,13 @@ void BattleView::build_command_ui() {
   }
   // WideHudEdges: the command box (PS1 x 28, HIT% caption to 144) moves 21 px further out so its left margin equals the field-effect ring's (7 PS1 px).
   set_group(cmd0, -1, -21 * kPs1Px);
+  // Top menu: the command under the cursor as a headline (sheet 0x00 g1..4, style 0xA) right-aligned at PS1 (300, 22); Japanese shows the
+  // English words. The right group.
+  if (ui_ == Ui::Top) {
+    const size_t caption0 = op_count();
+    btext(0xA, jp ? kCommandCaptionJp[top_cursor_ & 3] : kCommand[li][top_cursor_ & 3], 300, 22, 0);
+    set_group(caption0, 1);
+  }
   if (ui_ == Ui::Element) build_element_ui();
   if (ui_ == Ui::Target) build_target_ui();
 }

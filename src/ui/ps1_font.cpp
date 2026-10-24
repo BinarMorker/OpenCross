@@ -176,6 +176,17 @@ void FontSet::draw(int slot_index, std::u32string_view text, float x, float y, c
   render::TextStyle style;
   style.backdrop_color = ink.outline;
   style.shadow = ink.shadow;
+  // Additive (H5): dst + alpha * (normal * fill + outline * (ring - fill)) = the outline colour over the fill + ring mask, then
+  // (normal - outline) over the fill mask, both added with the colour's alpha.
+  u32 fill_colour = ink.normal;
+  render::SpriteBatch* sprites = ink.additive ? text_->sprites() : nullptr;
+  const render::BlendMode old_blend = sprites ? sprites->blend() : render::BlendMode::Alpha;
+  if (sprites) {
+    fill_colour = ink.normal & 0xFF000000u;
+    for (int shift = 0; shift < 24; shift += 8)
+      fill_colour |= static_cast<u32>(std::max(0, static_cast<int>((ink.normal >> shift) & 0xFF) - static_cast<int>((ink.outline >> shift) & 0xFF))) << shift;
+    sprites->set_blend(render::BlendMode::AddAlpha);
+  }
   const float line_spacing = face->font->line_spacing;
   for (render::TextBatch::Pass pass : {render::TextBatch::Pass::Backdrop, render::TextBatch::Pass::Fill}) {
     float px = 0, py = 0;
@@ -189,10 +200,11 @@ void FontSet::draw(int slot_index, std::u32string_view text, float x, float y, c
       const import::SfGlyph* glyph = face->font->find_or_default(static_cast<u32>(ch));
       if (!glyph) continue;
       px = std::max(px + glyph->x_offset, 0.0f);
-      text_->draw_glyph(face->id, ch, (x + (px - glyph->x_offset) * scale) * k, (y + py * scale) * k, ink.normal, scale * k, pass, style);
+      text_->draw_glyph(face->id, ch, (x + (px - glyph->x_offset) * scale) * k, (y + py * scale) * k, fill_colour, scale * k, pass, style);
       px += static_cast<float>(glyph->width()) + glyph->x_advance;
     }
   }
+  if (sprites) sprites->set_blend(old_blend);
 }
 
 }  // namespace oc::ui::font
