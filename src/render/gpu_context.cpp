@@ -297,6 +297,17 @@ void GpuContext::set_scissor(const Rect& rect) {
   SDL_SetGPUScissor(pass_, &scissor);
 }
 
+SDL_GPUTransferBuffer* GpuContext::band_staging() {
+  if (!band_staging_ && device_) {
+    SDL_GPUTransferBufferCreateInfo info{};
+    info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    info.size = kBandBytes;
+    band_staging_ = SDL_CreateGPUTransferBuffer(device_, &info);
+    if (!band_staging_) log::error("band staging buffer: {}", SDL_GetError());
+  }
+  return band_staging_;
+}
+
 void GpuContext::upload(std::span<const UploadOp> ops) {
   if (ops.empty() || !device_) return;
   SDL_GPUCommandBuffer* cmd = in_frame_ ? upload_cmd() : SDL_AcquireGPUCommandBuffer(device_);
@@ -416,6 +427,8 @@ void GpuContext::shutdown() {
   SDL_WaitForGPUIdle(device_);
   if (upload_cmd_) SDL_CancelGPUCommandBuffer(upload_cmd_);
   upload_cmd_ = nullptr;
+  if (band_staging_) SDL_ReleaseGPUTransferBuffer(device_, band_staging_);
+  band_staging_ = nullptr;
   if (white_texture_) SDL_ReleaseGPUTexture(device_, white_texture_);
   if (white_sampler_) SDL_ReleaseGPUSampler(device_, white_sampler_);
   white_texture_ = nullptr;

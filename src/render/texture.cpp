@@ -44,15 +44,12 @@ bool decode_image(ByteSpan file, DecodedImage& out) {
   return true;
 }
 
-bool Texture::create(GpuContext& ctx, u32 width, u32 height, TextureFormat format, const void* pixels, UploadBatch* batch, bool mips) {
+bool Texture::create_image(GpuContext& ctx, u32 width, u32 height, TextureFormat format, bool mips) {
   destroy();
   device_ = ctx.device();
   width_ = width;
   height_ = height;
   bytes_per_pixel_ = format == TextureFormat::Rgba8 ? 4 : 1;
-  const u32 pitch = row_pitch(width * bytes_per_pixel_);
-  const u32 bytes = pitch * height;
-
   SDL_GPUTextureCreateInfo info{};
   info.type = SDL_GPU_TEXTURETYPE_2D;
   info.format = format == TextureFormat::Rgba8 ? SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM : SDL_GPU_TEXTUREFORMAT_R8_UNORM;
@@ -68,7 +65,13 @@ bool Texture::create(GpuContext& ctx, u32 width, u32 height, TextureFormat forma
     destroy();
     return false;
   }
+  return true;
+}
 
+bool Texture::create(GpuContext& ctx, u32 width, u32 height, TextureFormat format, const void* pixels, UploadBatch* batch, bool mips) {
+  if (!create_image(ctx, width, height, format, mips)) return false;
+  const u32 pitch = row_pitch(width * bytes_per_pixel_);
+  const u32 bytes = pitch * height;
   SDL_GPUTransferBufferCreateInfo transfer_info{};
   transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
   transfer_info.size = bytes;
@@ -92,6 +95,50 @@ bool Texture::create(GpuContext& ctx, u32 width, u32 height, TextureFormat forma
   op.mips = mips;
   if (batch) batch->ops_.push_back(op);
   else ctx.upload(op);
+  return true;
+}
+
+bool Texture::create_blocking(GpuContext& ctx, u32 width, u32 height, TextureFormat format, const void* pixels) {
+  if (!create_image(ctx, width, height, format, false)) return false;
+  const u32 row_bytes = width * bytes_per_pixel_, pitch = row_pitch(row_bytes);
+  const u32 band_rows = GpuContext::kBandBytes / pitch;
+  std::lock_guard lock(ctx.band_mutex());
+  SDL_GPUTransferBuffer* staging = ctx.band_staging();
+  if (!staging || band_rows == 0) {
+    destroy();
+    return false;
+  }
+  for (u32 y = 0; y < height; y += band_rows) {
+    const u32 rows = std::min(band_rows, height - y);
+    void* mapped = SDL_MapGPUTransferBuffer(device_, staging, false);
+    if (!mapped) {
+      log::error("texture {}x{}: band staging map: {}", width, height, SDL_GetError());
+      destroy();
+      return false;
+    }
+    copy_rows(mapped, static_cast<const u8*>(pixels) + static_cast<size_t>(y) * row_bytes, row_bytes, pitch, rows);
+    SDL_UnmapGPUTransferBuffer(device_, staging);
+    SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(device_);
+    if (!cmd) {
+      log::error("texture {}x{}: SDL_AcquireGPUCommandBuffer: {}", width, height, SDL_GetError());
+      destroy();
+      return false;
+    }
+    SDL_GPUCopyPass* pass = SDL_BeginGPUCopyPass(cmd);
+    const SDL_GPUTextureTransferInfo source{staging, 0, pitch / bytes_per_pixel_, rows};
+    const SDL_GPUTextureRegion destination{texture_, 0, 0, 0, y, 0, width, rows, 1};
+    SDL_UploadToGPUTexture(pass, &source, &destination, false);
+    SDL_EndGPUCopyPass(pass);
+    // The staging buffer is rewritten by the next band: wait for this copy.
+    SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+    if (!fence) {
+      log::error("texture {}x{}: band submit: {}", width, height, SDL_GetError());
+      destroy();
+      return false;
+    }
+    SDL_WaitForGPUFences(device_, true, &fence, 1);
+    SDL_ReleaseGPUFence(device_, fence);
+  }
   return true;
 }
 

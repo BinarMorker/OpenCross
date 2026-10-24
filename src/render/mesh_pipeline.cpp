@@ -18,31 +18,39 @@ std::vector<u8> bleed_transparent(const std::vector<u8>& src, u32 w, u32 h) {
   std::vector<u8> out(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(std::min<size_t>(src.size(), size_t(w) * h * 4)));
   if (out.size() < size_t(w) * h * 4) return out;
   std::vector<u8> known(size_t(w) * h);
-  for (size_t i = 0; i < known.size(); ++i) known[i] = out[i * 4 + 3] != 0;
-  for (int pass = 0; pass < 2; ++pass) {
-    std::vector<u8> next = out, next_known = known;
-    for (u32 y = 0; y < h; ++y)
-      for (u32 x = 0; x < w; ++x) {
-        const size_t i = size_t(y) * w + x;
-        if (known[i]) continue;
-        int neighbours = 0, r = 0, g = 0, b = 0;
-        for (int dy = -1; dy <= 1; ++dy)
-          for (int dx = -1; dx <= 1; ++dx) {
-            const int nx = int(x) + dx, ny = int(y) + dy;
-            if (nx < 0 || ny < 0 || nx >= int(w) || ny >= int(h)) continue;
-            const size_t j = size_t(ny) * w + size_t(nx);
-            if (!known[j]) continue;
-            r += out[j * 4], g += out[j * 4 + 1], b += out[j * 4 + 2];
-            ++neighbours;
-          }
-        if (neighbours == 0) continue;
-        next[i * 4] = static_cast<u8>(r / neighbours);
-        next[i * 4 + 1] = static_cast<u8>(g / neighbours);
-        next[i * 4 + 2] = static_cast<u8>(b / neighbours);
-        next_known[i] = 1;
-      }
-    out.swap(next);
-    known.swap(next_known);
+  // Only the transparent texels are visited; a pass reads the previous pass's colours and applies its fills at the end.
+  std::vector<size_t> unknown;
+  for (size_t i = 0; i < known.size(); ++i) {
+    known[i] = out[i * 4 + 3] != 0;
+    if (!known[i]) unknown.push_back(i);
+  }
+  struct Fill {
+    size_t index;
+    u8 rgb[3];
+  };
+  std::vector<Fill> fills;
+  for (int pass = 0; pass < 2 && !unknown.empty(); ++pass) {
+    fills.clear();
+    for (size_t i : unknown) {
+      const int x = static_cast<int>(i % w), y = static_cast<int>(i / w);
+      int neighbours = 0, r = 0, g = 0, b = 0;
+      for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+          const int nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= int(w) || ny >= int(h)) continue;
+          const size_t j = size_t(ny) * w + size_t(nx);
+          if (!known[j]) continue;
+          r += out[j * 4], g += out[j * 4 + 1], b += out[j * 4 + 2];
+          ++neighbours;
+        }
+      if (neighbours == 0) continue;
+      fills.push_back({i, {static_cast<u8>(r / neighbours), static_cast<u8>(g / neighbours), static_cast<u8>(b / neighbours)}});
+    }
+    for (const Fill& fill : fills) {
+      std::memcpy(&out[fill.index * 4], fill.rgb, 3);
+      known[fill.index] = 1;
+    }
+    std::erase_if(unknown, [&](size_t i) { return known[i] != 0; });
   }
   return out;
 }

@@ -31,6 +31,9 @@ class Texture {
   // with `mips` a full mip chain is generated.
   bool create(GpuContext& ctx, u32 width, u32 height, TextureFormat format, const void* pixels, UploadBatch* batch = nullptr,
               bool mips = false);
+  // For a worker thread: creates the texture and uploads `pixels` in bands through GpuContext::band_staging(), on its own command buffers,
+  // returning when the copies are done (nothing is recorded on the render thread's command buffers, no staging memory is released there).
+  bool create_blocking(GpuContext& ctx, u32 width, u32 height, TextureFormat format, const void* pixels);
   void destroy();
 
   // Streaming path: re-uploads the whole image (tightly packed, same size/format as create()) through a persistent staging buffer.
@@ -42,6 +45,9 @@ class Texture {
   u32 height() const { return height_; }
 
  private:
+  // The GPU image alone (no pixels yet).
+  bool create_image(GpuContext& ctx, u32 width, u32 height, TextureFormat format, bool mips);
+
   SDL_GPUDevice* device_ = nullptr;
   SDL_GPUTexture* texture_ = nullptr;
   SDL_GPUTransferBuffer* staging_ = nullptr;

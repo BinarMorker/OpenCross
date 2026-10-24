@@ -29,7 +29,7 @@ ShelfPacking shelf_pack(const std::vector<std::array<int, 2>>& sizes, int pad);
 // by a UV-scroll emitter (op 35 bit 0) get the op-36 texture window of their page (win 0 = the whole page; clipped to the atlas) so the window wrap keeps working. Pure CPU; call once per asset.
 void bake_object_textures(assets::StageAsset& stage);
 
-// A tile's replacement: fills w / h / rgba (any size) and returns true, or returns false (the tile stays).
+// A tile's replacement: fills w / h / rgba (any size) and returns true, or returns false (the tile stays). Called for several tiles at once from worker threads.
 using TileReplacer = std::function<bool(const assets::StageTile& tile, u32& w, u32& h, std::vector<u8>& rgba)>;
 // Re-composes the object images that contain a replaced tile: scale S = the largest (replacement size / tile size) among the object's tiles (un-replaced tiles
 // count 1 and are enlarged nearest), slots are w * S x h * S, UVs follow (uv_scale = texel size at the new scale). Call once, right after the bake.

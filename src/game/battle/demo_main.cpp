@@ -16,16 +16,20 @@
 //   --keys "Down:200,Right:240"  a key press (SDL scancode name) at that frame
 //   --auto  feeds a confirm every 12 frames (Attack, Weak, target, repeat) for smoke tests
 //   --bauto the battle plays itself (BattleView::set_auto); --ui <1|2|3> opens the element grid / attack chain / element targeting
+//   --mods  the ini's enabled mods in Modded art (texture replacements included), as the game installs them
+//   --sliced  the load in 3 ms slices per frame (the field encounter's way); logs the longest slice
 // Keys: arrows/WASD + Enter/Z confirm + X back, Q/E switch PC, F1 art mode. --shot writes battle_shot.png after N frames and exits.
 #include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -37,13 +41,16 @@
 #include "platform/paths.h"
 #include "platform/window.h"
 #include "render/gpu_context.h"
+#include "render/imgui_mods_tab.h"
+#include "render/texture_registry.h"
+#include "vfs/mods.h"
 
 int ocbattleview_main(int argc, char** argv) {
   using namespace oc;
   int scene = 0, shot_frames = -1;
   bool hd = true, auto_keys = false, bauto = false;
   int ui_mode = 0, cast_element = 0, cast_at = -1;
-  bool fx_on = true, enemy_cast = false, overlay = false;
+  bool fx_on = true, enemy_cast = false, overlay = false, with_mods = false, sliced = false;
   std::vector<int> party_ids;
   int weapon = -1, field = -1, auto_frames = 1 << 30, trans_frame = -1;
   int caster = -1, casttgt = -1;
@@ -108,6 +115,8 @@ int ocbattleview_main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--field") && i + 1 < argc) field = std::atoi(argv[++i]);
     else if (!std::strcmp(argv[i], "--trans") && i + 1 < argc) trans_frame = std::atoi(argv[++i]);
     else if (!std::strcmp(argv[i], "--cam")) overlay = true;
+    else if (!std::strcmp(argv[i], "--mods")) with_mods = true;
+    else if (!std::strcmp(argv[i], "--sliced")) sliced = true;
     else if (!std::strcmp(argv[i], "--nofx")) fx_on = false;
     else if (!std::strcmp(argv[i], "--shotevery") && i + 1 < argc) shot_every = std::atoi(argv[++i]);
     else if (!std::strcmp(argv[i], "--shotfrom") && i + 1 < argc) shot_from = std::atoi(argv[++i]);
@@ -142,6 +151,13 @@ int ocbattleview_main(int argc, char** argv) {
   }
   // In HD mode cdrom2 overrides cdrom.
   files.set_hd_mode(hd);
+  vfs::ModManager mods;
+  if (with_mods) {
+    mods.scan(files, files.game_dir() / "mods", render::mod_prefs(config));
+    mods.apply(files, vfs::ModArt::Modded);
+    render::texture_registry::bind(&files);
+    render::texture_registry::configure({false, true});
+  }
   data::GameTables tables;
   std::string err;
   if (!tables.load(files, &err)) {
@@ -195,11 +211,24 @@ int ocbattleview_main(int argc, char** argv) {
       mixer = &trace_mixer;
       trace_mixer.start_capture((exe / "sfx_trace.wav").string());
     }
-    if (!view.init(ctx, files, sprites, meshes, tables, mixer) || !view.start(scene, party, [&] {
-          game::BattleView::StartOptions options;
-          options.battlefield = field;
-          return options;
-        }())) {
+    game::BattleView::StartOptions options;
+    options.battlefield = field;
+    bool view_ok = view.init(ctx, files, sprites, meshes, tables, mixer);
+    // --sliced: the load in 3 ms slices, one per 60 Hz frame, as the field encounter runs it behind the transition.
+    if (view_ok && sliced && view.begin_load(scene, party, options)) {
+      double longest = 0.0;
+      int slices = 0;
+      const auto t0 = std::chrono::steady_clock::now();
+      for (bool done = false; !done; ++slices) {
+        const auto t_slice = std::chrono::steady_clock::now();
+        done = view.load_step(3.0);
+        longest = std::max(longest, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_slice).count());
+        if (!done) std::this_thread::sleep_for(std::chrono::milliseconds(16));
+      }
+      log::info("sliced load: {} slices over {:.0f} ms, longest slice {:.1f} ms", slices,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), longest);
+    }
+    if (!view_ok || !view.start(scene, party, options)) {
       log::error("battle view failed to start");
       rc = 1;
     } else {

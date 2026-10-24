@@ -24,7 +24,31 @@ bool StageScene::load(render::GpuContext& ctx, render::StagePipeline& pipe, Byte
   }
 }
 
-// The load in phases: 0 decode the stage (CPU), 1 mesh textures (a few per call), 2 mesh buffers + ground,
+// Phase 0 of the load, on a worker thread: decode, tile library + per-object textures, the mods' tile replacements (the object images re-composed), then
+// the GPU textures, created and uploaded.
+StageScene::Prepared StageScene::prepare(render::GpuContext& ctx, const Bytes& prd, const Bytes& ctd, const std::string& group) {
+  Prepared out;
+  out.generation = render::texture_registry::generation();
+  auto st = import::load_stage(ByteSpan(prd), ByteSpan(ctd), &out.error);
+  if (!st) return out;
+  // Debug: OC_STAGE_ONLY keeps only the parts named in the comma list.
+  if (const char* only = std::getenv("OC_STAGE_ONLY")) {
+    const std::string keep = std::string(",") + only + ",";
+    std::erase_if(st->parts, [&](const assets::StagePart& part) { return keep.find("," + part.name + ",") == std::string::npos; });
+  }
+  // Debug: OC_NO_BAKE skips the per-object bake (draws the raw atlases; for before / after pixel comparisons).
+  static const bool no_bake = std::getenv("OC_NO_BAKE") != nullptr;
+  if (!no_bake) {
+    render::bake_object_textures(*st);
+    render::apply_tile_textures(*st, group);
+    out.baked = true;
+  }
+  out.textures = render::prepare_stage_textures(ctx, *st);
+  out.stage = std::move(*st);
+  return out;
+}
+
+// The load in phases: 0 decode the stage (worker thread), 1 mesh textures (a few per call), 2 mesh buffers + ground,
 // 3 object scripts + sheet atlas start, 4 sheet atlases (a few per call), 5 emitters + pre-roll. `prd` / `ctd` must stay valid until load_step() stops returning More.
 void StageScene::load_begin(render::GpuContext& ctx, render::StagePipeline& pipe, ByteSpan prd, ByteSpan ctd, render::SpriteBatch* sprites,
                             std::vector<const assets::RoomEffects*> libs) {
@@ -51,24 +75,20 @@ StageScene::LoadResult StageScene::load_step(double budget_ms, std::string* err)
   const ByteSpan prd = ld_.prd, ctd = ld_.ctd;
   render::SpriteBatch* sprites = ld_.sprites;
   if (ld_.phase == 0) {
-  std::string error;
-  auto st = import::load_stage(prd, ctd, &error);
-  if (!st) return fail(error);
-  // Debug: OC_STAGE_ONLY keeps only the parts named in the comma list.
-  if (const char* only = std::getenv("OC_STAGE_ONLY")) {
-    const std::string keep = std::string(",") + only + ",";
-    std::erase_if(st->parts, [&](const assets::StagePart& part) { return keep.find("," + part.name + ",") == std::string::npos; });
-  }
-  // Debug: OC_NO_BAKE skips the per-object bake (draws the raw atlases; for before / after pixel comparisons).
-  static const bool no_bake = std::getenv("OC_NO_BAKE") != nullptr;
-  if (!no_bake) {
-    // Tile library + per-object textures, then replace tiles and re-compose the object images.
-    render::bake_object_textures(*st);
-    render::apply_tile_textures(*st, ld_.pipe->scene_group());
+  // The worker owns copies of the files: a load abandoned mid-way may free the caller's.
+  if (!ld_.prepared.valid())
+    ld_.prepared = std::async(std::launch::async, [ctx = ctx_, prd_copy = Bytes(prd.begin(), prd.end()), ctd_copy = Bytes(ctd.begin(), ctd.end()), group = ld_.pipe->scene_group()] {
+      return prepare(*ctx, prd_copy, ctd_copy, group);
+    });
+  if (budget_ms < 1e6 && ld_.prepared.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return LoadResult::Wait;
+  Prepared prepared = ld_.prepared.get();
+  if (!prepared.stage) return fail(prepared.error);
+  if (prepared.baked) {
     tile_group_ = ld_.pipe->scene_group();
-    tile_gen_ = render::texture_registry::generation();
+    tile_gen_ = prepared.generation;
   }
-  asset_ = std::make_shared<assets::StageAsset>(std::move(*st));
+  ld_.textures = std::move(prepared.textures);
+  asset_ = std::make_shared<assets::StageAsset>(std::move(*prepared.stage));
   // Stage light for the unit shadows: the `sun0` object's position; without one the default stays:
   // (0, -0xC00, 0) in PS1 space = 3072 units above the arena centre.
   light_ = {0.0f, 3072.0f, 0.0f};
@@ -87,6 +107,7 @@ StageScene::LoadResult StageScene::load_step(double budget_ms, std::string* err)
   if (ld_.phase == 1) {
     if (!ld_.mesh_job) {
       ld_.mesh_job = std::make_unique<render::StageCreateJob>(ld_.pipe->create_begin());
+      ld_.mesh_job->prepared = std::move(ld_.textures);
     }
     if (!ld_.pipe->create_textures(*ld_.mesh_job, *asset_, std::max(0.5, budget_ms - spent()))) return LoadResult::More;
     ld_.phase = 2;
@@ -264,6 +285,7 @@ void StageScene::clear() {
   ground_ = effects::FxGround{};
   ground_part_ = -1;
   ramp_ = BiasRamp{};
+  // An abandoned load waits here for its worker (the future's destructor).
   ld_ = LoadState{};
   em_.reset();
   gpu_.clear();

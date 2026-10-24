@@ -151,6 +151,12 @@ struct StagePrim {
   bool two_sided = false;
 };
 
+// The atlas and object textures of a baked stage made on a worker thread, in StageMesh::sets order (atlases, then objects); null = made at upload.
+using StageTextures = std::vector<std::unique_ptr<Texture>>;
+// For a worker thread: fills transparent texels (bleed_transparent, concurrently), then creates and uploads every texture of a baked stage
+// (Texture::create_blocking). Empty for an asset without object textures (its atlases go through the texture registry at upload).
+StageTextures prepare_stage_textures(GpuContext& ctx, const assets::StageAsset& stage);
+
 // State of a sliced StagePipeline::create.
 struct StageCreateJob {
   std::unique_ptr<StageMesh> mesh;
@@ -158,6 +164,8 @@ struct StageCreateJob {
   size_t next = 0;
   // Texture dump / replace group when the asset has none (StagePipeline::set_scene_group).
   std::string group;
+  // Textures made off the render thread (prepare_stage_textures), taken by create_textures.
+  StageTextures prepared;
 };
 
 class StagePipeline {

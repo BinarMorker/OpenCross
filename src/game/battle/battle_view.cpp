@@ -436,7 +436,12 @@ void BattleView::run_load_step(LoadJob& job) {
         stage_scene_.load_begin(*ctx_, stage_pipe_, *prd, ctd, sprites_, std::move(sheet_libs));
         job.stage_begun = true;
       }
-    const auto result = stage_scene_.load_step(kStageBudgetMs, &err);
+    const auto result = stage_scene_.load_step(job.block ? 1e9 : kStageBudgetMs, &err);
+    // The stage decode is still running on its worker: the same step on a later frame.
+    if (result == StageScene::LoadResult::Wait) {
+      job.wait = true;
+      return;
+    }
     // The same step again next call (the loop in load_step() decides by the frame budget).
     if (result == StageScene::LoadResult::More) {
       job.again = true;

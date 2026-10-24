@@ -9,6 +9,7 @@
 #include <cstddef>
 
 #include "core/log.h"
+#include "core/parallel.h"
 #include "render/mesh_pipeline.h"  // bleed_transparent
 #include "render/ps1_jitter.h"
 #include "render/stage_tiles.h"
@@ -310,6 +311,13 @@ bool StagePipeline::create_textures(StageCreateJob& job, const assets::StageAsse
   // (assets::StageObjectTexture), which are what the dump / replace names: StageMesh::sets = [atlases..., objects..., white].
   const size_t atlases = stage.textures.size();
   for (; job.next < atlases + stage.object_textures.size(); ++job.next) {
+    // Made and uploaded by the worker.
+    if (job.next < job.prepared.size() && job.prepared[job.next]) {
+      mesh->sets.push_back(make_set(*job.prepared[job.next], false));
+      mesh->sets_linear.push_back(make_set(*job.prepared[job.next], true));
+      mesh->textures.push_back(std::move(job.prepared[job.next]));
+      continue;
+    }
     if (job.next > 0 && std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() >= budget_ms) {
       batch.flush(*ctx_);
       return false;
@@ -356,6 +364,26 @@ bool StagePipeline::create_textures(StageCreateJob& job, const assets::StageAsse
   }
   batch.flush(*ctx_);
   return true;
+}
+
+StageTextures prepare_stage_textures(GpuContext& ctx, const assets::StageAsset& stage) {
+  StageTextures out;
+  if (stage.object_textures.empty()) return out;
+  const size_t atlases = stage.textures.size();
+  const auto image = [&](size_t i) -> const import::Image& { return i >= atlases ? stage.object_textures[i - atlases].image : stage.textures[i].image; };
+  std::vector<std::vector<u8>> bled(atlases + stage.object_textures.size());
+  parallel_for(bled.size(), [&](size_t i) {
+    const import::Image& img = image(i);
+    if (img.width && img.height && !img.indexed && img.pixels.size() >= size_t(img.width) * img.height * 4) bled[i] = bleed_transparent(img.pixels, img.width, img.height);
+  });
+  out.resize(bled.size());
+  for (size_t i = 0; i < bled.size(); ++i) {
+    if (bled[i].empty()) continue;
+    auto tex = std::make_unique<Texture>();
+    if (tex->create_blocking(ctx, image(i).width, image(i).height, TextureFormat::Rgba8, bled[i].data())) out[i] = std::move(tex);
+    bled[i] = {};
+  }
+  return out;
 }
 
 bool StagePipeline::reload_textures(StageMesh& mesh, const assets::StageAsset& stage) {

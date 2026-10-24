@@ -12,6 +12,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <span>
 #include <string>
 #include <vector>
@@ -140,6 +141,12 @@ class GpuContext {
   void upload(std::span<const UploadOp> ops);
   void upload(const UploadOp& op) { upload(std::span<const UploadOp>(&op, 1)); }
 
+  // The staging buffer of the uploads done off the render thread (Texture::create_blocking), kBandBytes, created on first use and kept until
+  // shutdown, so no large staging memory is ever released on the render thread. Hold band_mutex() while it is mapped or in flight.
+  static constexpr u32 kBandBytes = 32u << 20;
+  SDL_GPUTransferBuffer* band_staging();
+  std::mutex& band_mutex() { return band_mutex_; }
+
   SDL_GPUDevice* device() const { return device_; }
   // The frame's draw command buffer and the render pass in progress (null outside a frame). Uniform pushes go to cmd().
   SDL_GPUCommandBuffer* cmd() const { return cmd_; }
@@ -180,6 +187,8 @@ class GpuContext {
 
   SDL_GPUCommandBuffer* cmd_ = nullptr;
   SDL_GPUCommandBuffer* upload_cmd_ = nullptr;
+  std::mutex band_mutex_;
+  SDL_GPUTransferBuffer* band_staging_ = nullptr;
   SDL_GPURenderPass* pass_ = nullptr;
   Extent pass_extent_{};
   u32 frame_index_ = 0;

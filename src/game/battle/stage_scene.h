@@ -11,8 +11,10 @@
 // zero at the rim. The light is the stage's `sun0` object position, by default a point 3072 units above the
 // arena centre, so shadows point away from the centre. The shadow fades with the unit's height above the floor.
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,9 +46,10 @@ class StageScene {
   // battle.prd's resident packs and effect/particle.prd): the libraries are searched after the stage's own entries.
   bool load(render::GpuContext& ctx, render::StagePipeline& pipe, ByteSpan prd, ByteSpan ctd, std::string* err = nullptr,
             render::SpriteBatch* sprites = nullptr, std::vector<const assets::RoomEffects*> libs = {});
-  // The same load in phases: load_begin(), then load_step(budget_ms) every frame until it stops returning More (a phase is never split,
-  // the sheet atlases are). `prd` / `ctd` must outlive the calls. Failed: the scene is cleared and `err` set.
-  enum class LoadResult { More, Done, Failed };
+  // The same load in phases: load_begin(), then load_step(budget_ms) every frame until it stops returning More / Wait (a phase is never split,
+  // the sheet atlases are). `prd` / `ctd` must outlive the calls. Failed: the scene is cleared and `err` set. The stage decode (with the mods'
+  // tile replacements) runs on a worker thread: Wait = it is still running, call again next frame; a budget >= 1e6 ms waits for it instead.
+  enum class LoadResult { More, Wait, Done, Failed };
   void load_begin(render::GpuContext& ctx, render::StagePipeline& pipe, ByteSpan prd, ByteSpan ctd, render::SpriteBatch* sprites = nullptr,
                   std::vector<const assets::RoomEffects*> libs = {});
   LoadResult load_step(double budget_ms, std::string* err = nullptr);
@@ -137,9 +140,23 @@ class StageScene {
  private:
   const Footprint& footprint(const assets::ModelAsset* model);
 
+  // The worker's part of the load: the decoded, baked and tile-replaced stage and its textures.
+  struct Prepared {
+    std::optional<assets::StageAsset> stage;
+    std::string error;
+    // False under OC_NO_BAKE (no tile library: no live tile replacement).
+    bool baked = false;
+    // texture_registry::generation() before the replacements were read.
+    unsigned generation = 0;
+    render::StageTextures textures;
+  };
+  static Prepared prepare(render::GpuContext& ctx, const Bytes& prd, const Bytes& ctd, const std::string& group);
   struct LoadState {
     bool on = false;
     int phase = 0;
+    std::future<Prepared> prepared;
+    // Prepared::textures until the mesh job takes them.
+    render::StageTextures textures;
     render::StagePipeline* pipe = nullptr;
     std::unique_ptr<render::StageCreateJob> mesh_job;
     ByteSpan prd, ctd;

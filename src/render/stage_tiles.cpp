@@ -9,6 +9,7 @@
 #include <tuple>
 #include <unordered_map>
 
+#include "core/parallel.h"
 #include "render/texture_registry.h"
 
 namespace oc::render {
@@ -361,15 +362,17 @@ int recompose_object_textures(assets::StageAsset& stage, const TileReplacer& rep
     u32 w = 0, h = 0;
     std::vector<u8> rgba;
   };
+  // The replacements are decoded concurrently (a mod's PNGs can be thousands of texels a side).
   std::vector<Repl> repl(stage.tiles.size());
-  int count = 0;
-  for (size_t i = 0; i < stage.tiles.size(); ++i) {
+  parallel_for(stage.tiles.size(), [&](size_t i) {
     Repl& entry = repl[i];
     entry.have = replace(stage.tiles[i], entry.w, entry.h, entry.rgba) && entry.w && entry.h && entry.rgba.size() >= size_t(entry.w) * entry.h * 4;
-    count += entry.have ? 1 : 0;
-  }
+  });
+  const int count = static_cast<int>(std::count_if(repl.begin(), repl.end(), [](const Repl& entry) { return entry.have; }));
   constexpr int kPad = 1;
-  for (assets::StageObjectTexture& obj : stage.object_textures) {
+  // One object per part: each object writes only its own image and its own part's vertices.
+  parallel_for(stage.object_textures.size(), [&](size_t oi) {
+    assets::StageObjectTexture& obj = stage.object_textures[oi];
     // Always composed from the pristine state (the tiles' original images, the base layout and base UVs recorded by the bake), so a re-run never accumulates
     // scale and "nothing replaced" restores the original image bit for bit.
     bool any = false;
@@ -381,7 +384,7 @@ int recompose_object_textures(assets::StageAsset& stage, const TileReplacer& rep
       scale = std::max({scale, static_cast<double>(entry.w) / slot.w, static_cast<double>(entry.h) / slot.h});
     }
     // Untouched and still original: skip.
-    if (!any && !obj.composed) continue;
+    if (!any && !obj.composed) return;
     std::vector<std::array<int, 2>> sizes;
     for (const auto& slot : obj.base_slots) sizes.push_back({std::max(1, static_cast<int>(std::lround(slot.w * scale))), std::max(1, static_cast<int>(std::lround(slot.h * scale)))});
     const ShelfPacking pk = shelf_pack(sizes, kPad);
@@ -400,13 +403,20 @@ int recompose_object_textures(assets::StageAsset& stage, const TileReplacer& rep
       ns[i].dy = pk.pos[i][1];
       ns[i].w = w;
       ns[i].h = h;
+      // Nearest resample (identity at equal size): the source column / row of every destination column / row, gutter included.
+      std::vector<int> src_x(static_cast<size_t>(w + 2 * kPad)), src_y(static_cast<size_t>(h + 2 * kPad));
+      for (int x = 0; x < w + 2 * kPad; ++x) {
+        const int cx = std::clamp(x - kPad, 0, w - 1);
+        src_x[static_cast<size_t>(x)] = std::min(sw - 1, static_cast<int>((static_cast<long long>(cx) * 2 + 1) * sw / (2LL * w)));
+      }
+      for (int y = 0; y < h + 2 * kPad; ++y) {
+        const int cy = std::clamp(y - kPad, 0, h - 1);
+        src_y[static_cast<size_t>(y)] = std::min(sh - 1, static_cast<int>((static_cast<long long>(cy) * 2 + 1) * sh / (2LL * h)));
+      }
       for (int y = 0; y < h + 2 * kPad; ++y)
-        for (int x = 0; x < w + 2 * kPad; ++x) {
-          // Nearest resample (identity at equal size).
-          const int cx = std::clamp(x - kPad, 0, w - 1), cy = std::clamp(y - kPad, 0, h - 1);
-          const int px = std::min(sw - 1, static_cast<int>((static_cast<long long>(cx) * 2 + 1) * sw / (2LL * w))), py = std::min(sh - 1, static_cast<int>((static_cast<long long>(cy) * 2 + 1) * sh / (2LL * h)));
-          copy_px(img.pixels, img.width, ns[i].dx + x, ns[i].dy + y, &src[(static_cast<size_t>(py) * static_cast<size_t>(sw) + static_cast<size_t>(px)) * 4]);
-        }
+        for (int x = 0; x < w + 2 * kPad; ++x)
+          copy_px(img.pixels, img.width, ns[i].dx + x, ns[i].dy + y,
+                  &src[(static_cast<size_t>(src_y[static_cast<size_t>(y)]) * static_cast<size_t>(sw) + static_cast<size_t>(src_x[static_cast<size_t>(x)])) * 4]);
     }
     // UVs: base UV -> base object texel -> (slot, tile texel) -> the new layout
     const float biw = static_cast<float>(obj.base_w), bih = static_cast<float>(obj.base_h);
@@ -438,7 +448,7 @@ int recompose_object_textures(assets::StageAsset& stage, const TileReplacer& rep
     obj.image = std::move(img);
     obj.scale = static_cast<float>(scale);
     obj.composed = any;
-  }
+  });
   return count;
 }
 
