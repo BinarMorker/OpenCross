@@ -13,6 +13,39 @@ namespace oc::game {
 
 using namespace bv;
 
+namespace {
+
+// Prism weapon lighting (GTE NCCS, no specular). Three light rows turn every tick by angles x += 0x20, z += 0x40 of 4096
+// (RotMatrixZYX applied to (0, 1, 0), (-0.707, -0.707, 0), (0.707, -0.707, 0)); the light matrix is the weapon's PS1 world rotation W times
+// those rows and it lights the NEGATED vertex normal; the colour matrix sends light 0 to blue, 1 to green, 2 to red at 0.75; back colour 0.75.
+// `world` maps the weapon mesh to this y-up world (W = world with its y row negated); the shader dots dir_i with world * normal, so
+// dir_i = -world^-T * (W L)_i, and world^-T = world / scale^2 for a uniformly scaled rotation.
+void prism_weapon_light(const render::Mat4& world, float ticks, render::MeshPipeline::DrawParams& wd) {
+  constexpr float kTurn = 360.0f / 4096.0f, kDiag = 2896.0f / 4096.0f;
+  constexpr float kBase[3][3] = {{0.0f, 1.0f, 0.0f}, {-kDiag, -kDiag, 0.0f}, {kDiag, -kDiag, 0.0f}};
+  const assets::Mat3 spin = assets::rotation_zyx({std::fmod(32.0f * ticks, 4096.0f) * kTurn, 0.0f, std::fmod(64.0f * ticks, 4096.0f) * kTurn});
+  float rows[3][3];
+  for (size_t j = 0; j < 3; ++j)
+    for (size_t k = 0; k < 3; ++k) rows[j][k] = spin[k * 3] * kBase[j][0] + spin[k * 3 + 1] * kBase[j][1] + spin[k * 3 + 2] * kBase[j][2];
+  const float scale2 = world.at(0, 0) * world.at(0, 0) + world.at(1, 0) * world.at(1, 0) + world.at(2, 0) * world.at(2, 0);
+  if (scale2 <= 0.0f) return;
+  wd.light.on = true;
+  wd.light.spec = false;
+  for (int i = 0; i < 3; ++i) {
+    float llm[3];
+    for (size_t k = 0; k < 3; ++k) {
+      llm[k] = 0.0f;
+      for (int j = 0; j < 3; ++j) llm[k] += (i == 1 ? -world.at(i, j) : world.at(i, j)) * rows[j][k];
+    }
+    for (int r = 0; r < 3; ++r)
+      wd.light.dir[i][r] = -(world.at(r, 0) * llm[0] + world.at(r, 1) * llm[1] + world.at(r, 2) * llm[2]) / scale2;
+    wd.light.bk[i] = 0.75f;
+    for (size_t c = 0; c < 3; ++c) wd.light.rgb[i][c] = c == static_cast<size_t>(2 - i) ? 0.75f : 0.0f;
+  }
+}
+
+}  // namespace
+
 void BattleView::replay(const render::Frame&, const render::Letterbox& lb, float alpha) {
   // Canvas unit -> pixels (1280 canvas = 4 x the 320 layer width).
   const float canvas_scale = lb.scale / 4.0f;
@@ -403,11 +436,11 @@ void BattleView::draw_scene_3d(const render::Frame& frame, const render::Letterb
         // Op 0xA0's per-part colours are the unit model's shading entries, not the weapon's; the weapon always files its faces by their average
         // z; the weapon renderers light by their own rule instead of the model's.
         wd.part_mask = wd.part_semi = 0;
-        wd.near_meshes = 0;
+        wd.near_meshes = wd.env_meshes = 0;
         wd.light.on = false;
-        // The weapon adds a specular glint per corner: light = the unit vector from the unit toward the stage light (straight down when any
+        // A plain weapon adds a specular glint per corner (a prism weapon is lit instead, below): light = the unit vector from the unit toward the stage light (straight down when any
         // component exceeds 0x4000; the default light is 3072 above the arena centre), eye = the live camera eye. It is never 0 in a plain battle.
-        {
+        if (!visual.weapon_prism) {
           // The stage light, y-up world (PS1 (0, -0xC00, 0) default = (0, 3072, 0) here).
           const std::array<float, 3> light = stage_scene_.light();
           float to_light[3] = {light[0] - visual.x, light[1] - yl, light[2] - visual.z};
@@ -429,6 +462,7 @@ void BattleView::draw_scene_3d(const render::Frame& frame, const render::Letterb
           }
         const render::Mat4 wm = palette_[ap.joint] * render::mat4_from_rt(assets::rotation_zyx(deg), off);
         wd.palette = std::span<const render::Mat4>(&wm, 1);
+        if (visual.weapon_prism) prism_weapon_light(wd.model * wm, static_cast<float>(tick_count_) + alpha_, wd);
         meshes_->draw(*visual.weapon->gpu, wd);
       }
     }

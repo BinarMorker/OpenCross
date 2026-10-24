@@ -477,6 +477,11 @@ void BattleView::run_load_step(LoadJob& job) {
     visual.hp_shown = unit.hp;
     if (!unit.present) return;
     bind_unit_model(unit_id);
+    if (unit.pc && unit.form < 0 && visual.weapon)
+      if (const data::GearRec* gear = tables_->gear_rec(unit.eq.weapon_id)) {
+        visual.weapon_prism = gear->tier() == 5;
+        log::debug("battle: unit {} weapon {:#x} tier byte {:#x}{}", unit_id, unit.eq.weapon_id, gear->tier(), visual.weapon_prism ? " (prism lights)" : "");
+      }
     return;
   }
   // kFonts .. kFonts + 2: the HUD faces read by prefetch_fonts (kb_70, kt_70, the ch_100 command headline); one face per call (each builds its
@@ -499,7 +504,7 @@ void BattleView::bind_unit_model(int unit_id) {
   const bool pcm = unit.pc && unit.form < 0;
   const int mon = unit.form >= 0 ? unit.form : unit.src_id;
   const std::string stem = unit_model_stem(unit);
-  visual.weapon = nullptr, visual.weapon_attach = -1;
+  visual.weapon = nullptr, visual.weapon_attach = -1, visual.weapon_prism = false;
   visual.spawn_joints = 0;
   visual.tech_clips.clear();
   visual.pose.set_ext_clips(nullptr);

@@ -273,6 +273,8 @@ class BattleView {
     // PC weapon mesh (weapon pack part), drawn rigidly at attach point `weapon_attach`.
     std::shared_ptr<ModelHandle> weapon;
     int weapon_attach = -1;
+    // A prism weapon (tier byte 5) loaded at battle start: drawn under three turning coloured lights. A later model swap draws it plain.
+    bool weapon_prism = false;
     // The clips of an effect pack's type-0x19 entry ('tech' / 'tec1'..: a tech's own caster animation) hung on this unit as its external
     // clip set (SetAnim 0x80 + k) while the pack runs; dropped at the pack end (fx_drop_clip_packs).
     std::vector<assets::AnimationClip> tech_clips;

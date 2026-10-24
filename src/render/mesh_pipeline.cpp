@@ -262,11 +262,10 @@ std::unique_ptr<MeshModel> MeshPipeline::create_model(const assets::ModelAsset& 
       vertex.joint[0][1] = rigid ? u16{0} : std::min(sv.joint[1], max_joint);
       vertex.weight[0][0] = rigid ? 1.0f : sv.weight[0];
       vertex.weight[0][1] = rigid ? 0.0f : sv.weight[1];
-      // VDDM normal: n << 5 in 4.12 = n / 128; rotated by the vertex's own joint, or J2 for a 16-byte vertex.
-      if (!rigid) {
-        for (size_t k = 0; k < 3; ++k) vertex.normal[k] = static_cast<float>(sv.normal[k]) / 128.0f;
-        vertex.normal[3] = static_cast<float>(vertex.joint[0][sv.normal_joint & 1]);
-      }
+      // VDDM normal: n << 5 in 4.12 = n / 128; rotated by the vertex's own joint, or J2 for a 16-byte vertex. A rigid mesh's (weapon meshes:
+      // built at import) turns with joint 0.
+      for (size_t k = 0; k < 3; ++k) vertex.normal[k] = static_cast<float>(sv.normal[k]) / 128.0f;
+      vertex.normal[3] = static_cast<float>(vertex.joint[0][sv.normal_joint & 1]);
       verts.push_back(vertex);
     }
     const u32 first_of_mesh = static_cast<u32>(idx.size());

@@ -904,6 +904,41 @@ Mesh parse_mesh(ByteSpan data, float tw, float th) {
     }
   }
   if (faces != nf) failf("mesh face count {} != {}", faces, nf);
+  // Vertex normals, built the way the loader builds them for a lit weapon: every face of every group in packet order gets the unit normal
+  // (b - c) x (a - c) of its indices a b c (quads a b c d: (a - b) x (d - b)); each corner adds it to its vertex normal and normalises again.
+  std::vector<std::array<float, 3>> normals(nv, {0.0f, 0.0f, 0.0f});
+  for (u32 group = 0; group < ng; ++group) {
+    const u16 typ = reader.at<u16>(go + 4 + 8ull * group), cnt = reader.at<u16>(go + 6 + 8ull * group);
+    const u32 off = reader.at<u32>(go + 8 + 8ull * group);
+    const bool quad = typ & 8, tex = typ & 4, gour = typ & 0x10;
+    const size_t nvv = quad ? 4 : 3, ncol = gour ? nvv : 1;
+    const size_t size = 4 * ncol + (tex ? (quad ? 12 : 10) : 0) + 2 * nvv + ((tex || quad) ? 0 : 2);
+    for (u16 i = 0; i < cnt; ++i) {
+      const size_t idx_pos = off + static_cast<size_t>(i) * size + 4 * ncol + (tex ? (quad ? 12 : 10) : 0);
+      std::array<u16, 4> idx{};
+      bool valid = true;
+      for (size_t k = 0; k < nvv; ++k) valid = (idx[k] = reader.at<u16>(idx_pos + 2 * k)) < nv && valid;
+      if (!valid) continue;
+      const Vec3& origin = mesh.pool[quad ? idx[1] : idx[2]].bind_pos;
+      const Vec3& p1 = mesh.pool[quad ? idx[0] : idx[1]].bind_pos;
+      const Vec3& p2 = mesh.pool[quad ? idx[3] : idx[0]].bind_pos;
+      const float e1[3] = {p1[0] - origin[0], p1[1] - origin[1], p1[2] - origin[2]};
+      const float e2[3] = {p2[0] - origin[0], p2[1] - origin[1], p2[2] - origin[2]};
+      std::array<float, 3> face = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+      const float face_len = std::sqrt(face[0] * face[0] + face[1] * face[1] + face[2] * face[2]);
+      if (face_len <= 0.0f) continue;
+      for (float& component : face) component /= face_len;
+      for (size_t k = 0; k < nvv; ++k) {
+        std::array<float, 3>& normal = normals[idx[k]];
+        for (size_t c = 0; c < 3; ++c) normal[c] += face[c];
+        const float len = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+        if (len > 0.0f)
+          for (float& component : normal) component /= len;
+      }
+    }
+  }
+  for (u16 i = 0; i < nv; ++i)
+    for (size_t k = 0; k < 3; ++k) mesh.pool[i].normal[k] = static_cast<s8>(std::clamp(std::lround(normals[i][k] * 128.0f), -128L, 127L));
   return mesh;
 }
 
