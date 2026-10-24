@@ -10,7 +10,10 @@ Remove-Item (Join-Path $PSScriptRoot "$Name.log") -ErrorAction SilentlyContinue
 $envFile = Join-Path $PSScriptRoot "$Name.env"
 $routeEnv = @()
 if (Test-Path $envFile) { Get-Content $envFile | Where-Object { $_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$' } | ForEach-Object { Set-Item "env:$($Matches[1])" $Matches[2]; $routeEnv += $Matches[1] } }
+# The route's window takes no focus and plays no sound (OC_QUIET).
+$env:OC_QUIET = "1"
 $p = Start-Process -FilePath $exe -ArgumentList @('--config', "`"$ini`"") -WorkingDirectory $root -Wait -PassThru
+Remove-Item env:OC_QUIET -ErrorAction SilentlyContinue
 foreach ($k in $routeEnv) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }
 "exit code $($p.ExitCode)"
 Get-Content (Join-Path $PSScriptRoot "$Name.log") | Select-String -Pattern 'route|ERROR|\[E\]|WARN|\[W\]' | Select-Object -Last 40 | ForEach-Object { $_.Line }

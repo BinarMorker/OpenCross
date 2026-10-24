@@ -6,6 +6,8 @@
 
 #include <cmath>
 
+#include "platform/keymap.h"
+
 namespace oc::game {
 
 namespace {
@@ -22,16 +24,16 @@ void FieldInput::reset() {
 }
 
 FieldInput::Edges FieldInput::sample(const platform::Input& in) {
-  auto key = [&](int sc) { return in.key_down[static_cast<size_t>(sc)]; };
-  auto edge = [&](int sc) { return in.key_pressed[static_cast<size_t>(sc)]; };
+  using platform::Action;
   int mask = 0;
-  if (key(SDL_SCANCODE_W) || key(SDL_SCANCODE_UP)) mask |= 1;
-  if (key(SDL_SCANCODE_D) || key(SDL_SCANCODE_RIGHT)) mask |= 2;
-  if (key(SDL_SCANCODE_S) || key(SDL_SCANCODE_DOWN)) mask |= 4;
-  if (key(SDL_SCANCODE_A) || key(SDL_SCANCODE_LEFT)) mask |= 8;
-  run_held = key(SDL_SCANCODE_LSHIFT) || key(SDL_SCANCODE_RSHIFT);
-  bool confirm = edge(SDL_SCANCODE_RETURN) || edge(SDL_SCANCODE_SPACE) || edge(SDL_SCANCODE_Z);
-  bool up = edge(SDL_SCANCODE_UP) || edge(SDL_SCANCODE_W), down = edge(SDL_SCANCODE_DOWN) || edge(SDL_SCANCODE_S);
+  if (platform::action_down(in, Action::Up)) mask |= 1;
+  if (platform::action_down(in, Action::Right)) mask |= 2;
+  if (platform::action_down(in, Action::Down)) mask |= 4;
+  if (platform::action_down(in, Action::Left)) mask |= 8;
+  // Cancel (Cross) held = run.
+  run_held = platform::action_down(in, Action::Cancel);
+  bool confirm = platform::action_pressed(in, Action::Ok);
+  bool up = platform::action_pressed(in, Action::Up), down = platform::action_pressed(in, Action::Down);
   pad_analog = false;
   pad_rstick = false;
   if (in.pad_connected) {
@@ -68,10 +70,10 @@ FieldInput::Edges FieldInput::sample(const platform::Input& in) {
   if (mask & 8) pad_word |= kKeyLeft;
   // The script-visible key word (ops 50 / 51: the world map's "enter the location" test reads the circle bit) takes the pad too.
   const bool pad_a = in.pad_connected && in.pad_down[SDL_GAMEPAD_BUTTON_SOUTH], pad_b = in.pad_connected && in.pad_down[SDL_GAMEPAD_BUTTON_EAST];
-  if (key(SDL_SCANCODE_RETURN) || key(SDL_SCANCODE_SPACE) || key(SDL_SCANCODE_Z) || pad_a) pad_word |= kKeyCircle;
-  if (key(SDL_SCANCODE_X) || pad_b) pad_word |= kKeyCross;
+  if (platform::action_down(in, Action::Ok) || pad_a) pad_word |= kKeyCircle;
+  if (platform::action_down(in, Action::Cancel) || pad_b) pad_word |= kKeyCross;
   // Start bit.
-  if (key(SDL_SCANCODE_RETURN) || key(SDL_SCANCODE_KP_ENTER) || in.pad_down[SDL_GAMEPAD_BUTTON_START]) pad_word |= 0x0800;
+  if (in.key_down[SDL_SCANCODE_RETURN] || in.key_down[SDL_SCANCODE_KP_ENTER] || in.pad_down[SDL_GAMEPAD_BUTTON_START]) pad_word |= 0x0800;
   key_latch |= static_cast<u16>(pad_word & ~0u);
   return {confirm, up, down};
 }

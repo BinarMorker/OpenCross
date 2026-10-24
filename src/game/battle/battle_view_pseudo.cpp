@@ -29,8 +29,10 @@ void BattleView::pa_begin(const std::shared_ptr<const FxPack>& pack) {
   std::string what;
   // `sky` (tech/sky.prd, element 162) sets the same model up: "act0" / "act1" (by the first caster) with its texture + CLUT, run from its own S5 entry 0, registered
   // as slot A; it is the big blue figure next to Serge and every `hik*` / `kem*` bit-7 object of the pack rides its joint (selector 8, see BattleFxRun::actor_basis).
-  // tumaru (Pip's form changes): the pack's type-0x0B `act0` Mdl at "e297", its own S5 entry 0; hidden until its script shows it.
-  if (pack->overlay == "ghost1" || pack->overlay == "jigoku" || pack->overlay == "sky" || pack->overlay == "tumaru") {
+  // tumaru (Pip's form changes) and ghost2 (Shadow Cat's Shadow, the ghost techs): the pack's type-0x0B `act0` Mdl at "e297", its own S5 entry 0;
+  // canon the same at "ea9a". Hidden until its script shows it.
+  if (pack->overlay == "ghost1" || pack->overlay == "jigoku" || pack->overlay == "sky" || pack->overlay == "tumaru" || pack->overlay == "ghost2" ||
+      pack->overlay == "canon") {
     if (FxGpu* gpu = fx_gpu_for(pack)) {
       std::string an = "act0";
       if (pack->overlay == "sky") {
@@ -169,12 +171,26 @@ void BattleView::pa_tick() {
     ctx.monster = true;
     UnitPose* pose = actor.pose;
     ctx.clip_frames = [pose](int id) { return pose ? pose->frames_of(id) : 8; };
-    // The casters' / targets' origin (the approach modes are the units' business).
-    ctx.get_pos = [this](int list, int idx, int mode, int& ox, int& oz) {
+    // The casters' / targets' origin; the approach modes (5, 0x100 + walker attach n of op 0x97) stop short of the unit by the pseudo-actor's
+    // attach-point reach plus the unit's attach 16 reach, as a unit's approach does (Garai's Shadow: act0 slides to ~half way, not onto the target).
+    ctx.get_pos = [this, &actor](int list, int idx, int mode, int& ox, int& oz) {
       const int unit = script_list_unit(list, idx);
       if (unit < 0) return false;
-      float px = vis_[static_cast<size_t>(unit)].x, pz = vis_[static_cast<size_t>(unit)].z;
-      if (mode == 6 && !act_.targets.empty()) {
+      const Visual& other = vis_[static_cast<size_t>(unit)];
+      float px = other.x, pz = other.z;
+      if (mode == 5 || mode >= 0x100) {
+        const float dx = other.x - actor.x, dz = other.z - actor.z, dist = std::hypot(dx, dz);
+        if (dist >= 1.0f) {
+          float r15 = 0, r16 = other.reach16, ax = 0, ay = 0, az = 0;
+          if (actor.pose && actor.pose->attach_now(mode >= 0x100 ? mode - 0x100 : 15, 1.0f, ax, ay, az)) r15 = std::hypot(ax, az);
+          if (other.has_model && other.pose.attach_now(16, 1.0f, ax, ay, az)) r16 = std::hypot(ax, az);
+          float reach = r15 + r16;
+          if (reach < 1.0f) reach = 450.0f;
+          const float run = std::max(0.0f, dist - reach);
+          px = actor.x + dx / dist * run;
+          pz = actor.z + dz / dist * run;
+        }
+      } else if (mode == 6 && !act_.targets.empty()) {
         float lx = 1e9f, hx = -1e9f, lz = 1e9f, hz = -1e9f;
         for (int target : act_.targets) {
           lx = std::min(lx, vis_[static_cast<size_t>(target)].x), hx = std::max(hx, vis_[static_cast<size_t>(target)].x);

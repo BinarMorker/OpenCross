@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -80,7 +81,13 @@ bool Window::create(const char* title, int width, int height, int window_mode, i
     return false;
   }
   // Created hidden, placed / switched to its mode, then shown; the swapchain is created afterwards from the final size.
-  const SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN;
+  // OC_QUIET (test runs): shown without activation and never focusable, so a harness window does not take the keyboard from the desktop.
+  const bool quiet = std::getenv("OC_QUIET") != nullptr;
+  SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN;
+  if (quiet) {
+    flags |= SDL_WINDOW_NOT_FOCUSABLE;
+    SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
+  }
   window_ = SDL_CreateWindow(title, width, height, flags);
   if (!window_) {
     log::error("SDL_CreateWindow: {}", SDL_GetError());

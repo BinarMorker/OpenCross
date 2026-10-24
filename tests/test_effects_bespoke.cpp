@@ -125,7 +125,7 @@ void fake_skin(FxModels& ms) {
     std::swap(back.v[0], back.v[1]), std::swap(back.v[2], back.v[3]);
     out.faces.push_back(back);
     out.pos = {1000, 0, 0};
-    return unit >= 0;
+    return unit >= 0 || unit == kPseudoUnit;
   };
   ms.attach = [](int, int, Vec3& out) {
     out = {1000, -400, 0};
@@ -503,18 +503,21 @@ void test_model_draw_ports() {
     CHECK(host.ms.units[0].hidden && host.ms.units[0].own_shadow);
     CHECK(host.ms.vram_moves.size() == 2 && host.ms.vram_moves[0].scroll);
   }
-  // ghost2: the last caster clipped at y = 0 keeps y <= 0: the quad lies wholly above, drawn; a plane at -250 cuts it
+  // ghost2: the pseudo-actor (not a caster) is hidden at init and drawn by the overlay clipped at y = 0 (the quad lies wholly above, drawn)
+  // with its shadow; past D it is shown again
   {
     Host host;
     fake_skin(host.ms);
     auto effect = host.make("ghost2");
-    CHECK(host.ms.units[0].hidden);
+    CHECK(!host.ms.units[0].hidden && host.ms.pseudo_hide == 1);
     cmd(*effect, 0x180, {10, 0});
     host.tick(*effect, 1);
+    CHECK(host.ms.pseudo_hide == 1 && host.ms.pseudo_own_shadow);
     auto prims = frame(*effect);
-    CHECK(prims.size() == 1 && prims[0].kind == FxPrim::Kind::Quad);
+    CHECK(prims.size() == 1 && prims[0].kind == FxPrim::Kind::Quad && prims[0].unit == kPseudoUnit);
     host.tick(*effect, 10);
-    CHECK(!host.ms.units[0].hidden && frame(*effect).empty());
+    CHECK(host.ms.pseudo_hide == 0 && !host.ms.pseudo_own_shadow && frame(*effect).empty());
+    CHECK(!host.ms.units[0].hidden);
   }
   // hensin: the plane from the head down: s = t H1 / D with H1 = 400 (attach 0xE at y -400); half way the quad is cut and shards spawn
   {

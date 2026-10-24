@@ -7,7 +7,8 @@ sequences, the PS1 display buffer of a DuckStation state, and the effect engine'
         the two 320 x 224 display buffers (VRAM y 0 / 240) of each state: the same statistics (15-bit -> 8-bit, x 255 / 31)
     python tools/py/fx_ref.py objects STATE|DIR [--name TAG] [--from A] [--upto B]
         the effect engine's task table (ym_effect_work, base = sentinel + 0xC - 0xC000): every live particle object
-        (callback 0x80038E60): emitter / sprite name, position (16.16 high halves), velocity, scale, angles, colour, life, bias, flags
+        (callback 0x80038E60) and the damage digits' damv / dam1 stages (0x800B07B8 / 0x800B06D4, "stage ..."): emitter / sprite name,
+        position (16.16 high halves), velocity, scale, angles, colour, life, bias, flags
         --mat: also the object matrix (+0x30, s16 / 4096); --bit7: only objects with flag bits 15 + 7
     python tools/py/fx_ref.py seqs    STATE|DIR          the sequence tasks (callback 0x8002A26C): tag, elapsed, wait, cursor
     python tools/py/fx_ref.py warp    STATE|DIR          the screen-copy warp globals 0x800720D8..0x800720FF (ops 0x3E-0x40)
@@ -26,6 +27,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ccx_state import State, frame_of, list_states  # noqa: E402
 
 CB_OBJECT = 0x80038E60
+# The damage digits' first two stages run their own callbacks: damv (flight, battle.prg 0x800B07B8) and dam1 (rest, 0x800B06D4);
+# dam2 (fade) is a plain object. `objects` lists all three ("cd" = the damv countdown +0x82: the digit waits while it is >= 1).
+CB_DAMV = 0x800B07B8
+CB_DAM1 = 0x800B06D4
 CB_SEQ = 0x8002A26C
 WORK_SIZE = 0xC000
 
@@ -210,9 +215,9 @@ def cmd_objects(args):
         st = State(p)
         reg = Registry(st)
         base, ts = tasks(st)
-        objs = [(e, d) for (e, cb, d) in ts if cb == CB_OBJECT]
+        objs = [(e, cb, d) for (e, cb, d) in ts if cb in (CB_OBJECT, CB_DAMV, CB_DAM1)]
         print("== %s: work base %s, %d tasks, %d objects" % (os.path.basename(p), hex(base) if base else None, len(ts), len(objs)))
-        for e, o in objs:
+        for e, cb, o in objs:
             owner = reg.name_of_data(st.u32(o + 0xC))
             sprite = reg.name_of_node(st.u32(o + 0x1C))
             if want and want not in (owner, sprite):
@@ -230,8 +235,9 @@ def cmd_objects(args):
             bias = st.s16(o + 0x7E)
             flags = st.u32(o + 0x88)
             frame = st.s16(o + 0x7A)
-            print("  %s em %s spr %s pos %6d %6d %6d vel %7d %7d %7d acc %6d %6d %6d sc %5d %5d %5d ang %5d %5d %5d col %4d %4d %4d rgb %3d %3d %3d life %4d bias %4d fr %2d fl %08x" % (
-                hex(o), owner, sprite, *pos, *(v >> 6 for v in vel), *(v >> 3 for v in acc), *sc, *ang, *col, *drawc, life, bias, frame, flags))
+            stage = {CB_DAMV: " stage damv cd %d" % st.s16(o + 0x82), CB_DAM1: " stage dam1"}.get(cb, "")
+            print("  %s em %s spr %s pos %6d %6d %6d vel %7d %7d %7d acc %6d %6d %6d sc %5d %5d %5d ang %5d %5d %5d col %4d %4d %4d rgb %3d %3d %3d life %4d bias %4d fr %2d fl %08x%s" % (
+                hex(o), owner, sprite, *pos, *(v >> 6 for v in vel), *(v >> 3 for v in acc), *sc, *ang, *col, *drawc, life, bias, frame, flags, stage))
             if mat:
                 print("    mat " + " ".join("%.3f" % (st.s16(o + 0x30 + 2 * k) / 4096.0) for k in range(9)))
 

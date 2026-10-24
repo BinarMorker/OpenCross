@@ -526,8 +526,9 @@ class BattleView {
   void fx_charge_end();
   bool fx_charge_done() const;
   void fx_tick();
-  // A bespoke overlay's SetAnim / anmseq requests on the models it steers.
-  void fx_model_requests();
+  // A bespoke overlay's SetAnim / anmseq requests on the models it steers. `at_init` = the requests of the overlay's init, applied in the
+  // pack-start pass: a script it starts runs its first step at once (and the pack drive is left to the tick).
+  void fx_model_requests(bool at_init = false);
   // FxModels::PackDrive: the overlay-driven pack model (saraman's 'sara').
   void fx_pack_drive_tick(effects::FxModels& ms);
   bool fx_skin_pack_driven(effects::FxModels& ms, effects::FxSkinnedModel& out);
@@ -853,8 +854,9 @@ class BattleView {
   bool dev_var_done_ = false;
   // The host shows BattleResults after a victory (set_external_results).
   bool external_results_ = false;
-  // Actor of the last command the player confirmed (next-PC order).
+  // Actor and kind of the last command the player confirmed (which PC the menu reopens on).
   int last_actor_ = -1;
+  battle::Command::Kind last_kind_ = battle::Command::Kind::Attack;
   // sysmes.txt (element descriptions), bound to the vfs in init().
   import::LangTables lang_tables_;
   import::Lang lang_ = import::Lang::En;

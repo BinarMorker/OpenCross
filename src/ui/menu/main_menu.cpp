@@ -11,6 +11,7 @@
 #include <map>
 
 #include "core/log.h"
+#include "platform/keymap.h"
 #include "ui/lowres.h"
 #include "ui/menu/menu_common.h"
 #include "ui/ps1_font.h"
@@ -108,12 +109,12 @@ std::string MainMenu::Impl::table_row(std::string_view table, int key) {
 }
 
 int MainMenu::Impl::cur_char() const {
-  const std::vector<int> members = gs->party();
+  const std::vector<int> members = party();
   return members.empty() ? 0 : members[static_cast<size_t>(member) % members.size()];
 }
 
 void MainMenu::Impl::cycle_member(int step) {
-  const std::vector<int> members = gs->party();
+  const std::vector<int> members = party();
   if (members.size() < 2) return;
   member = (member + step + static_cast<int>(members.size())) % static_cast<int>(members.size());
   sfx(1);
@@ -131,25 +132,25 @@ void MainMenu::Impl::say(const std::string& message_text, int duration_frames) {
 // ===================================================== input
 Nav MainMenu::Impl::poll(const platform::Input& in) {
   Nav nav;
-  auto key_down = [&](int scancode) { return in.key_down[static_cast<size_t>(scancode)]; };
-  auto key_pressed = [&](int scancode) { return in.key_pressed[static_cast<size_t>(scancode)]; };
+  using platform::Action;
+  auto key_down = [&](Action action) { return platform::action_down(in, action); };
+  auto key_pressed = [&](Action action) { return platform::action_pressed(in, action); };
   auto pad_down = [&](int button) { return in.pad_down[static_cast<size_t>(button)]; };
   auto pad_pressed = [&](int button) { return in.pad_pressed[static_cast<size_t>(button)]; };
   const float axis_x = in.pad_axis[SDL_GAMEPAD_AXIS_LEFTX], axis_y = in.pad_axis[SDL_GAMEPAD_AXIS_LEFTY];
-  const bool dir[4] = {key_down(SDL_SCANCODE_UP) || key_down(SDL_SCANCODE_W) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_UP) || axis_y < -0.6f,
-                       key_down(SDL_SCANCODE_DOWN) || key_down(SDL_SCANCODE_S) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || axis_y > 0.6f,
-                       key_down(SDL_SCANCODE_LEFT) || key_down(SDL_SCANCODE_A) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || axis_x < -0.6f,
-                       key_down(SDL_SCANCODE_RIGHT) || key_down(SDL_SCANCODE_D) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || axis_x > 0.6f};
+  const bool dir[4] = {key_down(Action::Up) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_UP) || axis_y < -0.6f,
+                       key_down(Action::Down) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || axis_y > 0.6f,
+                       key_down(Action::Left) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || axis_x < -0.6f,
+                       key_down(Action::Right) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || axis_x > 0.6f};
   bool fire[4]{};
   repeat.poll(dir, fire);
   nav.up = fire[0], nav.down = fire[1], nav.left = fire[2], nav.right = fire[3];
-  nav.ok = key_pressed(SDL_SCANCODE_RETURN) || key_pressed(SDL_SCANCODE_Z) || key_pressed(SDL_SCANCODE_SPACE) || key_pressed(SDL_SCANCODE_KP_ENTER) ||
-           pad_pressed(SDL_GAMEPAD_BUTTON_SOUTH);
-  nav.cancel = key_pressed(SDL_SCANCODE_X) || key_pressed(SDL_SCANCODE_BACKSPACE) || pad_pressed(SDL_GAMEPAD_BUTTON_EAST);
-  nav.tri = key_pressed(SDL_SCANCODE_C) || pad_pressed(SDL_GAMEPAD_BUTTON_NORTH);
-  nav.sq = key_pressed(SDL_SCANCODE_V) || pad_pressed(SDL_GAMEPAD_BUTTON_WEST);
-  nav.l1 = key_pressed(SDL_SCANCODE_Q) || key_pressed(SDL_SCANCODE_PAGEUP) || pad_pressed(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-  nav.r1 = key_pressed(SDL_SCANCODE_E) || key_pressed(SDL_SCANCODE_PAGEDOWN) || pad_pressed(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+  nav.ok = key_pressed(Action::Ok) || pad_pressed(SDL_GAMEPAD_BUTTON_SOUTH);
+  nav.cancel = key_pressed(Action::Cancel) || pad_pressed(SDL_GAMEPAD_BUTTON_EAST);
+  nav.tri = key_pressed(Action::Menu) || pad_pressed(SDL_GAMEPAD_BUTTON_NORTH);
+  nav.sq = key_pressed(Action::Item) || pad_pressed(SDL_GAMEPAD_BUTTON_WEST);
+  nav.l1 = key_pressed(Action::SelectLeft) || pad_pressed(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+  nav.r1 = key_pressed(Action::SelectRight) || pad_pressed(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
   return nav;
 }
 
@@ -163,6 +164,10 @@ void MainMenu::Impl::open(GameState& state, bool allow_save) {
   sub = 0;
   main_cur = gs->option(opt::kCursorMemory) ? mem_cur : 0;
   member = pick_cur = 0;
+  roster = Roster::Off;
+  roster_anim = roster_top = roster_row = roster_no = 0;
+  roster_ask = false;
+  stand_in = -1;
   focus = 0;
   popup = Popup::None;
   msg.clear();
@@ -176,7 +181,7 @@ void MainMenu::Impl::enter(MenuScreen target) {
   screen = target;
   msg.clear();
   switch (target) {
-    case MenuScreen::Status: break;
+    case MenuScreen::Status: profile = true; break;
     case MenuScreen::ElementChoice: choice_cur = 0; break;
     case MenuScreen::ElementUse: use_cur = use_scroll = target_cur = 0; use_target = false; break;
     case MenuScreen::ElementGrid:
@@ -192,10 +197,13 @@ void MainMenu::Impl::enter(MenuScreen target) {
   }
 }
 
+// A screen opened from the roster returns to the roster (same row), not to the main list.
 void MainMenu::Impl::back_to_main(int cursor) {
   screen = MenuScreen::Main;
   sub = 0;
   main_cur = cursor;
+  if (stand_in >= 0) sub = 1, roster = Roster::On, roster_ask = false;
+  stand_in = -1;
   msg.clear();
 }
 
@@ -223,6 +231,7 @@ void MainMenu::Impl::update(const platform::Input& in, int ticks) {
     if (any_key) kb_mode = true;
   }
   if (msg_frames > 0 && --msg_frames == 0) msg.clear();
+  roster_anim = std::max(0, roster_anim - std::max(ticks, 0));
   const Nav nav = poll(in);
   if (frames < 4) return;
   switch (screen) {
@@ -330,6 +339,9 @@ void MainMenu::debug_show(MenuScreen screen, int variant) {
   if (!impl.gs) return;
   impl.member = 0;
   impl.sub = 0;
+  impl.roster = Impl::Roster::Off;
+  impl.roster_ask = false;
+  impl.stand_in = -1;
   impl.msg.clear();
   impl.enter(screen);
   impl.frames = 10;
@@ -352,6 +364,15 @@ void MainMenu::debug_show(MenuScreen screen, int variant) {
   if (screen == MenuScreen::ElementGrid && variant == 2) impl.popup = Popup::Menu, impl.pop_cur = 1;
   if (screen == MenuScreen::Equip && variant == 1) impl.eq_list = true, impl.eq_cur = 1;
   if (screen == MenuScreen::Main && variant == 1) impl.sub = 1;
+  // Variants 2 / 3 of Main: the roster from the Status pick, and from the Equip pick with the remove-all prompt.
+  if (screen == MenuScreen::Main && (variant == 2 || variant == 3)) {
+    impl.sub = 1;
+    impl.pick_for = variant == 3 ? 2 : 0;
+    impl.main_cur = impl.pick_for;
+    impl.roster = Impl::Roster::On;
+    impl.roster_ask = variant == 3;
+  }
+  if (screen == MenuScreen::Status && variant == 1) impl.profile = false;
   // Variant 1 of Settings: the Custom Window Frame picker.
   if (screen == MenuScreen::Settings && variant == 1) impl.set_cur = 1, impl.skin_pick = true;
   if (screen == MenuScreen::Save && variant != 4) impl.can_save = true;

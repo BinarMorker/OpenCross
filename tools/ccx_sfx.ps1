@@ -16,6 +16,7 @@ if($StateEvery){$sp,$s0,$e0=$StateEvery -split ","; $a+=@("-stateevery",$sp,$s0,
 foreach($m in ($Mash -split "," | Where-Object {$_})){ $b,$f=$m -split ":"; $a+=@("-mash",$b,"12",$f,"$([int]$f+12)") }
 $env:CCX_TRACEPC=$Pcs
 $q=$a | ForEach-Object { if($_ -match '[ =\\]'){'"'+$_+'"'}else{$_} }
-$p=Start-Process -FilePath $Ccx -ArgumentList $q -WorkingDirectory (Split-Path $Ccx) -PassThru -Wait -WindowStyle Minimized -RedirectStandardOutput (Join-Path $OutD "stdout.txt") -RedirectStandardError (Join-Path $OutD "stderr.txt")
+. (Join-Path $PSScriptRoot "quiet_start.ps1")
+$p=Start-Quiet $Ccx ($q -join " ") (Split-Path $Ccx) (Join-Path $OutD "stdout.txt") (Join-Path $OutD "stderr.txt"); $p.WaitForExit()   # minimised without activation
 Copy-Item (Join-Path (Split-Path $Ccx) "ccx-data\duckstation.log") (Join-Path $OutD "ccx.log") -Force   # TRACEPC lines land here; other agents rotate it, copy at once
 "exit $($p.ExitCode)"

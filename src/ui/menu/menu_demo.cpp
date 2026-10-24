@@ -22,7 +22,10 @@ std::vector<Step> make_steps() {
   for (ArtMode mode : {ArtMode::Hd, ArtMode::Original}) {
     steps.push_back({mode, MenuScreen::Main, 0, "main"});
     steps.push_back({mode, MenuScreen::Main, 1, "main_pick"});
+    steps.push_back({mode, MenuScreen::Main, 2, "main_roster"});
+    steps.push_back({mode, MenuScreen::Main, 3, "main_roster_ask"});
     steps.push_back({mode, MenuScreen::Status, 0, "status"});
+    steps.push_back({mode, MenuScreen::Status, 1, "status_equip"});
     steps.push_back({mode, MenuScreen::ElementChoice, 0, "element_choice"});
     steps.push_back({mode, MenuScreen::ElementUse, 0, "element_use"});
     steps.push_back({mode, MenuScreen::ElementGrid, 0, "element_list"});

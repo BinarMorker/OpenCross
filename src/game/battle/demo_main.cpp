@@ -155,6 +155,8 @@ int ocbattleview_main(int argc, char** argv) {
       if ((tables.elements[i].raw[0x10] | (tables.elements[i].raw[0x11] << 8)) == std::atoi(eid)) std::printf("element %zu\n", i);
     return 0;
   }
+  // A scripted run (--frames) is a test: its window takes no focus and stays silent (platform::Window / audio::Mixer read OC_QUIET).
+  if (max_frames > 0) _putenv_s("OC_QUIET", "1");
   platform::Window window;
   if (!window.create("OpenCross battle", win_w, win_h, false)) return 1;
   render::GpuContext ctx;

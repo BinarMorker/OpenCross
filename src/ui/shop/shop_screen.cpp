@@ -2,7 +2,6 @@
 #include "render/camera.h"
 
 #include <SDL3/SDL_gamepad.h>
-#include <SDL3/SDL_scancode.h>
 
 #include <algorithm>
 #include <cmath>
@@ -13,6 +12,7 @@
 
 #include "core/log.h"
 #include "platform/config.h"
+#include "platform/keymap.h"
 #include "ui/lowres.h"
 #include "ui/menu/menu_common.h"
 #include "ui/menu/ps1_art.h"
@@ -186,23 +186,22 @@ struct ShopScreen::Impl {
   // ===================================================== input
   Nav poll(const platform::Input& in) {
     Nav nav;
-    auto key_down = [&](int scancode) { return in.key_down[static_cast<size_t>(scancode)]; };
-    auto key_pressed = [&](int scancode) { return in.key_pressed[static_cast<size_t>(scancode)]; };
+    using platform::Action;
+    auto key_down = [&](Action action) { return platform::action_down(in, action); };
+    auto key_pressed = [&](Action action) { return platform::action_pressed(in, action); };
     auto pad_down = [&](int button) { return in.pad_down[static_cast<size_t>(button)]; };
     auto pad_pressed = [&](int button) { return in.pad_pressed[static_cast<size_t>(button)]; };
     const float axis_x = in.pad_axis[SDL_GAMEPAD_AXIS_LEFTX], axis_y = in.pad_axis[SDL_GAMEPAD_AXIS_LEFTY];
-    const bool down[5] = {key_down(SDL_SCANCODE_UP) || key_down(SDL_SCANCODE_W) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_UP) || axis_y < -0.6f,
-                          key_down(SDL_SCANCODE_DOWN) || key_down(SDL_SCANCODE_S) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || axis_y > 0.6f,
-                          key_down(SDL_SCANCODE_LEFT) || key_down(SDL_SCANCODE_A) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || axis_x < -0.6f,
-                          key_down(SDL_SCANCODE_RIGHT) || key_down(SDL_SCANCODE_D) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || axis_x > 0.6f,
-                          key_down(SDL_SCANCODE_RETURN) || key_down(SDL_SCANCODE_Z) || key_down(SDL_SCANCODE_SPACE) || key_down(SDL_SCANCODE_KP_ENTER) ||
-                              pad_down(SDL_GAMEPAD_BUTTON_SOUTH)};
+    const bool down[5] = {key_down(Action::Up) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_UP) || axis_y < -0.6f,
+                          key_down(Action::Down) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || axis_y > 0.6f,
+                          key_down(Action::Left) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || axis_x < -0.6f,
+                          key_down(Action::Right) || pad_down(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || axis_x > 0.6f,
+                          key_down(Action::Ok) || pad_down(SDL_GAMEPAD_BUTTON_SOUTH)};
     bool fire[5]{};
     repeat.poll(down, fire);
     nav.up = fire[0], nav.down = fire[1], nav.left = fire[2], nav.right = fire[3];
-    nav.ok = key_pressed(SDL_SCANCODE_RETURN) || key_pressed(SDL_SCANCODE_Z) || key_pressed(SDL_SCANCODE_SPACE) || key_pressed(SDL_SCANCODE_KP_ENTER) ||
-             pad_pressed(SDL_GAMEPAD_BUTTON_SOUTH);
-    nav.cancel = key_pressed(SDL_SCANCODE_X) || key_pressed(SDL_SCANCODE_BACKSPACE) || pad_pressed(SDL_GAMEPAD_BUTTON_EAST);
+    nav.ok = key_pressed(Action::Ok) || pad_pressed(SDL_GAMEPAD_BUTTON_SOUTH);
+    nav.cancel = key_pressed(Action::Cancel) || pad_pressed(SDL_GAMEPAD_BUTTON_EAST);
     nav.ok_rep = nav.ok || fire[4];
     return nav;
   }

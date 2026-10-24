@@ -103,6 +103,7 @@ if(Test-Path $man){ $hh=@(0,0,0); $first=""; foreach($l in (Get-Content $man -En
 if($EnemyHp -ne ""){ $eh= if($EnemyHp -eq "none"){""}else{$EnemyHp} }   # -EnemyHp a,b,c overrides the manifest row ("none" = the table HP); scene 402's later rows read 135 / 189 / 273, which --auto kills before the cast
 if($NoStats){ $eh="" } else { "stats: ccx forge (hp 1023 atk 1 def 127 hit 127 evd 0 mag 1 mdef 127), enemy hp $(if($eh){$eh}else{'unchanged'})" }
 function RunOurs([string]$pick,[string]$outdir,[int]$nframes,[string[]]$shotargs,[bool]$async){
+  $env:OC_QUIET="1"   # the harness window takes no focus, no sound
   $env:OC_BATTLE_SEED="$Seed"; $env:OC_CAST_PARTY= $(if($Ko -ge 0 -or $Tgt -in 1,2){"3"}else{"1"});   # a single-target cast on PC 1 / 2 is skipped by OC_CAST_PARTY=1 (battle_view_action.cpp party_cap)
    $env:OC_CAM_PICK=$pick; $env:OC_FX_OBJECTS="5"; $env:OC_FX_SEQ="1"; $env:OC_FX_UNITS="5"; if($Dt -ne ""){ $env:OC_FX_DT=$Dt } else { Remove-Item Env:OC_FX_DT -ErrorAction SilentlyContinue }
   $castflag= if($Ecast){"--ecast"}else{"--cast"}

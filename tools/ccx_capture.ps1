@@ -21,6 +21,7 @@ param(
   [string]$Row0 = "7,4,21,55,73,88,40,25"
 )
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "quiet_start.ps1")
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Ccx = (Resolve-Path (Join-Path $Root $CcxExe)).Path
 $Ref = Join-Path $Root "tmp\ref"
@@ -71,9 +72,10 @@ function Invoke-Ccx([string]$LogDir, [string[]]$ExtraArgs, [string]$SaveDir = $S
             "-set", ("CCX/GameDir=" + (Split-Path -Parent $Root)),
             "-set", ("CCX/SaveDir=" + (Join-Path $Ref $SaveDir)),
             "-set", "InputSources/XInput=false", "-set", "InputSources/SDL=false", "-set", "Main/StartFullscreen=false",
-            "-logdir", $LogDir) + $ExtraArgs
-  $p = Start-Process -FilePath $Ccx -ArgumentList ($args | ForEach-Object { if ($_ -match '[ =\\]') { '"' + $_ + '"' } else { $_ } }) `
-       -WorkingDirectory (Split-Path $Ccx) -PassThru -Wait -WindowStyle Minimized
+            "-set", "Audio/OutputMuted=true", "-logdir", $LogDir) + $ExtraArgs
+  # Minimised without activation, muted, below-normal priority (tools\quiet_start.ps1).
+  $p = Start-Quiet $Ccx (($args | ForEach-Object { if ($_ -match '[ =\\]') { '"' + $_ + '"' } else { $_ } }) -join " ") (Split-Path $Ccx)
+  $p.WaitForExit()
   if ($p.ExitCode -ne 0) { throw "ccx exited with $($p.ExitCode)" }
 }
 function Press([string]$Button, [int]$Frame) { return @("-mash", $Button, "12", "$Frame", "$($Frame + 12)") }

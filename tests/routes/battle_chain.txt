@@ -6,10 +6,10 @@
 - tap confirm                         # Attack -> target selection
 - wait 20
 - screenshot bc_01_target_normal.png
-- tap c                               # camera mode DYNAMIC
+- tap triangle                               # camera mode DYNAMIC
 - wait 30
 - screenshot bc_02_target_dynamic.png
-- tap c                               # back to NORMAL
+- tap triangle                               # back to NORMAL
 - wait 10
 - tap confirm                         # target -> the PC runs up
 - wait 150

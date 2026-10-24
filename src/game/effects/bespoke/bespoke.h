@@ -90,6 +90,8 @@ struct FxHooks {
 };
 // ---- battle models the overlays steer (PS1 model block fields) ------------------------------------------------
 // Units and axes are the PS1's: world y down, positions in world units (the 20.12 fields >> 12), angles 4096 = one turn, scale 4096 = 1.0.
+// The unit index FxModels::skin and the Model texture source take for the pack's pseudo-actor (caster[-1], the `act0` model).
+inline constexpr int kPseudoUnit = -2;
 struct FxModel {
   int unit = -1;                         // host unit index
   bool pc = false;
@@ -223,6 +225,10 @@ struct FxModels {
   std::function<bool(int unit, int point, Vec3& out)> attach;
   // caster[-1] (the pack's `act0` pseudo-actor model): the same for that model. Unset / false = no pseudo-actor.
   std::function<bool(int point, Vec3& out)> pseudo_attach;
+  // The pseudo-actor's hidden bit as an overlay writes it (1 set, 0 clear, -1 none); the host applies it after the overlay tick and
+  // resets it. `pseudo_own_shadow` = the overlay draws the hidden pseudo-actor itself and the host still draws its shadow.
+  int pseudo_hide = -1;
+  bool pseudo_own_shadow = false;
   // The pack's own model (type 0x14 = the drp's type-0x0B Mdl record drawn by sprite-type-20 objects, which copy the object's place,
   // angles, scale and colour into it every tick): skinned like `skin` at the place the last of its objects gave it. `pack_model` = its name
   // (set by the host); `pack_model_hidden` = the hidden bit set by an overlay: the objects' draws of it are skipped.

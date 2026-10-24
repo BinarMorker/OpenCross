@@ -169,6 +169,34 @@ bool draw_cheats_tab(platform::Config& cfg) {
       toggle("God mode", "##c_god", cheats.god_mode, "The party cannot be knocked out (HP stops at 1). The Debug tab's Invincible party box still works.");
       ImGuiLayer::end_rows();
     }
+    ImGuiLayer::section("Game speed");
+    if (ImGuiLayer::begin_rows("cheats_speed")) {
+      ImGuiLayer::row("Fast mode", "RDE's high-speed mode: the game (field, battle) runs faster. Music and movies keep their normal speed. "
+                                   "F2 or the right trigger (RT) switches it on and off; it turns Slow mode off.");
+      if (ImGui::Checkbox("##fast", &cfg.fast_mode)) {
+        if (cfg.fast_mode) cfg.slow_mode = false;
+        changed = true;
+      }
+      ImGuiLayer::row("Fast speed", "How much faster the game runs in Fast mode. RDE = the Radical Dreamers Edition's own speeds: 4x in the field, 2x in battle.");
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      {
+        int rate = cfg.fast_rate <= 0 ? 1 : cfg.fast_rate;
+        if (ImGui::SliderInt("##fastspeed", &rate, 1, 5, rate == 1 ? "RDE" : "%dx")) {
+          cfg.fast_rate = rate == 1 ? 0 : rate;
+          changed = true;
+        }
+      }
+      ImGuiLayer::row("Slow mode", "RDE's slow mode: the game (field, battle) runs slower. F1 or the left trigger (LT) switches it on and off; "
+                                   "it turns Fast mode off.");
+      if (ImGui::Checkbox("##slow", &cfg.slow_mode)) {
+        if (cfg.slow_mode) cfg.fast_mode = false;
+        changed = true;
+      }
+      ImGuiLayer::row("Slow speed", "How fast the game runs in Slow mode, in percent of normal speed (RDE: 50%).");
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      if (ImGui::SliderInt("##slowspeed", &cfg.slow_rate, 10, 90, "%d%%")) changed = true;
+      ImGuiLayer::end_rows();
+    }
   };
   auto right = [&] {
     ImGuiLayer::section("More");

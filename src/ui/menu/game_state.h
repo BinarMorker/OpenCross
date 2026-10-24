@@ -95,6 +95,8 @@ class GameState {
   std::vector<int> party() const;
   // Recruited character ids (0..43), ascending.
   std::vector<int> roster() const;
+  // Recruited and not excluded: the characters the menus may show and act on outside the party.
+  bool available(int character) const;
   u32 gold() const { return slot.gold(); }
   void set_gold(u32 amount) { slot.set_gold(amount); }
   u32 play_seconds() const { return slot.playtime_frames() / 60; }

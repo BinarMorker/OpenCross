@@ -14,7 +14,7 @@ OpenCross is **in development**. Exploring the world, talking to characters, the
 
 - **Both art styles**: switch between the remastered HD art and the original PlayStation look at any time.
 - **Widescreen**: the field, world map, battles and menus fill wide and ultrawide screens; movies stay in 4:3.
-- **High frame rates**: the game draws at your monitor's refresh rate (or uncapped, with an optional frame limit), with motion smoothed between game updates, while gameplay keeps its original speed.
+- **High frame rates**: supports rendering at any frame rate.
 - **Retro look**: optionally draw the game at the PlayStation's resolution, with its wobbly vertices, and a CRT filter.
 - **Higher-quality options**: render scaling, smoother effects and reflections, lighting and shadow improvements.
 - **Remastered or original music**: play the Radical Dreamers Edition soundtrack or the original PlayStation one.

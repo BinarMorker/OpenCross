@@ -1,6 +1,8 @@
 add_library(oc_platform STATIC
   config.h
   config.cpp
+  keymap.h
+  keymap.cpp
   paths.h
   paths.cpp
   rumble.h

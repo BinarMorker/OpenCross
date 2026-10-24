@@ -193,6 +193,10 @@ const char* fx_pack_model_binding(std::string_view model, std::string_view overl
   if (model == "act1" && overlay == "sky") return "e398";
   // tumaru (Pip's form changes): act0 = "e297", then its own entry 0.
   if (model == "act0" && overlay == "tumaru") return "e297";
+  // ghost2 (Shadow Cat's Shadow, the ghost techs): act0 = "e297", then its own entry 0.
+  if (model == "act0" && overlay == "ghost2") return "e297";
+  // canon: page x 10, y 256, CLUT row 0xEA at x 256, then its own entry 0.
+  if (model == "act0" && overlay == "canon") return "ea9a";
   return nullptr;
 }
 

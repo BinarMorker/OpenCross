@@ -16,6 +16,7 @@
 #include <format>
 
 #include "import/text.h"
+#include "platform/keymap.h"
 #include "render/texture.h"
 
 namespace oc::game {
@@ -715,17 +716,19 @@ void BattleView::handle_input(const platform::Input& in) {
     if (any_pad) kb_mode_ = false;
     if (any_key) kb_mode_ = true;
   }
-  const bool ok = key(SDL_SCANCODE_RETURN) || key(SDL_SCANCODE_SPACE) || key(SDL_SCANCODE_Z) || pad(SDL_GAMEPAD_BUTTON_SOUTH);
-  const bool cancel = key(SDL_SCANCODE_X) || key(SDL_SCANCODE_BACKSPACE) || pad(SDL_GAMEPAD_BUTTON_EAST);
-  const bool up = key(SDL_SCANCODE_UP) || key(SDL_SCANCODE_W) || pad(SDL_GAMEPAD_BUTTON_DPAD_UP);
-  const bool down = key(SDL_SCANCODE_DOWN) || key(SDL_SCANCODE_S) || pad(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-  const bool left = key(SDL_SCANCODE_LEFT) || key(SDL_SCANCODE_A) || pad(SDL_GAMEPAD_BUTTON_DPAD_LEFT);
-  const bool right = key(SDL_SCANCODE_RIGHT) || key(SDL_SCANCODE_D) || pad(SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
-  // In the top command menu Right / Square / R1 = next PC, Left / L1 = previous PC (Q / E / Tab are the keyboard's L1 / R1).
-  const int swap = (key(SDL_SCANCODE_E) || key(SDL_SCANCODE_TAB) || pad(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) || pad(SDL_GAMEPAD_BUTTON_WEST) || right ? 1 : 0) -
-                   (key(SDL_SCANCODE_Q) || pad(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) || left ? 1 : 0);
+  using platform::Action;
+  auto act = [&](Action action) { return platform::action_pressed(in, action); };
+  const bool ok = act(Action::Ok) || pad(SDL_GAMEPAD_BUTTON_SOUTH);
+  const bool cancel = act(Action::Cancel) || pad(SDL_GAMEPAD_BUTTON_EAST);
+  const bool up = act(Action::Up) || pad(SDL_GAMEPAD_BUTTON_DPAD_UP);
+  const bool down = act(Action::Down) || pad(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+  const bool left = act(Action::Left) || pad(SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+  const bool right = act(Action::Right) || pad(SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+  // In the top command menu Right / Square / R1 = next PC, Left / L1 = previous PC.
+  const int swap = (act(Action::SelectRight) || act(Action::Item) || pad(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) || pad(SDL_GAMEPAD_BUTTON_WEST) || right ? 1 : 0) -
+                   (act(Action::SelectLeft) || pad(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) || left ? 1 : 0);
   // PS1 Triangle: camera mode in target selection.
-  const bool triangle = key(SDL_SCANCODE_C) || pad(SDL_GAMEPAD_BUTTON_NORTH);
+  const bool triangle = act(Action::Menu) || pad(SDL_GAMEPAD_BUTTON_NORTH);
   // A running overlay reads pad 0's new presses.
   if (ok || auto_confirm_) fx_pad_edge_ |= 0x20;
 
@@ -1389,9 +1392,9 @@ void BattleView::build_target_ui(bool cam_hint) {
   const size_t hint0 = op_count();
   {
     const float hx = 0xF6, hy = 0xE;
-    // Keyboard: the Triangle key is C (atlas cell 21: column 5, row 1).
+    // Keyboard: the key cap of the Triangle (Menu) key.
     if (kb_mode_) {
-      constexpr int cell = 21;
+      const int cell = platform::keyboard_cell(platform::action_vk(platform::Action::Menu));
       add_img(hud_[kHKeys], hx * kPs1Px, hy * kRowScale, 12 * kPs1Px, 12 * kRowScale, static_cast<float>(cell & 15) / 16.0f, static_cast<float>(cell >> 4) / 7.0f,
               static_cast<float>((cell & 15) + 1) / 16.0f, static_cast<float>((cell >> 4) + 1) / 7.0f);
     } else {

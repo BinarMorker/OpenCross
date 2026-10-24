@@ -83,7 +83,8 @@ class MainMenu {
   void draw(const render::Frame& frame, float vw, float vh, bool resume = false);
 
   // Test / screenshot hook: jumps straight to a screen (member 0, cursors at the start). `variant` 1 = a sub-state
-  // (member pick on Main, element carried over the grid, equip candidate list), 2 = the grid options popup. Save: 0 = Save/Load choice,
+  // (member pick on Main, element carried over the grid, equip candidate list, equipment view on Status), 2 = the grid options popup.
+  // Main: 2 = the roster (Status pick), 3 = the roster's remove-all prompt (Equip pick). Save: 0 = Save/Load choice,
   // 1 = save grid, 2 = load grid, 3 = load confirm, 4 = choice with saving blocked.
   void debug_show(MenuScreen screen, int variant = 0);
 

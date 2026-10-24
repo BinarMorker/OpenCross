@@ -114,6 +114,17 @@ struct MainMenu::Impl {
   int main_cur = 0, mem_cur = 0, sub = 0, pick_cur = 0, pick_for = 0;
   int member = 0;
   int choice_cur = 0;
+  // Status: the profile panel (shown first) or the equipment frames.
+  bool profile = true;
+  // Roster list of all 44 characters, opened by moving left past the first member while picking: it slides in, runs, slides out.
+  // roster_ask = the Triangle "remove all" prompt (Grid / Equip picks), roster_no = its cursor (0 Yes, 1 No). A character picked
+  // from it stands in for party slot 0 (`stand_in`) until the screen it opened is left.
+  enum class Roster { Off, In, On, Out };
+  static constexpr int kRosterRows = 17, kRosterSlide = 20;
+  Roster roster = Roster::Off;
+  int roster_anim = 0, roster_top = 0, roster_row = 0, roster_no = 0;
+  bool roster_ask = false;
+  int stand_in = -1;
   // elements: use
   int use_cur = 0, use_scroll = 0, target_cur = 0;
   bool use_target = false;
@@ -180,7 +191,14 @@ struct MainMenu::Impl {
   std::string table_row(std::string_view table, int key);
 
   // ===================================================== party helpers
-  std::vector<int> party() const { return gs->party(); }
+  std::vector<int> party() const {
+    std::vector<int> members = gs->party();
+    if (stand_in >= 0) {
+      if (members.empty()) members.push_back(stand_in);
+      else members[0] = stand_in;
+    }
+    return members;
+  }
   // Status-screen model: the PS1 turns it by +8 / 4096 of a turn per frame at 30 fps.
   MenuModelView* model_view = nullptr;
   bool model_wanted = false;
@@ -221,6 +239,7 @@ struct MainMenu::Impl {
 
   // Defined in main_menu_main.cpp.
   void update_main(const Nav& nav);
+  void update_roster(const Nav& nav);
   void update_status(const Nav& nav);
   void update_choice(const Nav& nav);
 
@@ -361,7 +380,9 @@ struct MainMenu::Impl {
   void card_hd(float card_x, float card_y, int character, bool stats, bool stamina, int group_id = 7);
   void member_card(int character, float x, float y);
   void build_main();
+  void build_roster();
   void status_panel(int character, float panel_x, float panel_y);
+  std::vector<std::u32string> profile_lines(int character);
   void build_status();
 
   // Defined in main_menu_elements.cpp.

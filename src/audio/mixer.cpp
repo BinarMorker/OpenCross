@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <string>
 
@@ -509,6 +510,8 @@ bool Mixer::open_device() {
     SDL_QuitSubSystem(SDL_INIT_AUDIO);
     return false;
   }
+  // OC_QUIET (test runs): the mix still runs at the device's pace, at zero gain.
+  if (std::getenv("OC_QUIET")) SDL_SetAudioStreamGain(stream_, 0.0f);
   SDL_ResumeAudioStreamDevice(stream_);
   return true;
 }

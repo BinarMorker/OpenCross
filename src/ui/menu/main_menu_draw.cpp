@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "core/log.h"
+#include "platform/keymap.h"
 #include "render/camera.h"
 #include "ui/lowres.h"
 #include "ui/menu/menu_common.h"
@@ -410,17 +411,18 @@ std::u32string MainMenu::Impl::capt(std::string_view key, const char* fallback) 
 // (no icon; the label shrinks to the notch). The cmnmes rows of these captions are Latin in every language, JP included; the JP
 // column of "Customize" is empty, so the key itself shows there.
 void MainMenu::Impl::notch_caption(float frame_x, float frame_y, int kind) {
-  static const char* const kKey[6] = {"Weapon", "Armor", "Accessories", "Elements", "Key Items", "Customize"};
-  static const char* const kEnglish[6] = {"Weapons", "Armor", "Accessories", "Elements", "Key Items", "Customize"};
+  static const char* const kKey[7] = {"Weapon", "Armor", "Accessories", "Elements", "Key Items", "Customize", "Profile"};
+  static const char* const kEnglish[7] = {"Weapons", "Armor", "Accessories", "Elements", "Key Items", "Customize", "Profile"};
   // Room for the text inside the frame's notch (caption_gap_end - 10).
-  static const float kGapWidth[6] = {69, 56, 80, 70, 76, 51};
-  kind = std::clamp(kind, 0, 5);
-  if (kind == 5) {
-    const std::u32string caption = capt("Customize", "Customize");
+  static const float kGapWidth[7] = {69, 56, 80, 70, 76, 51, 40};
+  kind = std::clamp(kind, 0, 6);
+  // Customize and Profile carry no icon.
+  if (kind >= 5) {
+    const std::u32string caption = capt(kKey[kind], kEnglish[kind]);
     float scale = 0.31f;
     text->prepare(face_gn, caption);
     const float width = text->measure(face_gn, caption, scale) / xscale;
-    if (width > kGapWidth[5]) scale *= kGapWidth[5] / width;
+    if (width > kGapWidth[kind]) scale *= kGapWidth[kind] / width;
     HT(face_gn, frame_x + 9.7f, frame_y + 0.5f, caption, kText, scale);
     return;
   }
@@ -486,19 +488,19 @@ void MainMenu::Impl::pointer(float x, float y, bool left) {
 
 // Button glyph of function slot `slot_index`: 24 x 24 PS1 px at (x, y). Gamepad: ui/gamepad.png cell
 // i = {8, 9, 0xB, 0xA, 0x17, 0x18, 0x15, 0x16}[slot_index] (13 x 4 atlas: column i % 13, row (i / 13) * 2 + 1); keyboard mode swaps it for the key
-// cap of the action's key (ui/keyboard_<e f i g s j>.png, 16 x 7 cells, moved up 1; the pad glyph at
+// cap of the action's first key (platform/keymap.h; ui/keyboard_<e f i g s j>.png, 16 x 7 cells, moved up 1; the pad glyph at
 // (0x10, 0x182 / 0x19A) is moved up 5). The slots are the PS1 pad functions, identity-mapped: 0 OK, 1 Cancel, 2 Square, 3 Triangle, 4 L1, 5 R1.
 // Classic art + Ps1ResMenus draws nothing: the PS1 sheet's own glyph frames are not decoded.
 void MainMenu::Impl::btn(float x, float y, int slot_index) {
   if (ps1_screen()) return;
   static const int pad_i[8] = {8, 9, 0xB, 0xA, 0x17, 0x18, 0x15, 0x16};
-  // Keyboard cells: Enter, Backspace, V, C, Q, E.
-  static const int key_cell[8] = {49, 51, 40, 21, 35, 23, -1, -1};
+  using platform::Action;
+  static const Action kAction[6] = {Action::Ok, Action::Cancel, Action::Item, Action::Menu, Action::SelectLeft, Action::SelectRight};
   static const char* const atlas[6] = {"e", "f", "i", "g", "s", "j"};
   slot_index = std::clamp(slot_index, 0, 7);
-  if (kb_mode && key_cell[slot_index] >= 0) {
+  if (kb_mode && slot_index < 6) {
     if (Tex* tex = texs.load(std::string("ui/keyboard_") + atlas[std::clamp(lang_index(), 0, 5)] + ".png")) {
-      const int cell = key_cell[slot_index];
+      const int cell = platform::keyboard_cell(platform::action_vk(kAction[slot_index]));
       Img(tex, PX(x), PY(y - 1.0f), PX(24), PY(24), static_cast<float>(cell & 15) / 16.0f, static_cast<float>(cell >> 4) / 7.0f,
           static_cast<float>((cell & 15) + 1) / 16.0f, static_cast<float>((cell >> 4) + 1) / 7.0f);
     }

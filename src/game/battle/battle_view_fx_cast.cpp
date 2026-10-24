@@ -386,9 +386,9 @@ bool BattleView::fx_begin() {
   // The stock tech hosts' init tail: when the pack registered a type-0x1A 'main', every acting model starts entry 0 of the pack's own atk
   // table, variant 0 (the caster's run, the pack timeline and the targets' reactions are started from that script). stdmag0 / stdtech1 have
   // no such block. The same block is the init tail of the packs listed in kMainTail (stdtech0, soidash, 3mix, 3voice, cook, ghost1, hip,
-  // shine, shock, swordbox, uzumaki, xgiri, sky, jigoku): the Boxer Boys' "presents" (element 379 / 380, `shock`) is a caster script that
+  // shine, shock, swordbox, uzumaki, xgiri, sky, jigoku, canon): the Boxer Boys' "presents" (element 379 / 380, `shock`) is a caster script that
   // walks / opens the chest model, and jigoku (207 Dinner Guest) starts its cameras from the same `main` loop.
-  static const std::set<std::string_view> kMainTail = {"stdtech0", "soidash", "shock", "3mix", "3voice", "cook", "ghost1", "hip", "shine", "swordbox", "uzumaki", "xgiri", "sky", "jigoku"};
+  static const std::set<std::string_view> kMainTail = {"stdtech0", "soidash", "shock", "3mix", "3voice", "cook", "ghost1", "hip", "shine", "swordbox", "uzumaki", "xgiri", "sky", "jigoku", "canon"};
   bool host_main = false;
   if (kMainTail.count(pack->overlay) && pack->has_anim && pack->tables.count("main") && act_.actor >= 0) {
     // The init tail walks the whole acting list: every caster runs the pack's atk entry with its list index as the variant.
@@ -411,10 +411,19 @@ bool BattleView::fx_begin() {
   // The pack's pseudo-actor: ghost1, oomono2 and jigoku set up the type-0x14 `act0` model and
   // run its entry 0; the oomono2 script's `Sequence zmn0` etc. reach the pack through pa_tick (battle_view_pseudo.cpp).
   pa_begin(pack);
-  // oomono2 (Big Catch) has no damage / reaction op in its sequences, but the overlay starts the casters' `main` script,
-  // whose `React(-1)` (CallDamTargetAll, at script tick 192 = the pseudo-actor's `Sequence zmn0`) runs variant 7 of the same table on every target
-  // = Damage (0x41): the hit and its number land there, not at the pack's start (the generic 4 + 6 k ticks).
-  const bool script_hits = pack->overlay == "oomono2" && pack->has_anim && host_script_lands_hits(pack->anim);
+  // A bespoke overlay whose init starts the casters' run of the pack's table (entry 0x80 = `main` entry 0: oomono2, ghost2, jakotu ...) leaves
+  // the hit to that script: its `React(-1)` (CallDamTargetAll; Big Catch at script tick 192 = the pseudo-actor's `Sequence zmn0`, Shadow Cat's
+  // Shadow at 376) runs variant 7 of the same table on every target = Damage (0x41), so the number lands there, not at the pack's start
+  // (the generic 4 + 6 k ticks).
+  bool overlay_main = false;
+  if (const effects::FxModels* ms = fx_->bespoke_models(); ms && pack->has_anim)
+    for (const int unit : act_.casters)
+      if (unit >= 0 && static_cast<size_t>(unit) < ms->units.size() && ms->units[static_cast<size_t>(unit)].script_entry == 0x80 &&
+          ms->units[static_cast<size_t>(unit)].script_table.empty())
+        overlay_main = true;
+  const bool script_hits = overlay_main && host_script_lands_hits(pack->anim);
+  // The init's own requests (the casters' entry 0x80 run, SetAnim) apply in this pass.
+  fx_model_requests(true);
   // The same holds for a caster script a SEQUENCE starts (op 0x43 / 0x45, pack table): Bomber's Suicide Bomb (348, bombom.prd, stdmag0)
   // has no damage / reaction op in its sequences; `main` t0 op 0x45 runs the Bomber's entry 0, whose t290 `React(-1)` starts Serge's
   // variant 7 = Damage next to `Sequence bomb`, so the number spawns about 290 ticks into the pack, not at its start.

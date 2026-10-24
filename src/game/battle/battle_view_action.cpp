@@ -188,9 +188,12 @@ void BattleView::update(float dt, const platform::Input& in) {
         ui_ = Ui::Top;
         top_cursor_ = 0;
         sync_shown();
-        // After a command the menu goes to the next PC in slot order (actor + 1, actor + 2, the actor itself last); a PC that
-        // defended is skipped until another PC has acted or time has advanced (Unit::defending). -1 = nobody: handle_input settles / re-picks.
-        active_pc_ = next_pc_after(last_actor_ >= 0 ? last_actor_ : active_pc_);
+        // The top menu reopens on the PC that attacked while it can still act - after its chain ends, an enemy turn in between or the
+        // target's death; after an Element / Defend command (or when it cannot act) it goes to the next PC in slot order (actor + 1,
+        // actor + 2, the actor itself last); a PC that defended is skipped until another PC has acted or time has advanced
+        // (Unit::defending). -1 = nobody: handle_input settles / re-picks.
+        const bool keep = last_actor_ >= 0 && last_kind_ == battle::Command::Kind::Attack && battle_->can_act(last_actor_);
+        active_pc_ = keep ? last_actor_ : next_pc_after(last_actor_ >= 0 ? last_actor_ : active_pc_);
         if (cursor_memory_ && active_pc_ >= 0 && active_pc_ < battle::kPcSlots) top_cursor_ = top_mem_[active_pc_];
       }
       bool any = false;
@@ -292,6 +295,7 @@ void BattleView::execute(const battle::Command& cmd) {
   // The engaged PC keeps its menu while it can still act; otherwise update() picks the next PC (next_pc_after).
   active_pc_ = cmd.actor;
   last_actor_ = cmd.actor;
+  last_kind_ = cmd.kind;
   ui_ = Ui::Wait;
 }
 

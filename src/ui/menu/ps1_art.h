@@ -93,6 +93,7 @@ inline float caption_gap_end(int frame) {
     case 53: case 186: return 80;
     case 56: return 91;
     case 61: return 86;
+    case 63: return 50;
     case 64: return 61;
     case 82: return 48;
     case 84: return 64;

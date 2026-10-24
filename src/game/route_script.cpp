@@ -11,6 +11,7 @@
 #include <sstream>
 
 #include "core/log.h"
+#include "platform/keymap.h"
 
 namespace oc::game {
 
@@ -21,15 +22,19 @@ constexpr float kUnitsPerRad = 4096.0f / (2.0f * kPi);
 constexpr u64 kDefaultTimeout = 1800;
 
 int key_for(const std::string& name) {
-  if (name == "up") return SDL_SCANCODE_UP;
-  if (name == "down") return SDL_SCANCODE_DOWN;
-  if (name == "left") return SDL_SCANCODE_LEFT;
-  if (name == "right") return SDL_SCANCODE_RIGHT;
-  if (name == "confirm" || name == "ok") return SDL_SCANCODE_RETURN;
-  if (name == "cancel") return SDL_SCANCODE_X;
-  if (name == "run") return SDL_SCANCODE_LSHIFT;
+  using platform::Action;
+  auto first = [](Action action) { return platform::action_keys(action)[0]; };
+  if (name == "up") return first(Action::Up);
+  if (name == "down") return first(Action::Down);
+  if (name == "left") return first(Action::Left);
+  if (name == "right") return first(Action::Right);
+  if (name == "confirm" || name == "ok") return first(Action::Ok);
+  if (name == "cancel") return first(Action::Cancel);
+  if (name == "run") return platform::action_keys(Action::Cancel)[1];
   if (name == "escape") return SDL_SCANCODE_ESCAPE;
-  if (name == "tab" || name == "menu") return SDL_SCANCODE_TAB;
+  if (name == "tab" || name == "menu") return platform::action_keys(Action::Menu)[1];
+  if (name == "triangle") return first(Action::Menu);
+  if (name == "item") return first(Action::Item);
   if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z') return SDL_SCANCODE_A + (name[0] - 'a');
   // f1..f9: the hotkeys.
   if (name.size() == 2 && name[0] == 'f' && name[1] >= '1' && name[1] <= '9') return SDL_SCANCODE_F1 + (name[1] - '1');

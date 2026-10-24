@@ -124,7 +124,7 @@ def load_ref(d, force=False):
 
 # ------------------------------------------------------------------------------------------------------------------ ours side
 RE_HDR = re.compile(r"fx objects tick (\d+) fxtick (\d+): (\d+) objects")
-RE_OBJ = re.compile(r"\bem (\S+) spr (\S+) t(\d+) pos\s+(-?\d+)\s+(-?\d+)\s+(-?\d+) vel\s+(-?\d+)\s+(-?\d+)\s+(-?\d+) sc\s+(-?\d+)\s+(-?\d+)\s+(-?\d+) "
+RE_OBJ = re.compile(r"\bem (\S+) +spr (\S+) t(\d+) pos\s+(-?\d+)\s+(-?\d+)\s+(-?\d+) vel\s+(-?\d+)\s+(-?\d+)\s+(-?\d+) sc\s+(-?\d+)\s+(-?\d+)\s+(-?\d+) "
                     r"ang\s+(-?\d+)\s+(-?\d+)\s+(-?\d+) col\s+(-?\d+)\s+(-?\d+)\s+(-?\d+) rgb\s+\d+\s+\d+\s+\d+ life\s+(-?\d+) bias\s+-?\d+ fr\s+-?\d+ fl ([0-9a-f]+)")
 RE_UH = re.compile(r"fx units tick (\d+) fxtick (\d+)")
 RE_UNIT = re.compile(r"\bunit\s+(\d+) flags7e ([0-9a-f]+) ghost (\d) col\s+(\d+)\s+(\d+)\s+(\d+) pos\s+(-?\d+)\s+(-?\d+)\s+(-?\d+) yaw\s+(\d+) clip (-?\d+) motion ([-\d.]+) \((-?\d+)/256\)")
@@ -314,6 +314,8 @@ def find_offset(ref, ours, oseqs, step=5):
         return snap_offset(ref, ours, raw, step), "pack %s start (our first command tick - ccx state frame + elapsed), snapped to the sample grid from %d" % ("/".join(roots), raw)
     diffs = [oseqs[n][0] - rs[n] for n in rs if n in oseqs]
     if diffs:
+        # A plain median: the root path's birth credit does not hold here (Flag-Bearer 177 reads one sample better at 190 than at this 193,
+        # Canon Cannon 298 five frames worse at 190 than at 195) - pass `--offset N` where a capture needs it.
         return int(round(statistics.median(diffs))), "median of %d common sequence starts (our first command tick - ccx state frame + elapsed)" % len(diffs)
     rf = next((f for f in sorted(ref) if ref[f]["objs"]), None)
     of = next((t for t in sorted(ours) if ours[t]["objs"]), None)

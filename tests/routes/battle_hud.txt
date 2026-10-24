@@ -32,10 +32,10 @@
 - tap confirm                         # Attack -> target selection
 - wait 60
 - screenshot bh_02_target.png
-- tap c                               # Triangle: DYNAMIC camera
+- tap triangle                               # Triangle: DYNAMIC camera
 - wait 40
 - screenshot bh_03_target_dynamic.png
-- tap c                               # back to NORMAL
+- tap triangle                               # back to NORMAL
 - wait 10
 - tap cancel                          # leave the target selection
 - wait 20

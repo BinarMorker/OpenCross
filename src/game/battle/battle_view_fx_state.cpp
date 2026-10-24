@@ -689,8 +689,12 @@ void BattleView::fx_tick() {
   // The hand-over runs at the top of a later pass than the op 0x41 (kHandOverDelay).
   if (fx_charge_ && fx_ready_) ++fx_hand_wait_;
   fx_model_requests();
-  // The pack's pseudo-actor: its script, mover and pose (battle_view_pseudo.cpp).
+  // The pack's pseudo-actor: its script, mover and pose (battle_view_pseudo.cpp); then the overlay's write of its hidden bit (ghost2).
   pa_tick();
+  if (effects::FxModels* ms = fx_->bespoke_models(); ms && ms->pseudo_hide >= 0) {
+    pa_.hidden = ms->pseudo_hide != 0;
+    ms->pseudo_hide = -1;
+  }
   fx_vram_apply();
   // darkfeit / lasdes3 0x102 / 0x103.
   if (effects::FxModels* ms = fx_->bespoke_models(); ms && ms->env_clut_set) fx_textures_.stock_env_k = ms->env_clut, ms->env_clut_set = false;

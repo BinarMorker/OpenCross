@@ -121,7 +121,7 @@ void bind_cheats(const Cheats* set);
 //            the 2D / UI drawn at output resolution; with Ps1Res the multiple of the PS1 320 x 224 target instead (2 = 640 x 448); one of
 //            kRenderScales (snapped on load). Ps1Jitter: GTE integer vertex snapping + affine texture mapping in the 3D pipelines
 //            (render/ps1_jitter.h). Crt: final full-frame CRT post pass (scanlines, mask, vignette), ImGui excluded (render/crt_pass.h).
-//   [Game]   FastMode / SlowMode (RDE's speed toggles; exclusive; hotkeys FastSpeedKey / SlowSpeedKey, SDL key names, default F2 / F1,
+//   [Game]   FastMode / SlowMode (RDE's speed toggles; exclusive; hotkeys F2 / F1 (platform/keymap.h),
 //            pad RT / LT): the simulation (field, battle) runs FastRate x faster (0 = RDE's: 4x in the field, 2x in battle; 2..5 =
 //            that many times; FixedStep caps at 5 ticks per frame) or at SlowRate percent (10..90, default RDE's 50); movies stay at
 //            normal speed. Both are off in the Radius tutorial (map / battle 386). AutoSave: RDE's auto-save (card 1 slot 0) on every location change.
@@ -180,8 +180,6 @@ struct Config {
   bool auto_save = true;
   int fast_rate = 0;
   int slow_rate = 50;
-  std::string fast_key = "F2";
-  std::string slow_key = "F1";
   bool widescreen = false;
   ArtMode art_mode = ArtMode::Hd;
   std::vector<ModSetting> mods;

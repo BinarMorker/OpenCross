@@ -86,6 +86,12 @@ std::vector<int> GameState::roster() const {
   return out;
 }
 
+bool GameState::available(int character) const {
+  if (character < 0 || character >= save::kNumChars) return false;
+  const bool excluded = ((slot.unk_e1b8[static_cast<size_t>(2 + (character >> 5))] >> (character & 31)) & 1) != 0;
+  return slot.recruited(character) && !excluded;
+}
+
 void GameState::set_option(u16 mask, bool on) {
   u16 bits = options();
   bits = on ? static_cast<u16>(bits | mask) : static_cast<u16>(bits & ~mask);

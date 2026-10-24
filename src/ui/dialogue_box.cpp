@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "core/log.h"
+#include "platform/keymap.h"
 #include "ui/ps1_font.h"
 #include "ui/ps1_window.h"
 
@@ -855,7 +856,7 @@ void DialogueDemo::handle_input(const platform::Input& in) {
   Impl& impl = *impl_;
   if (!impl.ready) return;
   auto pressed = [&](int scancode) { return in.key_pressed[static_cast<size_t>(scancode)]; };
-  if (pressed(SDL_SCANCODE_RETURN) || pressed(SDL_SCANCODE_SPACE) || pressed(SDL_SCANCODE_Z)) {
+  if (platform::action_pressed(in, platform::Action::Ok)) {
     if (impl.box.finished()) show(room_, msg_);
     else impl.box.confirm();
   }

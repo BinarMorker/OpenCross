@@ -13,8 +13,8 @@
 //   page 2 out to black ((45 - k) / 15); k = 45 closes. The latch is set by any key press with a keyboard glyph or
 //   Space (not the speed keys), or by the release of a pad button (not LT / RT / L3 / R3), at any time: a press during a fade
 //   is consumed when the counter reaches the waiting step. The game frame is not drawn under the guide (black).
-// - The glyph overlays show OpenCross's own bindings (title/nav.h, app/app_sim.cpp): arrows / WASD move, Enter / Z confirm,
-//   X cancel + Shift run, F key items, Tab menu, Esc options; pad A / B / Y / Start, d-pad + left stick. Guide rows for
+// - The glyph overlays show RDE's two key sets (platform/keymap.h): arrows / WASD move, Enter / X confirm, Backspace / Left Shift
+//   cancel and run, F / R key items, I / Tab menu, Esc options; pad A / B / Y / Start, d-pad + left stick. Guide rows for
 //   features OpenCross does not implement (pause, change lead, speed modes, F3 / F4 / F5) stay empty, like an unbound key.
 //   The screen is not part of the PS1 game, so both art modes draw the same pages.
 #include <array>

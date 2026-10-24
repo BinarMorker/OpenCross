@@ -13,6 +13,7 @@
 
 #include "core/log.h"
 #include "import/tim.h"
+#include "platform/keymap.h"
 #include "render/text_batch.h"
 #include "render/texture.h"
 #include "ui/ps1_font.h"
@@ -861,11 +862,11 @@ bool BattleResults::open(const battle::Battle& finished, int scene_id) {
 void BattleResults::update(float dt, const platform::Input& in) {
   Impl& impl = *impl_;
   if (impl.phase == Phase::Idle || impl.phase == Phase::Done) return;
-  const bool ok = in.key_pressed[SDL_SCANCODE_RETURN] || in.key_pressed[SDL_SCANCODE_SPACE] || in.key_pressed[SDL_SCANCODE_Z] ||
-                  in.pad_pressed[SDL_GAMEPAD_BUTTON_SOUTH];
-  const bool up = in.key_pressed[SDL_SCANCODE_UP] || in.key_pressed[SDL_SCANCODE_W] || in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_UP];
-  const bool down = in.key_pressed[SDL_SCANCODE_DOWN] || in.key_pressed[SDL_SCANCODE_S] || in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN];
-  const bool cancel = in.key_pressed[SDL_SCANCODE_X] || in.key_pressed[SDL_SCANCODE_BACKSPACE] || in.pad_pressed[SDL_GAMEPAD_BUTTON_EAST];
+  using platform::Action;
+  const bool ok = platform::action_pressed(in, Action::Ok) || in.pad_pressed[SDL_GAMEPAD_BUTTON_SOUTH];
+  const bool up = platform::action_pressed(in, Action::Up) || in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_UP];
+  const bool down = platform::action_pressed(in, Action::Down) || in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN];
+  const bool cancel = platform::action_pressed(in, Action::Cancel) || in.pad_pressed[SDL_GAMEPAD_BUTTON_EAST];
   impl.acc += dt * 60.0f;
   int steps = 0;
   while (impl.acc >= 1.0f && steps++ < 8) {

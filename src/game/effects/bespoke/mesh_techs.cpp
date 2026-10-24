@@ -4,7 +4,7 @@
 //   fnoise   eid 20  target 0, frost front (0x180) then the model breaks into spinning shards (0x181)
 //   rakugaki eid 21  target 0, white sweep (0x181) then the planar doodle texture revealed tile by tile (0x180)
 //   hensin   eid 11  caster 0 erased from the head down by a plane (0x180) with shards along the cut
-//   ghost2   eids 302 306 309 310 527  the last caster rises out of the ground (0x180: drawn clipped at y = 0)
+//   ghost2   eids 302 306 309 310 527  the pack's pseudo-actor rises out of the ground (0x180: drawn clipped at y = 0)
 //   miki     eid 17  copies the displayed frame to VRAM (0x1C0, 0x100) every frame
 #include <algorithm>
 #include <array>
@@ -335,33 +335,38 @@ class Rakugaki : public MeshTech {
 };
 
 // ---- ghost2 ---------------------------------------------------------------------------------------------------------------------------
-// Init: every caster plays entry 0 of the pack's 0x1A table ("main"); the LAST caster is hidden from the stock pass. 0x180 (D = s16 @+4):
-// for D ticks the overlay poses that model (normal speed) and draws it itself clipped at the world plane y = 0, keeping the y <= 0 side
-// (skip side 1; byte 3 = the part flag byte, GT3 depth max SZ for flag 0x10), plus the unit shadow; when the timer passes D the stock draw is
-// back. Eids 310 / 527 never send 0x180: the last caster stays hidden for the effect. The pack's 'act0' model (type 0x14, tpage (448, 256), CLUT (256, 226), anmseq 0) is left to
-// the stock draw and not reproduced here.
+// Init: the pack's 'act0' model (type 0x14, tpage (448, 256), CLUT (256, 226), its own anmseq entry 0) is the host's pseudo-actor; every
+// caster plays entry 0 of the pack's 0x1A table ("main"), and the pseudo-actor (acting-list entry -1) is hidden from the stock pass. 0x180
+// (D = s16 @+4): for D ticks the overlay draws the pseudo-actor itself clipped at the world plane y = 0, keeping the y <= 0 side (skip side 1;
+// byte 3 = the part flag byte, GT3 depth max SZ for flag 0x10), plus its shadow; when the timer passes D it is shown to the stock draw.
+// Eids 310 / 527 never send 0x180: the pseudo-actor stays hidden until its own script shows it. The casters are never hidden.
 class Ghost2 : public MeshTech {
  protected:
   void init() override {
     for (int i = 0; i < static_cast<int>(ctx_.models ? ctx_.models->casters.size() : 0); ++i) start_caster_anim(caster(i));
-    if (FxModel* model = last()) model->hidden = true;
+    if (ctx_.models) ctx_.models->pseudo_hide = 1;
   }
   void command(int op, const int* args, int count) override {
     if (op == 0x180) state_ = 0x180, timer_ = 0, limit_ = arg(args, count, 4);
   }
   void frame() override {
-    FxModel* model = last();
-    if (!model || state_ != 0x180) return;
+    if (!ctx_.models || state_ != 0x180) return;
     if (limit_ < ++timer_) {
       state_ = 0;
-      own_draw(model, false);
+      ctx_.models->pseudo_hide = 0;
+      ctx_.models->pseudo_own_shadow = false;
       return;
     }
-    own_draw(model, true);
+    ctx_.models->pseudo_hide = 1;
+    ctx_.models->pseudo_own_shadow = true;
   }
   void draw(std::vector<FxPrim>& out) const override {
-    const FxModel* model = last();
-    if (!model || state_ != 0x180) return;
+    if (state_ != 0x180) return;
+    FxModel model;
+    model.unit = kPseudoUnit;
+    FxSkinnedModel sk;
+    if (!skin(&model, sk)) return;
+    for (int k = 0; k < 3; ++k) model.rgb[k] = sk.rgb[k];
     ModelDrawSpec spec;
     spec.mask_part_flags = false;
     spec.tri_far_z = true;
@@ -373,12 +378,11 @@ class Ghost2 : public MeshTech {
     spec.skip[0] = false, spec.skip[1] = true;
     u32 order = 0;
     const size_t n0 = out.size();
-    draw_model(model, spec, out, order);
+    model_draw(sk, model, spec, ctx_.view, out, order);
     last_prims_ = out.size() - n0;
   }
 
  private:
-  FxModel* last() const { return ctx_.models && !ctx_.models->casters.empty() ? caster(static_cast<int>(ctx_.models->casters.size()) - 1) : nullptr; }
   int state_ = 0, timer_ = 0, limit_ = 0;
 };
 

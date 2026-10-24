@@ -183,8 +183,6 @@ bool Config::load(const std::filesystem::path& file) {
   fast_rate = std::clamp(parse_int(ini.get("Game", "FastRate"), fast_rate), 0, 5);
   if (fast_rate == 1) fast_rate = 0;
   slow_rate = std::clamp(parse_int(ini.get("Game", "SlowRate"), slow_rate), 10, 90);
-  fast_key = ini.get("Game", "FastSpeedKey", fast_key);
-  slow_key = ini.get("Game", "SlowSpeedKey", slow_key);
   widescreen = parse_bool(ini.get("Video", "Widescreen"), widescreen);
   {
     const std::string mode = ini.get("Video", "ArtMode", "hd");
@@ -318,8 +316,6 @@ bool Config::save(const std::filesystem::path& file) const {
   ini.set("Game", "AutoSave", on_off(auto_save));
   ini.set("Game", "FastRate", std::to_string(fast_rate));
   ini.set("Game", "SlowRate", std::to_string(slow_rate));
-  ini.set("Game", "FastSpeedKey", fast_key);
-  ini.set("Game", "SlowSpeedKey", slow_key);
   ini.set("Video", "Widescreen", on_off(widescreen));
   ini.set("Video", "ArtMode", art_mode == ArtMode::Modded ? "modded" : art_mode == ArtMode::Hd ? "hd" : "original");
   ini.set("Mods", "DumpStages", on_off(dump_stages));

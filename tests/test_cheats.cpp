@@ -8,6 +8,9 @@
 
 #include "game/cheats.h"
 #include "platform/config.h"
+#include "platform/keymap.h"
+
+#include <SDL3/SDL_scancode.h>
 
 using namespace oc;
 
@@ -201,11 +204,23 @@ int main() {
     CHECK(fine.apply(frame, false, 2.0f) == 2.0f);
     for (int i = 0; i < 299; ++i) CHECK(fine.apply(frame, true, 0.5f) == 0.5f);
   }
-  // --- [Game] speed settings: RDE defaults, round trip
+  // --- [Game] speed settings: RDE defaults; the speed keys are RDE's fixed F1 / F2
   {
     platform::Config defaults;
-    CHECK(!defaults.fast_mode && !defaults.slow_mode && defaults.fast_rate == 0 && defaults.slow_rate == 50 && defaults.fast_key == "F2" &&
-          defaults.slow_key == "F1");
+    CHECK(!defaults.fast_mode && !defaults.slow_mode && defaults.fast_rate == 0 && defaults.slow_rate == 50);
+    using platform::Action;
+    CHECK(platform::action_keys(Action::SlowSpeed)[0] == SDL_SCANCODE_F1 && platform::action_keys(Action::FastSpeed)[0] == SDL_SCANCODE_F2);
+  }
+  // --- RDE's key sets: Ok Enter / X, Cancel Backspace / Left Shift, Menu I / Tab; key caps of set 0
+  {
+    using platform::Action;
+    CHECK(platform::action_keys(Action::Ok)[0] == SDL_SCANCODE_RETURN && platform::action_keys(Action::Ok)[1] == SDL_SCANCODE_X);
+    CHECK(platform::action_keys(Action::Cancel)[0] == SDL_SCANCODE_BACKSPACE && platform::action_keys(Action::Cancel)[1] == SDL_SCANCODE_LSHIFT);
+    CHECK(platform::action_keys(Action::Menu)[0] == SDL_SCANCODE_I && platform::action_keys(Action::Menu)[1] == SDL_SCANCODE_TAB);
+    CHECK(platform::keyboard_cell(platform::action_vk(Action::Menu)) == 27 && platform::keyboard_cell(platform::action_vk(Action::Item)) == 24);
+    platform::Input in;
+    in.key_pressed[SDL_SCANCODE_X] = true;
+    CHECK(platform::action_pressed(in, Action::Ok) && !platform::action_pressed(in, Action::Cancel));
   }
 
   if (failures) return 1;

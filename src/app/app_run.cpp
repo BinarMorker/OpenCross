@@ -4,7 +4,6 @@
 #include "app/app.h"
 
 #include <SDL3/SDL_gamepad.h>
-#include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_timer.h>
 
@@ -16,6 +15,7 @@
 #include "core/log.h"
 #include "game/effects/gpu_effects.h"
 #include "game/free_cam.h"
+#include "platform/keymap.h"
 #include "render/camera.h"
 
 namespace oc::app {
@@ -128,16 +128,15 @@ bool App::speed_locked() const {
 // buttons; LT + L3 opens the settings window as it opens RDE's own menu. What is on shows as RDE's icons (draw_frame).
 void App::rde_toggle_keys() {
   if (routing || replaying) return;
-  auto held = [&](const std::string& name) {
-    const SDL_Scancode sc = SDL_GetScancodeFromName(name.c_str());
-    if (sc == SDL_SCANCODE_UNKNOWN) return false;
+  auto held = [&](platform::Action action) {
     // The speed keys must not also count as an "any button" for the title / flow screens.
-    input.key_pressed[sc] = false;
-    return input.key_down[sc];
+    for (int key : platform::action_keys(action))
+      if (key > 0) input.key_pressed[static_cast<size_t>(key)] = false;
+    return platform::action_down(input, action);
   };
   game::HotkeyLevels levels;
-  levels.slow_key = held(config.slow_key);
-  levels.fast_key = held(config.fast_key);
+  levels.slow_key = held(platform::Action::SlowSpeed);
+  levels.fast_key = held(platform::Action::FastSpeed);
   levels.encounters_key = input.key_down[SDL_SCANCODE_F3];
   levels.boost_key = input.key_down[SDL_SCANCODE_F4];
   levels.auto_key = input.key_down[SDL_SCANCODE_F5];

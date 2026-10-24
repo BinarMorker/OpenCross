@@ -270,8 +270,9 @@ void BattleView::draw_scene_3d(const render::Frame& frame, const render::Letterb
       }
       casters.push_back(caster);
     }
-    // The pack's pseudo-actor casts a shadow once the Shadow op set its flag and it is not hidden.
-    if (pa_.on && !pa_.hidden && pa_.shadow && pa_.asset && pa_.pose) {
+    // The pack's pseudo-actor casts a shadow once the Shadow op set its flag and it is not hidden (or an overlay draws it itself: ghost2).
+    const bool pa_own_shadow = fx_ && fx_->bespoke_models() && fx_->bespoke_models()->pseudo_own_shadow;
+    if (pa_.on && (!pa_.hidden || pa_own_shadow) && pa_.shadow && pa_.asset && pa_.pose) {
       if (pa_.height < 0) {
         float ext = 0;
         for (const assets::Mesh& mesh : pa_.asset->meshes)

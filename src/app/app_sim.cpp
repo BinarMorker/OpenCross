@@ -11,6 +11,7 @@
 #include "core/log.h"
 #include "game/disc_index.h"
 #include "game/free_cam.h"
+#include "platform/keymap.h"
 #include "platform/rumble.h"
 #include "render/imgui_mods_tab.h"
 #include "script/field_host.h"
@@ -19,8 +20,7 @@
 namespace oc::app {
 
 bool App::confirm_edge(const platform::Input& in) {
-  return in.key_pressed[SDL_SCANCODE_RETURN] || in.key_pressed[SDL_SCANCODE_SPACE] || in.key_pressed[SDL_SCANCODE_Z] ||
-         (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_SOUTH]);
+  return platform::action_pressed(in, platform::Action::Ok) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_SOUTH]);
 }
 
 void App::apply_audio_config() {
@@ -216,12 +216,12 @@ bool App::pause_modal(const platform::Input& in) {
     }
     return false;
   }
-  const int dx = (in.key_pressed[SDL_SCANCODE_RIGHT] || in.key_pressed[SDL_SCANCODE_D] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_RIGHT])) -
-                 (in.key_pressed[SDL_SCANCODE_LEFT] || in.key_pressed[SDL_SCANCODE_A] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_LEFT]));
-  const int dy = (in.key_pressed[SDL_SCANCODE_DOWN] || in.key_pressed[SDL_SCANCODE_S] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN])) -
-                 (in.key_pressed[SDL_SCANCODE_UP] || in.key_pressed[SDL_SCANCODE_W] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_UP]));
+  const int dx = (platform::action_pressed(in, platform::Action::Right) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_RIGHT])) -
+                 (platform::action_pressed(in, platform::Action::Left) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_LEFT]));
+  const int dy = (platform::action_pressed(in, platform::Action::Down) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN])) -
+                 (platform::action_pressed(in, platform::Action::Up) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_UP]));
   // Start again or B closes.
-  const bool close = in.key_pressed[SDL_SCANCODE_P] || in.key_pressed[SDL_SCANCODE_X] ||
+  const bool close = in.key_pressed[SDL_SCANCODE_P] || platform::action_pressed(in, platform::Action::Cancel) ||
                      (in.pad_connected && (in.pad_pressed[SDL_GAMEPAD_BUTTON_START] || in.pad_pressed[SDL_GAMEPAD_BUTTON_EAST]));
   if (const int sfx = pause_screen.input(dx, dy, confirm_edge(in), close)) ui_sfx(sfx);
   // Switching vibration on gives a test pulse.
@@ -414,13 +414,14 @@ void App::advance(const platform::Input& in, double dt, int ticks) {
   }
   // Modal: the field waits while the key-item list is up.
   if (key_popup_ok && key_popup.active()) {
-    // The F / pad-button key-item list: the stick / arrows move the hand.
-    const int dx = (in.key_pressed[SDL_SCANCODE_RIGHT] || in.key_pressed[SDL_SCANCODE_D] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_RIGHT])) -
-                   (in.key_pressed[SDL_SCANCODE_LEFT] || in.key_pressed[SDL_SCANCODE_A] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_LEFT]));
-    const int dy = (in.key_pressed[SDL_SCANCODE_DOWN] || in.key_pressed[SDL_SCANCODE_S] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN])) -
-                   (in.key_pressed[SDL_SCANCODE_UP] || in.key_pressed[SDL_SCANCODE_W] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_UP]));
+    // The Item key / pad-button key-item list: the stick / arrows move the hand.
+    const int dx = (platform::action_pressed(in, platform::Action::Right) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_RIGHT])) -
+                   (platform::action_pressed(in, platform::Action::Left) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_LEFT]));
+    const int dy = (platform::action_pressed(in, platform::Action::Down) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN])) -
+                   (platform::action_pressed(in, platform::Action::Up) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_UP]));
     // Confirm uses the item (sfx 8) or refuses it (0x18); cancel / the list button closes (6). RDE pad: B cancels, X (the list button) closes.
-    const bool cancel = in.key_pressed[SDL_SCANCODE_X] || in.key_pressed[SDL_SCANCODE_ESCAPE] || in.key_pressed[SDL_SCANCODE_F] ||
+    const bool cancel = platform::action_pressed(in, platform::Action::Cancel) || in.key_pressed[SDL_SCANCODE_ESCAPE] ||
+                        platform::action_pressed(in, platform::Action::Item) ||
                         (in.pad_connected && (in.pad_pressed[SDL_GAMEPAD_BUTTON_EAST] || in.pad_pressed[SDL_GAMEPAD_BUTTON_WEST]));
     if (const int sfx = key_popup.list_input(dx, dy, confirm_edge(in), cancel)) ui_sfx(sfx);
     if (const int used = key_popup.take_used()) {
@@ -430,9 +431,9 @@ void App::advance(const platform::Input& in, double dt, int ticks) {
     key_popup.update(static_cast<float>(dt));
     return;
   }
-  // F / pad button (RDE; pad: X = key items): the key-item list panel opens straight over the field, without the main menu.
+  // Item key (F / R) / pad button (RDE; pad: X = key items): the key-item list panel opens straight over the field, without the main menu.
   if (key_popup_ok && menu_ok && world_ok && world.view().loaded() && !world.menu_active() && !world.battle_active() && world.idle() && menu.closed() &&
-      (in.key_pressed[SDL_SCANCODE_F] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_WEST]))) {
+      (platform::action_pressed(in, platform::Action::Item) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_WEST]))) {
     std::vector<ui::KeyItemPopup::ListEntry> list;
     for (const int id : world.game_state().key_items()) {
       const std::string nm = id < static_cast<int>(tables.key_item_names.size()) ? tables.key_item_names[static_cast<size_t>(id)] : std::string("?");
@@ -474,9 +475,9 @@ void App::advance(const platform::Input& in, double dt, int ticks) {
     start_movie(world.take_movie());
     return;
   }
-  // Tab / pad Y opens the menu (Start = the pause screen).
+  // The Menu key (I / Tab) / pad Y opens the menu (Start = the pause screen).
   if (menu_ok && !world.menu_active() && !world.battle_active() && world.idle() && world.menu_key_allowed() &&
-      (in.key_pressed[SDL_SCANCODE_TAB] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_NORTH]))) {
+      (platform::action_pressed(in, platform::Action::Menu) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_NORTH]))) {
     // Fade to black, then open the menu.
     if (flow_ready) {
       log::info("fade: menu-open fade-out started");

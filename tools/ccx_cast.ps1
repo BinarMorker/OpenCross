@@ -43,6 +43,7 @@ if ($Mode -eq "tech" -and -not $Tag) { $Tag = "t$Char" }
 if ($Mode -ne "enemy" -and -not $Tag) { throw "-Tag is required" }
 if ($Mode -notin @("enemy", "attack") -and ($IdList.Count -lt 1 -or $IdList.Count -gt 8)) { throw "-Ids: 1..8 element ids" }
 
+. (Join-Path $PSScriptRoot "quiet_start.ps1")
 function Log([string]$m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format HH:mm:ss), $m) }
 
 # One ccx run. Own -logdir, own SaveDir copy (parallel-safe), minimised, below-normal priority (never steals focus / CPU from the owner's game).
@@ -55,10 +56,10 @@ function Invoke-Ccx([string]$LogDir, [string[]]$ExtraArgs, [string]$SaveSrc) {
   $a = @("-uncapped", "-set", "GPU/ResolutionScale=2", "-set", "CCX/Movies=false",
          "-set", ("CCX/GameDir=" + $(if ($GameDir) { $GameDir } else { Split-Path -Parent $Main })), "-set", ("CCX/SaveDir=" + $sv),
          "-set", "InputSources/XInput=false", "-set", "InputSources/SDL=false", "-set", "Main/StartFullscreen=false",
-         "-logdir", $LogDir) + $ExtraArgs
+         "-set", "Audio/OutputMuted=true", "-logdir", $LogDir) + $ExtraArgs
   $q = $a | ForEach-Object { if ($_ -match '[ =\\]') { '"' + $_ + '"' } else { $_ } }
-  $p = Start-Process -FilePath $Ccx -ArgumentList $q -WorkingDirectory (Split-Path $Ccx) -PassThru -WindowStyle Minimized
-  try { $p.PriorityClass = "BelowNormal" } catch {}
+  # Minimised without activation, muted, below-normal priority (tools\quiet_start.ps1).
+  $p = Start-Quiet $Ccx ($q -join " ") (Split-Path $Ccx)
   $p.WaitForExit()
   Remove-Item -Recurse -Force $sv -ErrorAction SilentlyContinue
   if ($p.ExitCode -ne 0) { throw "ccx exited with $($p.ExitCode) ($LogDir)" }
@@ -166,13 +167,27 @@ function Capture-Id([int]$Id) {
     Poke-State (Join-Path $States "bg00_menu.sav") $base @("0x800DFF98=$rg", "0x800DFF9C=$rg", "0x800DFFA0=$rg") (Join-Path $Work "p$Id") $SaveDir
   }
   $s1 = Join-Path $Work "s1_$Id"
-  $pre = Join-Path $s1 "states\state_000620.sav"
-  for ($try = 0; $try -lt 2; $try++) {
+  # HIT% box rows (cursor 0x800E064E): 0 weak, 1 medium, 2 heavy, 3 Element; Down stops at 2, Up wraps 0 -> 3, and a second cursor press
+  # within ~40 frames of a move is dropped. After the weak hit the "Auto HIT%" option (0x800789C0 bit 0x02) moves the cursor to the strongest
+  # affordable hit, which depends on the character: the default presses (Down at 300 + 340) reach Element for Serge, while Marcy (char 9) sits on
+  # row 1 and stops on heavy (e05da 0). $upMode = the retry: Auto HIT% cleared in a poked copy of the base, so the cursor stays on row 0, and
+  # one Up wraps it to Element.
+  $upMode = $false
+  $pre = ""
+  for ($try = 0; $try -lt 3; $try++) {
+    $pre = Join-Path $s1 "states\state_000620.sav"
     $downs = (($idx - $open) % $N + $N) % $N
-    # the two Downs in the HIT% box are at 300 and 340: a second Down at 320 is dropped in the char-5 menu (diagnosed with 1-frame-resolution cursor reads of 0x800E064E: Down 300 + 320 stops on the fierce hit row, Circle then swings it and e05da stays 0; 300 + 340 reaches the Element row; hold length 4..12 and the press spacing alone do not matter)
-    # Attack -> target -> weak hit (gauge -1 -> 0) -> Down x2 = "Element" row of the HIT% box -> Circle (element menu) -> Down x k -> Circle (target) -> Circle (cast)
-    $a = @("-mashhold", "4", "-state", $base, "-frames", "700", "-stateevery", "10", "600", "700") +
-         (Press "Circle" 40) + (Press "Circle" 80) + (Press "Circle" 200) + @("-mash", "Down", "40", "300", "350") + (Press "Circle" 360)
+    # Attack -> target -> weak hit (gauge -1 -> 0) -> Element row of the HIT% box -> Circle (element menu) -> Down x k -> Circle (target) -> Circle (cast)
+    $from = $base
+    $toElement = @("-mash", "Down", "40", "300", "350")
+    if ($upMode) {
+      $from = Join-Path $Work "menu_manual_hit_$Id.sav"
+      $opt = [int](& python -c "import sys; sys.path.insert(0, r'$Py'); import ccx_state as c; print(c.State(r'$base').u8(0x800789C0))")
+      Poke-State $base $from @(("0x800789C0=0x{0:X}:1" -f ($opt -band 0xFD))) (Join-Path $Work "pu$Id") $SaveDir
+      $toElement = (Press "Up" 300)
+    }
+    $a = @("-mashhold", "4", "-state", $from, "-frames", "700", "-stateevery", "10", "600", "700") +
+         (Press "Circle" 40) + (Press "Circle" 80) + (Press "Circle" 200) + $toElement + (Press "Circle" 360)
     if ($downs -gt 0) { $a += @("-mash", "Down", "20", "400", "$(400 + 20 * $downs)") }
     $a += (Press "Circle" 540) + (Press "Circle" 590)
     # -Keys "Right:565,Circle:590" extra presses after the cast confirm (Dopplegang 238 opens the creature list: entry 0 is the own form and refused; Right = entry 1)
@@ -181,7 +196,10 @@ function Capture-Id([int]$Id) {
     $chk = [int](Field $pre "e05da")
     if ($chk -eq $Id) { break }
     $j = [Array]::IndexOf($row, $chk)
-    if ($try -eq 0 -and $j -ge 0) {
+    if ($chk -eq 0 -and -not $upMode) {
+      $upMode = $true
+      Log "id ${Id}: stage 1 never opened the element menu (e05da 0), retrying with Auto HIT% off and Up to the Element row"
+    } elseif ($j -ge 0 -and $try -lt 2) {
       $open = (($j - $downs) % $N + $N) % $N
       Set-Content $openFile $open
       Log "id ${Id}: stage 1 selected $chk (row index $j) with $downs Downs -> opening index $open, retrying"
@@ -231,12 +249,21 @@ if ($Mode -in @("batch", "summon", "tech")) {
     $running = @()
     foreach ($id in $todo) {
       while (@($running | Where-Object { -not $_.HasExited }).Count -ge $Jobs) { Start-Sleep -Seconds 2 }
-      $argl = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath, $Mode, "-Tag", $Tag, "-Ids", $Ids, "-Char", $Char, "-Only", $id)
-      if ($Frames -gt 0) { $argl += @("-Frames", $Frames) }
-      $running += Start-Process powershell -ArgumentList $argl -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $Work "job_$id.log")
+      # Every parameter of this run is passed on (quoted: the checkout path has spaces), -Jobs / -Only replaced.
+      $argl = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + $PSCommandPath + '"'), $Mode, "-Only", $id)
+      foreach ($kv in $PSBoundParameters.GetEnumerator()) {
+        if ($kv.Key -in @("Mode", "Jobs", "Only")) { continue }
+        if ($kv.Value -is [System.Management.Automation.SwitchParameter]) { if ($kv.Value.IsPresent) { $argl += "-$($kv.Key)" }; continue }
+        $argl += @("-$($kv.Key)", ('"' + [string]$kv.Value + '"'))
+      }
+      $job = Start-Process powershell -ArgumentList $argl -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $Work "job_$id.log")
+      $null = $job.Handle   # keeps ExitCode readable after the exit
+      $running += $job
     }
     $running | ForEach-Object { $_.WaitForExit() }
     foreach ($id in $todo) { Get-Content (Join-Path $Work "job_$id.log") | Write-Host }
+    $failed = @($running | Where-Object { $_.ExitCode -ne 0 }).Count
+    if ($failed -gt 0) { Log "$failed of $($todo.Count) jobs failed"; exit 1 }
   }
   exit 0
 }

@@ -46,9 +46,14 @@ void MainMenu::Impl::update_main(const Nav& nav) {
         case 5: enter(MenuScreen::Save); break;
       }
     }
+  } else if (roster != Roster::Off) {
+    update_roster(nav);
   } else {
-    if (nav.left || nav.up) pick_cur = wrap(pick_cur - 1, party_size), sfx(1);
+    // Left past the first member opens the roster.
+    if (nav.left && pick_cur == 0) roster = Roster::In, roster_anim = kRosterSlide, roster_ask = false, sfx(1);
+    else if (nav.left || nav.up) pick_cur = wrap(pick_cur - 1, party_size), sfx(1);
     if (nav.right || nav.down) pick_cur = wrap(pick_cur + 1, party_size), sfx(1);
+    if (roster != Roster::Off) return;
     if (nav.cancel) sub = 0, sfx(6);
     else if (nav.ok && party_size > 0) {
       member = pick_cur;
@@ -59,9 +64,67 @@ void MainMenu::Impl::update_main(const Nav& nav) {
   }
 }
 
+// Roster: up / down walk the 44 characters (17 rows visible), right or cancel slide back to the member pick, confirm opens the picked
+// screen on a recruited character. On the Grid and Equip picks Triangle asks to remove all of that character's elements / accessories.
+// Input waits while the list slides.
+void MainMenu::Impl::update_roster(const Nav& nav) {
+  if (roster == Roster::In) {
+    if (roster_anim == 0) roster = Roster::On;
+    return;
+  }
+  if (roster == Roster::Out) {
+    if (roster_anim == 0) roster = Roster::Off, pick_cur = 0;
+    return;
+  }
+  const int character = roster_top + roster_row;
+  if (roster_ask) {
+    if (nav.left || nav.right) roster_no ^= 1, sfx(1);
+    if (nav.ok) {
+      if (roster_no != 0) sfx(1);
+      else if (pick_for == 2) gs->unequip_accessories(character), sfx(0x48);
+      else gs->clear_all(character), sfx(0x17);
+      roster_ask = false;
+    }
+    return;
+  }
+  if (nav.tri && pick_for != 0 && gs->available(character)) {
+    roster_ask = true;
+    sfx(1);
+    return;
+  }
+  if (nav.up) {
+    if (roster_row > 0) --roster_row;
+    else if (roster_top > 0) --roster_top;
+    sfx(1);
+  }
+  if (nav.down) {
+    if (roster_row < kRosterRows - 1) ++roster_row;
+    else if (roster_top < save::kNumChars - kRosterRows) ++roster_top;
+    sfx(1);
+  }
+  if (nav.right || nav.cancel) {
+    roster = Roster::Out, roster_anim = kRosterSlide;
+    sfx(nav.cancel ? 6 : 1);
+  } else if (nav.ok) {
+    sfx(8);
+    const int picked = roster_top + roster_row;
+    if (!gs->available(picked)) {
+      sfx(0x18);
+      return;
+    }
+    roster = Roster::Off;
+    sub = 0;
+    stand_in = picked;
+    member = 0;
+    enter(pick_for == 0 ? MenuScreen::Status : pick_for == 1 ? MenuScreen::ElementGrid : MenuScreen::Equip);
+  }
+}
+
+// Confirm switches between the profile and the equipment; changing member starts again on the profile.
 void MainMenu::Impl::update_status(const Nav& nav) {
-  if (nav.l1) cycle_member(-1);
-  if (nav.r1) cycle_member(1);
+  if (nav.l1) cycle_member(-1), profile = true;
+  if (nav.r1) cycle_member(1), profile = true;
+  if (nav.ok) profile = !profile;
   if (nav.cancel) back_to_main(0), sfx(6);
 }
 
@@ -228,10 +291,11 @@ void MainMenu::Impl::member_card(int character, float x, float y) {
 
 // Main list: the portrait strip and the member cards (left group; they sit against each other, so they move out together), the list
 // with its dial and the title (right group), the bottom bar (left) and the message (centre). Portraits are dimmed to 0x40 except the
-// member being picked.
+// member being picked. While the roster is out it covers the portraits and the bar is not drawn.
 void MainMenu::Impl::build_main() {
   const bool toggle = screen == MenuScreen::ElementChoice;
-  const bool picking = screen == MenuScreen::Main && sub == 1;
+  const bool listing = roster != Roster::Off;
+  const bool picking = screen == MenuScreen::Main && sub == 1 && !listing;
   const std::vector<int> members = party();
   group(Left);
   for (size_t i = 0; i < members.size() && i < 3; ++i) {
@@ -243,9 +307,55 @@ void MainMenu::Impl::build_main() {
   for (size_t i = 0; i < members.size() && i < 3; ++i) member_card(members[i], 250.0f + 16.0f * static_cast<float>(i), 42.0f + 84.0f * static_cast<float>(i));
   group(Right);
   if (toggle) list_and_bar(1, choice_cur);
-  else list_and_bar(0, main_cur);
+  else list_and_bar(0, main_cur, !listing);
+  if (listing) build_roster();
   group(Centre);
   message(PX(200), PY(380));
+}
+
+// Roster panel (frame 141 at (8, 32), slid in from x -250 / out to it with the rows hidden): per row (17 from roster_top, 20 px apart)
+// a recruited character's name, HP label and current / max HP (capped 999); the cursor on the left, the bouncing pointer on the right
+// edge (right returns to the member pick), scroll arrows, and the footer hints or the remove-all prompt.
+void MainMenu::Impl::build_roster() {
+  group(Left);
+  if (roster != Roster::On) {
+    const float progress = static_cast<float>(kRosterSlide - roster_anim) / static_cast<float>(kRosterSlide);
+    Frame(141, roster == Roster::In ? -250.0f + 250.0f * progress : -250.0f * progress, 32);
+    return;
+  }
+  Frame(141, 8, 32);
+  pointer(240.0f + static_cast<float>(((frames % 23) * 0x3000) >> 16), 202, false);
+  if (roster_top + kRosterRows < save::kNumChars) scroll_arrow(237, 354, false);
+  if (roster_top > 0) scroll_arrow(237, 50, true);
+  for (int row = 0; row < kRosterRows; ++row) {
+    const int character = roster_top + row;
+    if (!gs->available(character)) continue;
+    const save::SaveChar& ch = gs->slot.chars[static_cast<size_t>(character)];
+    const float cap = 42.2f + 20.0f * static_cast<float>(row);
+    const std::u32string name = char_name(character);
+    text->prepare(face_gn, name);
+    const float width = text->measure(face_gn, name, 0.35f) / xscale;
+    HL(24, cap, name, kName, width < 98.0f ? 0.35f : 0.35f * 97.0f / width);
+    HS(0x4, 124, cap, capt("\xEF\xBC\xA8\xEF\xBC\xB0", "HP"));
+    HN(176, cap, std::to_string(std::min<int>(ch.cur_hp, 999)), ch.cur_hp < ch.max_hp / 8 ? kSel : kText, 0.29f);
+    HT(face_kb, 184, cap, utf32("/"), kText, 0.29f);
+    HN(224, cap, std::to_string(std::min<int>(ch.max_hp, 999)), kText, 0.29f);
+  }
+  tri(0, 42.0f + 20.0f * static_cast<float>(roster_row), !roster_ask);
+  auto line = [&](float x, float y, const std::string& text_line) { TPfit(x, y, utf32(text_line), 232.0f - x, kText, 0.8f); };
+  if (roster_ask) {
+    line(24, 388, menu_str(0x801F27D0, "Alright to proceed?"));
+    line(88, 412, menu_str(0x801F27E4, "Yes"));
+    line(168, 412, menu_str(0x801F27EC, "No"));
+    tri(roster_no ? 136.0f : 56.0f, 412, true);
+    return;
+  }
+  btn(0x10, 0x182, 0);
+  line(40, 388, menu_str(0x801F2798, "to choose/confirm."));
+  if (pick_for != 0) {
+    btn(0x10, 0x19A, 3);
+    line(40, 412, pick_for == 2 ? menu_str(0x801F27B0, "to unequip all accessories.") : menu_str(0x801F27A0, "to unequip all Elements."));
+  }
 }
 
 // Status / Elements-use member panel (frame 52): the card with stats and stamina, plus the status-ailment badges (frames 91..94 for
@@ -267,20 +377,53 @@ void MainMenu::Impl::status_panel(int character, float panel_x, float panel_y) {
 // ---- status: panel (40, 42), equipment frames below it, title + bottom bar, member-switch glyphs. The PS1 draws a live 3D model on
 // the right standing on the parchment with no panel and no ground shadow (the host's MenuModelView draws it after the sprite pass);
 // without one the member portrait stands in for it. This screen sits 2 PS1 px left of the other screens' coordinates.
+// Profile of a character (ome.txt): up to 7 lines, keyed by the menu model the character wears (form byte up to 0x31, e.g. Serge's
+// cat form or Pip's forms), else by the character id.
+std::vector<std::u32string> MainMenu::Impl::profile_lines(int character) {
+  std::vector<std::u32string> lines;
+  const int form = gs->slot.chars[static_cast<size_t>(character)].model_id & 0xFF;
+  const import::TextTable* table = lt.table("ome");
+  const std::string* cell = table ? table->get(static_cast<u64>(form <= 0x31 ? form : character), lang) : nullptr;
+  if (!cell) return lines;
+  size_t start = 0;
+  while (start <= cell->size() && lines.size() < 7) {
+    const size_t end = std::min(cell->find('\n', start), cell->size());
+    std::string line = cell->substr(start, end - start);
+    std::erase(line, '\r');
+    lines.push_back(utf32(line));
+    start = end + 1;
+  }
+  while (!lines.empty() && lines.back().empty()) lines.pop_back();
+  return lines;
+}
+
 void MainMenu::Impl::build_status() {
   const int character = cur_char();
   const float panel_x = 40.0f;
   group(Left);
   status_panel(character, panel_x, 42);
-  Frame(49, panel_x, 180);
-  Frame(50, panel_x, 228);
-  Frame(111, panel_x, 276);
-  static const float kFrameY[3] = {180.0f, 228.0f, 276.0f};
-  for (int kind = 0; kind < 3; ++kind) notch_caption(panel_x, kFrameY[kind], kind);
-  for (int slot = 0; slot < 5; ++slot) {
-    const int id = gs->equipped(character, slot);
-    const float y = slot == 0 ? 198.2f : slot == 1 ? 246.8f : 294.5f + 24.0f * static_cast<float>(slot - 2);
-    if (id > 0) HL(80.0f, y, item_name(id), kName, 0.39f);
+  if (profile) {
+    Frame(63, panel_x, 180);
+    notch_caption(panel_x, 180, 6);
+    // 0.35 up to 155 px wide; wider lines shrink by a slope that eases off with the width.
+    const std::vector<std::u32string> lines = profile_lines(character);
+    for (size_t i = 0; i < lines.size(); ++i) {
+      text->prepare(face_gn, lines[i]);
+      const float width = text->measure(face_gn, lines[i], 0.35f) / xscale;
+      const float slope = width < 155.0f ? 0.0f : width < 236.0f ? 0.002f : width < 286.0f ? 0.0015f : 0.0012f;
+      HT(face_gn, 52.0f, 198.2f + 24.0f * static_cast<float>(i), lines[i], kText, 0.35f + (155.0f - width) * slope);
+    }
+  } else {
+    Frame(49, panel_x, 180);
+    Frame(50, panel_x, 228);
+    Frame(111, panel_x, 276);
+    static const float kFrameY[3] = {180.0f, 228.0f, 276.0f};
+    for (int kind = 0; kind < 3; ++kind) notch_caption(panel_x, kFrameY[kind], kind);
+    for (int slot = 0; slot < 5; ++slot) {
+      const int id = gs->equipped(character, slot);
+      const float y = slot == 0 ? 198.2f : slot == 1 ? 246.8f : 294.5f + 24.0f * static_cast<float>(slot - 2);
+      if (id > 0) HL(80.0f, y, item_name(id), kName, 0.39f);
+    }
   }
   if (model_view) model_wanted = true;
   else {

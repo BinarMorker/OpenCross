@@ -381,53 +381,6 @@ OptionsChange ImGuiLayer::general_tab(platform::Config& cfg) {
   }
 
   };
-  auto sec_fast = [&] {
-  section("Game speed");
-  if (begin_rows("fast")) {
-    // A key picker (SDL key names) for a speed toggle; an unknown stored name shows the first entry.
-    static const char* const kKeys[] = {"F1", "F2", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "`", "Insert", "Home"};
-    static const std::vector<std::string> kKeyNames(std::begin(kKeys), std::end(kKeys));
-    auto key_combo = [&](const char* id, std::string& key) {
-      int ki = 0;
-      for (int i = 0; i < static_cast<int>(kKeyNames.size()); ++i)
-        if (key == kKeys[i]) ki = i;
-      if (combo(id, ki, kKeyNames)) {
-        key = kKeys[ki];
-        change.other = true;
-      }
-    };
-    row("Fast mode", "RDE's high-speed mode: the game (field, battle) runs faster. Music and movies keep their normal speed. "
-                     "The fast key or the right trigger (RT) switches it on and off; it turns Slow mode off.");
-    if (ImGui::Checkbox("##fast", &cfg.fast_mode)) {
-      if (cfg.fast_mode) cfg.slow_mode = false;
-      change.other = true;
-    }
-    row("Fast speed", "How much faster the game runs in Fast mode. RDE = the Radical Dreamers Edition's own speeds: 4x in the field, 2x in battle.");
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    {
-      int rate = cfg.fast_rate <= 0 ? 1 : cfg.fast_rate;
-      if (ImGui::SliderInt("##fastspeed", &rate, 1, 5, rate == 1 ? "RDE" : "%dx")) {
-        cfg.fast_rate = rate == 1 ? 0 : rate;
-        change.other = true;
-      }
-    }
-    row("Fast key", "The key that switches Fast mode on and off during play (RDE: F2).");
-    key_combo("##fastkey", cfg.fast_key);
-    row("Slow mode", "RDE's slow mode: the game (field, battle) runs slower. The slow key or the left trigger (LT) switches it on and off; "
-                     "it turns Fast mode off.");
-    if (ImGui::Checkbox("##slow", &cfg.slow_mode)) {
-      if (cfg.slow_mode) cfg.fast_mode = false;
-      change.other = true;
-    }
-    row("Slow speed", "How fast the game runs in Slow mode, in percent of normal speed (RDE: 50%).");
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::SliderInt("##slowspeed", &cfg.slow_rate, 10, 90, "%d%%")) change.other = true;
-    row("Slow key", "The key that switches Slow mode on and off during play (RDE: F1).");
-    key_combo("##slowkey", cfg.slow_key);
-    end_rows();
-  }
-
-  };
   auto sec_controls = [&] {
   section("Controls");
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
@@ -435,14 +388,13 @@ OptionsChange ImGuiLayer::general_tab(platform::Config& cfg) {
             "the field and in battle.");
   // One key per row.
   if (begin_rows("controls")) {
-    const std::string speed_keys = cfg.slow_key + " / " + cfg.fast_key;
-    const char* keys[][2] = {{"Esc", "Settings (pad: LT + L3)"}, {speed_keys.c_str(), "Slow / Fast mode (pad: LT / RT)"},
+    const char* keys[][2] = {{"Esc", "Settings (pad: LT + L3)"}, {"F1 / F2", "Slow / Fast mode (pad: LT / RT)"},
                              {"F3", "No encounters (pad: L3)"},  {"F4", "Battle boost (pad: R3)"},
                              {"F5", "Auto battle (pad: L3 + R3)"}, {"F6", "Art mode"},
                              {"F7", "Widescreen"},                {"F8", "Debug tab"},
                              {"F9", "Battle camera overlay"}};
     for (const auto& shortcut : keys) {
-      row(shortcut[0], "Keyboard shortcut (and pad button). The speed keys are set in the Game speed section.");
+      row(shortcut[0], "Keyboard shortcut (and pad button).");
       ImGui::AlignTextToFramePadding();
       ImGui::TextDisabled("%s", shortcut[1]);
     }
@@ -450,7 +402,7 @@ OptionsChange ImGuiLayer::general_tab(platform::Config& cfg) {
   }
   };
   two_columns(
-      scale, [&] { sec_game(); sec_audio(); }, [&] { sec_fast(); sec_controls(); });
+      scale, [&] { sec_game(); sec_audio(); }, [&] { sec_controls(); });
   return change;
 }
 

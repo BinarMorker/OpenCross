@@ -25,6 +25,7 @@ foreach($p in ($Press -split ";" | Where-Object {$_})){$m+=$p}
 foreach($p in $m){ $b,$h,$s,$e=$p -split ","; $a+=@("-mash",$b,$h,"$([int]$s+$Lead)","$([int]$e+$Lead)") }   # -Lead: frames to wait before the first press (chained runs)
 $env:CCX_TRACEPC=$Pcs
 $q=$a | ForEach-Object { if($_.Contains(' ') -or $_.Contains('=') -or $_.Contains([string][char]92)){'"'+$_+'"'}else{$_} }
-$pr=Start-Process -FilePath $Ccx -ArgumentList $q -WorkingDirectory (Split-Path $Ccx) -PassThru -Wait -WindowStyle Minimized -RedirectStandardOutput (Join-Path $OutD "stdout.txt") -RedirectStandardError (Join-Path $OutD "stderr.txt")
+. (Join-Path $PSScriptRoot "quiet_start.ps1")
+$pr=Start-Quiet $Ccx ($q -join " ") (Split-Path $Ccx) (Join-Path $OutD "stdout.txt") (Join-Path $OutD "stderr.txt"); $pr.WaitForExit()   # minimised without activation
 Copy-Item (Join-Path (Split-Path $Ccx) "ccx-data\duckstation.log") (Join-Path $OutD "ccx.log") -Force   # TRACEPC lines land here (not stdout); runs of other agents rotate it, so copy at once
 "exit $($pr.ExitCode)"

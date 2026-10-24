@@ -9,7 +9,8 @@
 //   -     right after the previous line finished.
 // A line only starts once the previous one has finished; blocking commands (walk, wait, skip, fight, ...) finish when
 // their condition holds, or fail the run when their timeout (default 1800 ticks) runs out.
-//   key down|up <name>            hold / release a key (up down left right confirm cancel run, or an SDL-style letter)
+//   key down|up <name>            hold / release a key (up down left right confirm cancel run menu triangle item: RDE's keys,
+//                                 platform/keymap.h; or an SDL-style letter)
 //   tap <name> [ticks]            press and release (default 3 ticks held, then 3 ticks free)
 //   action                        = tap confirm
 //   walk <x> <z> [tol] [timeout]  steer the stick until the player is within tol (default 24) of the world point

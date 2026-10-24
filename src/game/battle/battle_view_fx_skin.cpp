@@ -118,10 +118,10 @@ void BattleView::fx_model_copies(const effects::ViewParams& view, const render::
 
 // Requests of a bespoke overlay on the models it steers: SetAnim and anmseq starts (table by tag + entry; entries >= 0x80 address the
 // assigned external table, smaller ones the model's own S5 block).
-void BattleView::fx_model_requests() {
+void BattleView::fx_model_requests(bool at_init) {
   effects::FxModels* ms = fx_ ? fx_->bespoke_models() : nullptr;
   if (!ms) return;
-  fx_pack_drive_tick(*ms);
+  if (!at_init) fx_pack_drive_tick(*ms);
   for (effects::FxModel& fx_model : ms->units) {
     if (fx_model.unit < 0 || fx_model.unit >= battle::kUnits) continue;
     Visual& visual = vis_[static_cast<size_t>(fx_model.unit)];
@@ -174,8 +174,18 @@ void BattleView::fx_model_requests() {
       }
       const int entry = fx_model.script_entry >= 0x80 ? fx_model.script_entry - 0x80 : fx_model.script_entry;
       const bool ok = table && start_script(fx_model.unit, table, entry, fx_model.script_variant, kReact);
-      log::debug("battle fx: overlay anmseq unit {} table '{}' entry {} variant {} {}", fx_model.unit, fx_model.script_table, entry, fx_model.script_variant,
-                 ok ? "started" : "missing");
+      // The init's start steps the script in the same pass (the anmseq step of the PS1 loop follows the hand-over that ran the init):
+      // otherwise everything the script starts (cam0, fgon, the React) trails the pack by one tick.
+      if (ok && at_init) {
+        bseq::Ctx ctx;
+        fill_ctx(fx_model.unit, ctx);
+        std::vector<bseq::Event> events;
+        visual.vm.tick(ctx, events);
+        for (const bseq::Event& event : events) on_script_event(fx_model.unit, event);
+        if (!visual.vm.running()) visual.script_done = true;
+      }
+      log::debug("battle fx: overlay anmseq unit {} table '{}' entry {} variant {} {}{}", fx_model.unit, fx_model.script_table, entry, fx_model.script_variant,
+                 ok ? "started" : "missing", ok && at_init ? " (stepped)" : "");
     }
     fx_model.clip = -1;
     fx_model.script_entry = -1;
@@ -318,6 +328,14 @@ bool BattleView::fx_attach_unit(int unit, int point, effects::Vec3& out, bool ra
 
 bool BattleView::fx_skin_unit(int unit, effects::FxSkinnedModel& out) {
   out = {};
+  if (unit == effects::kPseudoUnit) {
+    if (!pa_.on || !pa_.pose || !pa_.asset) return false;
+    pa_.pose->palette(alpha_, palette_);
+    fx_skin_asset(*pa_.asset, pa_matrix(alpha_), nullptr, out);
+    out.pos = {pa_.x, -pa_.y, pa_.z};
+    for (int k = 0; k < 3; ++k) out.rgb[k] = pa_.rgb[k];
+    return true;
+  }
   if (unit < 0 || unit >= battle::kUnits || !battle_->unit(unit).present) return false;
   const Visual& visual = vis_[static_cast<size_t>(unit)];
   if (!visual.has_model || !visual.model) return false;
@@ -464,16 +482,23 @@ render::TexRef BattleView::fx_pack_model_texture_set(int tex) {
 }
 
 render::TexRef BattleView::fx_unit_texture_set(int unit, int tex, u8 white) {
-  if (unit < 0 || unit >= battle::kUnits || tex < 0) return {};
-  const Visual& visual = vis_[static_cast<size_t>(unit)];
-  if (!visual.has_model || !visual.model || !visual.model->gpu) return {};
+  if (tex < 0) return {};
+  const assets::ModelAsset* asset = nullptr;
+  const render::MeshModel* model_gpu = nullptr;
+  if (unit == effects::kPseudoUnit) {
+    asset = pa_.on ? pa_.asset : nullptr;
+    model_gpu = pa_.on ? pa_.gpu : nullptr;
+  } else if (unit >= 0 && unit < battle::kUnits) {
+    const Visual& visual = vis_[static_cast<size_t>(unit)];
+    if (visual.has_model && visual.model) asset = &visual.model->asset, model_gpu = visual.model->gpu.get();
+  }
+  if (!asset || !model_gpu) return {};
   // The white-CLUT silhouette: 1 = every non-transparent texel white, 2 = every texel white (STP set: blended).
   if (white) {
-    const assets::ModelAsset& asset = visual.model->asset;
-    if (static_cast<size_t>(tex) >= asset.textures.size()) return {};
-    return fx_textures_.white_texture_set(*ctx_, *sprites_, hd_ ? linear_ : nearest_, asset.texture_for(static_cast<size_t>(tex), hd_), white);
+    if (static_cast<size_t>(tex) >= asset->textures.size()) return {};
+    return fx_textures_.white_texture_set(*ctx_, *sprites_, hd_ ? linear_ : nearest_, asset->texture_for(static_cast<size_t>(tex), hd_), white);
   }
-  const render::MeshModel& gpu = *visual.model->gpu;
+  const render::MeshModel& gpu = *model_gpu;
   const bool use_hd = hd_ && static_cast<size_t>(tex) < gpu.hd_textures.size() && gpu.hd_textures[static_cast<size_t>(tex)];
   const render::Texture* texture = use_hd ? gpu.hd_textures[static_cast<size_t>(tex)].get()
                                           : (static_cast<size_t>(tex) < gpu.textures.size() ? gpu.textures[static_cast<size_t>(tex)].get() : nullptr);

@@ -121,6 +121,7 @@ void BattleView::unload_scene() {
   menu_face_ui_ = Ui::Intro;
   menu_face_pc_ = tgt_face_unit_ = -2;
   last_actor_ = -1;
+  last_kind_ = battle::Command::Kind::Attack;
   script_stream_.clear();
   script_prev_vt_ = 0;
   script_gap_ = -1;
