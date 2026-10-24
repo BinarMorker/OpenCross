@@ -53,6 +53,9 @@ class BattleResults {
   void set_sfx(std::function<void(int)> fn);
   // Called once when the screen exits (the host stops the victory music there, like the view did on its panel).
   void set_on_exit(std::function<void()> fn);
+  // [Video] Widescreen: `canvas_columns` = layer columns per side the wallpaper and fades extend by; [Video] WideHud: `layout_columns` =
+  // the columns the portraits / rows (left) and the panel (right) move out by.
+  void set_wide_columns(float canvas_columns, float layout_columns);
   // [Debug] BattleAuto / route `fight`: every page confirms itself after kAutoHold ticks.
   void set_auto(bool on);
 

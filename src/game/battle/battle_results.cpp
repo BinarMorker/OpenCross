@@ -278,8 +278,11 @@ struct BattleResults::Impl {
   }
 
   // ---- drawing ---------------------------------------------------------------------------------------------------------
+  // Widescreen: the wallpaper and fades cover the columns edge_x0 .. edge_x0 + edge_w (the window's widened frame); `shift` = the current
+  // group's offset (the portraits and rows -layout_cols, the panel and headline +layout_cols; [Video] WideHud).
   float zoom = 1, ox = 0, oy = 0;
-  float cx(float x) const { return ox + x * SX * zoom; }
+  float canvas_cols = 0, layout_cols = 0, edge_x0 = 0, edge_w = 320, shift = 0;
+  float cx(float x) const { return ox + (x + shift) * SX * zoom; }
   float cy(float y) const { return oy + y * SY * zoom; }
   void quad(const Tex& tex, float x, float y, float w, float h, u32 colour = 0xFFFFFFFFu, float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1) {
     if (!tex.ok()) return;
@@ -297,14 +300,14 @@ struct BattleResults::Impl {
     if (align == 2) x -= w;
     const ui::font::SlotInfo& si = ui::font::slot(slot);
     const ui::font::Ink ink{colour, rgba(33, 33, 33, static_cast<int>(colour >> 24)), true, false};
-    fonts.draw(slot, text_u32, x * SX + si.off_x * sc + ox / zoom, y * SY + si.off_y * sc + oy / zoom, ink, sc, ui::font::kLeft, zoom);
+    fonts.draw(slot, text_u32, (x + shift) * SX + si.off_x * sc + ox / zoom, y * SY + si.off_y * sc + oy / zoom, ink, sc, ui::font::kLeft, zoom);
   }
   // Names and numbers drawn as 'osak' glyphs: kb_70 text.
   void big(const std::u32string& text_u32, float x, float y, u32 colour, int align = 0) { txt(kDigits, text_u32, x, y, colour, kBigPx, align); }
   void num(int value, float right, float y, u32 colour = kColDigit) { big(import::utf8_to_u32(std::to_string(value)), right, y, colour, 2); }
 
   void draw_wall() {
-    if (hd_wall.ok()) quad(hd_wall, 0, 0, 320, 216, 0xFFFFFFFFu, 0, 0, 320.0f / kTileW, 216.0f / kTileH);
+    if (hd_wall.ok()) quad(hd_wall, edge_x0, 0, edge_w, 216, 0xFFFFFFFFu, edge_x0 / kTileW, 0, (edge_x0 + edge_w) / kTileW, 216.0f / kTileH);
   }
   void draw_faces() {
     // Three 32 x 224 strips at x = 0x10 + 0x28 s, drawn first (under the rows) at half brightness.
@@ -883,24 +886,33 @@ void BattleResults::update(float dt, const platform::Input& in) {
 void BattleResults::draw(const render::Frame& frame, float vw, float vh, bool resume) {
   Impl& impl = *impl_;
   if (impl.phase == Phase::Idle || impl.phase == Phase::Done || !impl.ctx) return;
-  const render::CanvasFit cf = render::canvas_fit(vw, vh, kCanvasW, kCanvasH);
-  impl.zoom = cf.s, impl.ox = cf.ox, impl.oy = cf.oy;
+  const render::Letterbox lb = render::Letterbox::wide(vw, vh, impl.canvas_cols);
+  impl.zoom = lb.scale / SX, impl.ox = lb.ox, impl.oy = lb.oy;
+  impl.edge_x0 = lb.x0, impl.edge_w = lb.w;
   if (impl.draws++ == 0 || impl.pt == 0)
     log::debug("battle results: phase {} at age {} (hd {}, art: wall {} row {} panel {})", static_cast<int>(impl.phase), impl.age, impl.hd, impl.hd_wall.ok(),
                impl.hd_row.ok(), impl.hd_panel.ok());
   impl.sprites->begin(frame, vw, vh, resume);
+  impl.shift = 0;
   impl.draw_wall();
+  impl.shift = -impl.layout_cols;
   impl.draw_faces();
   for (int slot = 0; slot < battle::kPcSlots; ++slot)
     if (impl.rows[static_cast<size_t>(slot)].present) impl.draw_row(slot);
+  impl.shift = impl.layout_cols;
   impl.draw_panel();
   impl.draw_headline(impl.phase == Phase::Spoils);
+  impl.shift = 0;
   // fades: from black over the first 0x3C frames, to white over the exit's 0x1E frames
-  if (impl.age < kFadeIn) impl.rect(0, 0, 320, 216, rgba(0, 0, 0, 255 - 255 * impl.age / kFadeIn));
-  if (impl.phase == Phase::Exit) impl.rect(0, 0, 320, 216, rgba(255, 255, 255, std::min(255, 255 * impl.pt / kExit)));
+  if (impl.age < kFadeIn) impl.rect(impl.edge_x0, 0, impl.edge_w, 216, rgba(0, 0, 0, 255 - 255 * impl.age / kFadeIn));
+  if (impl.phase == Phase::Exit) impl.rect(impl.edge_x0, 0, impl.edge_w, 216, rgba(255, 255, 255, std::min(255, 255 * impl.pt / kExit)));
   impl.sprites->end();
 }
 
+void BattleResults::set_wide_columns(float canvas_columns, float layout_columns) {
+  impl_->canvas_cols = std::max(0.0f, canvas_columns);
+  impl_->layout_cols = std::clamp(layout_columns, 0.0f, impl_->canvas_cols);
+}
 render::TextBatch* BattleResults::text_batch() { return &impl_->text; }
 bool BattleResults::active() const { return impl_->phase != Phase::Idle && impl_->phase != Phase::Done; }
 bool BattleResults::done() const { return impl_->phase == Phase::Done; }

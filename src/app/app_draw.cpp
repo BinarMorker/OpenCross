@@ -161,6 +161,7 @@ void App::draw_scene(SceneFrame& sf) {
   // The title room's 3D sea scene is the backdrop: drawn first, the room layers (PS1 logo / glow, white fade) blend over it.
   // Widescreen: the sea fills the widened frame like the battle 3D (same H and centre (160, 112), more columns; no clamp).
   sf.title_sea = field_shown && title_bd.running() && world.room_name() == game::kTitleRoom;
+  sf.title_lowres = sf.title_sea && config.ps1_res;
   // [Video] Ps1Res (any art mode): the whole field picture (layers, shadows, models, effects: one depth space) is drawn into the
   // 320x224 target, then scaled up into the field frame. Not under the title's 3D sea (the layers blend over that backdrop).
   sf.field_lowres = field_shown && !sf.title_sea && field_rt_set && config.ps1_res;
@@ -173,6 +174,9 @@ void App::draw_scene(SceneFrame& sf) {
     if (sf.field_lowres || sf.battle_lowres) {
       jit.px = render::kLayerW * 0.5f;
       jit.py = render::kFieldRows * 0.5f;
+    } else if (sf.title_lowres) {
+      jit.px = render::kLayerW * 0.5f + render::screen_extra();
+      jit.py = render::kLayerH * 0.5f;
     } else {
       const render::Letterbox lb = field_shown && !sf.title_sea ? render::Letterbox::field(vw, vh) : render::Letterbox::wide(vw, vh, wide_extra);
       jit.px = vw / (2.0f * std::max(lb.scale, 1e-3f));
@@ -180,7 +184,8 @@ void App::draw_scene(SceneFrame& sf) {
     }
   }
   begin_scene_target(sf);
-  if (sf.title_sea) title_bd.draw(sf.pf, sf.pw, sf.ph, step.alpha, config.filter == platform::TexFilter::Bilinear);
+  if (sf.title_lowres) draw_title_lowres(sf);
+  else if (sf.title_sea) title_bd.draw(sf.pf, sf.pw, sf.ph, step.alpha, config.filter == platform::TexFilter::Bilinear);
   // 8F / 90 screen ripple (render::build_screen_warp): what the field files at OT index > wave.ot is drawn first into a target, re-drawn
   // warped into the picture, then the nearer content is drawn over it (FieldWorld::set_draw_slab).
   // Debug (A/B pixel checks): OC_NO_WARP=1 draws the ripple's frame unwarped; =2 (classic PS1-resolution art) shows only its deep part,
@@ -193,9 +198,11 @@ void App::draw_scene(SceneFrame& sf) {
   // Submerged actor faces first (opaque, depth written), so the water layer blends over them; the rest after the layers.
   if (field_shown && !sf.field_lowres && !sf.wave_hd)
     world.draw_actors(meshes, sf.pf, step.alpha, render::MeshPipeline::DrawParams::WetFaces::WetOnly);
-  if (field_shown && !sf.field_lowres && !sf.wave_hd) field_clip(sf, true);
-  // (The test image below is only drawn when nothing is scaled: pf = frame.)
-  sprites.begin(sf.pf, sf.pw, sf.ph);
+  // Over the title's widescreen sea the layers clip themselves (their darkening veil reaches past the 4:3 room picture).
+  if (field_shown && !sf.field_lowres && !sf.wave_hd && !sf.title_sea) field_clip(sf, true);
+  // (The test image below is only drawn when nothing is scaled: pf = frame.) Resumed: the PS1-resolution title sea's quad is already in
+  // the batch.
+  sprites.begin(sf.pf, sf.pw, sf.ph, true);
   // ui/background.png (the test image) only when no game picture is shown: the field / battle are composed over BLACK;
   // under a field room its 16:9 picture showed through every additive base layer (dem_01, hid_*: all STP, ABR 1).
   if (background_set && !sf.title_sea && !field_shown && !battle_shown) {
@@ -238,7 +245,8 @@ void App::begin_scene_target(SceneFrame& sf) {
   sf.pf = frame;
   sf.pw = vw;
   sf.ph = vh;
-  const game::FieldWorld::JoltView jolt = sf.field_shown && !sf.title_sea && !sf.field_lowres ? world.jolt_view() : game::FieldWorld::JoltView{};
+  // The jolt / encounter feed-back passes work on the finished picture: with Ps1Res the PS1-resolution field is scaled up into the target.
+  const game::FieldWorld::JoltView jolt = sf.field_shown && !sf.title_sea ? world.jolt_view() : game::FieldWorld::JoltView{};
   sf.jolt = jolt;
   if (!jolt.on) {
     jolt_have = false;
@@ -255,7 +263,7 @@ void App::begin_scene_target(SceneFrame& sf) {
   render::TexRef& sset = jolt.on ? jolt_set[jolt_cur] : scene_set;
   sf.srt = &srt;
   sf.sset = &sset;
-  bool scene_scaled = jolt.on || (rscale != 1.0f && (sf.title_sea || (sf.field_shown && !sf.field_lowres) || (sf.battle_3d && !sf.battle_lowres)));
+  bool scene_scaled = jolt.on || (rscale != 1.0f && ((sf.title_sea && !sf.title_lowres) || (sf.field_shown && !sf.field_lowres) || (sf.battle_3d && !sf.battle_lowres)));
   if (scene_scaled) {
     u32 tw = 0, th = 0;
     scaled_extent(vw, vh, tw, th);
@@ -282,7 +290,8 @@ void App::draw_battle_picture(const SceneFrame& sf) {
   const render::Frame& frame = sf.frame;
   const float vw = sf.vw, vh = sf.vh;
   if (sf.results_up) {
-    if (!(config.ps1_res && ps1_pass_43(frame, vw, vh, results.text_batch(), [&](const render::Frame& lf) { results.draw(lf, 1280.0f, 960.0f, true); })))
+    if (!(config.ps1_res && ps1_pass_wide(frame, vw, vh, results.text_batch(),
+                                          [&](const render::Frame& lf, float, float, const render::Letterbox& lb) { results.draw(lf, lb.vw, lb.vh, true); })))
       results.draw(frame, vw, vh, true);
   } else if (sf.battle_lowres) {
     // Original art + [Video] Ps1Res: the battle 3D (stage, shadows, units, effects) into the 320 x 224 battle buffer size
@@ -300,11 +309,36 @@ void App::draw_battle_picture(const SceneFrame& sf) {
     ctx.begin_target(field_rt, frame, lf);
     battle.draw_scene(lf, render::Letterbox::identity(lw, lh, lh / game::BattleView::kBufferRows), true);
     ctx.end_target(field_rt);
-    show_lowres(sf, field_rt_set, game::BattleView::picture(vw, vh), lw, lh);
+    show_lowres(sf, field_rt_set, game::BattleView::picture(sf.pw, sf.ph), lw, lh);
   } else if (sf.battle_3d) {
     // (With a render scale this goes to scene_rt; composited below.)
     battle.draw_scene(sf.pf, game::BattleView::picture(sf.pw, sf.ph), true);
   }
+}
+
+// [Video] Ps1Res: the title's 3D sea into the (320 + 2 * screen_extra()) x 240 target, scaled up nearest into the widened frame (the
+// room layers over it stay at window resolution).
+void App::draw_title_lowres(const SceneFrame& sf) {
+  const bool linear_tex = config.filter == platform::TexFilter::Bilinear;
+  const float extra = render::screen_extra();
+  u32 tw = 0, th = 0;
+  native_extent(render::kLayerW + 2.0f * extra, render::kLayerH, tw, th);
+  if (!ensure_target(field_rt, field_rt_set, tw, th, nearest)) {
+    title_bd.draw(sf.pf, sf.pw, sf.ph, step.alpha, linear_tex);
+    return;
+  }
+  const float lw = static_cast<float>(tw), lh = static_cast<float>(th);
+  render::Frame lf;
+  ctx.begin_target(field_rt, sf.frame, lf);
+  title_bd.draw(lf, lw, lh, step.alpha, linear_tex);
+  ctx.end_target(field_rt);
+  const render::Letterbox lb = render::Letterbox::wide(sf.pw, sf.ph, extra);
+  const float bu = 1.0f / (64.0f * lw), bv = 1.0f / (64.0f * lh);
+  sprites.begin(sf.pf, sf.pw, sf.ph, true);
+  sprites.set_blend(render::BlendMode::Add);
+  sprites.draw(field_rt_set, lb.left(), lb.oy, lb.width(), render::kLayerH * lb.scale_y, bu, bv, 1.0f + bu, 1.0f + bv);
+  sprites.set_blend(render::BlendMode::Alpha);
+  sprites.end();
 }
 
 // Classic art + Ps1Res: the field picture into the 320 (+ 2 * wide_extra()) x 224 target (16:9: 426 x 224), layer columns 0..320
@@ -338,7 +372,7 @@ void App::draw_field_lowres(const SceneFrame& sf) {
   }
   world.set_draw_slab(-1e9f, 1e9f);
   world.view().set_target_pass(false);
-  show_lowres(sf, shown, world.view().letterbox(sf.vw, sf.vh), lw, lh);
+  show_lowres(sf, shown, world.view().letterbox(sf.pw, sf.ph), lw, lh);
 }
 
 // The window-resolution field picture (the layers went in before the battle picture; here the actors, effects and near layers).
@@ -420,16 +454,10 @@ void App::draw_field_ui(const SceneFrame& sf) {
       sprites.end();
     }
   }
-  // Widescreen: the full-screen menus / shop / party screen are 4:3 (their canvas is Letterbox::fit): the wide field beside them is
-  // blacked out, i.e. pillarboxed like the title and the flow screens.
-  // The main menu covers the widened frame itself when Wide Menus/HUD is on; otherwise it is 4:3 and pillarboxed like the others.
-  const bool menu_up = menu_ok && !menu.closed();
-  if (wide_extra > 0.0f && (menu_up || shop_open || (party_ok && party_screen.active()))) {
-    // The main menu's frame = the fit widened by its Wide Menus/HUD columns (0 = 4:3; 16:9 = narrower than an ultrawide window).
-    const render::Letterbox fit = menu_up && !shop_open ? render::Letterbox::wide(vw, vh, hud_cols) : render::Letterbox::fit(vw, vh);
-    pillarbox(sprites, frame, fit, vw);
-  }
   if (menu_ok && !menu.closed()) menu.draw(frame, vw, vh, true);
+  // Widescreen: the shop is 4:3 (its canvas is Letterbox::fit): the wide field beside it is blacked out, i.e. pillarboxed like the title
+  // and the flow screens. The main menu and the party screen cover the widened frame themselves.
+  if (wide_extra > 0.0f && shop_open) pillarbox(sprites, frame, render::Letterbox::fit(vw, vh), vw);
   if (shop_open) shop.draw(frame, vw, vh, true);
   if (key_popup_ok && key_popup.active()) key_popup.draw(frame, vw, vh, true);
   if (party_ok && party_screen.active()) {
@@ -509,16 +537,16 @@ void App::draw_warp(const SceneFrame& sf, render::TexRef set, const render::Lett
   }
 }
 
-// A PS1-resolution target (classic art + Ps1Res, field or battle) shown in the picture frame `lb`: nearest up (the 1/64-texel bias
+// A PS1-resolution target (classic art + Ps1Res, field or battle) shown in the picture frame `lb` of the scene frame (sf.pf): nearest up (the 1/64-texel bias
 // keeps pixel centres off exact texel boundaries: 944 / 224 = 59 / 14 puts some rows on a tie, which the quad's two triangles resolved
 // differently: one-pixel seams); area-filtered when the render scale makes the target denser than the window. Over the black clear:
 // additive = a plain copy that ignores the target's alpha channel.
 void App::show_lowres(const SceneFrame& sf, render::TexRef set, const render::Letterbox& lb, float lw, float lh) {
-  // ls: target pixels per buffer pixel (the render scale, as clamped by scaled_extent); dw: window pixels the target's width covers.
+  // ls: target pixels per buffer pixel; dw: scene frame pixels the target's width covers.
   const float ls = lh / render::kFieldRows;
   const float dw = lw / ls * lb.scale;
   const bool denser = lw > dw + 0.5f;
-  sprites.begin(sf.frame, sf.vw, sf.vh, true);
+  sprites.begin(sf.pf, sf.pw, sf.ph, true);
   sprites.set_blend(render::BlendMode::Add);
   if (denser) sprites.set_filter(render::SpriteFilter::Box);
   const float bu = denser ? 0.0f : 1.0f / (64.0f * lw), bv = denser ? 0.0f : 1.0f / (64.0f * lh);

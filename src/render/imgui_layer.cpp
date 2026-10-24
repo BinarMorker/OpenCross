@@ -388,7 +388,7 @@ OptionsChange ImGuiLayer::general_tab(platform::Config& cfg) {
             "the field and in battle.");
   // One key per row.
   if (begin_rows("controls")) {
-    const char* keys[][2] = {{"Esc", "Settings (pad: LT + L3)"}, {"F1 / F2", "Slow / Fast mode (pad: LT / RT)"},
+    const char* keys[][2] = {{"Esc", "Settings (pad: Back / View)"}, {"F1 / F2", "Slow / Fast mode (pad: LT / RT)"},
                              {"F3", "No encounters (pad: L3)"},  {"F4", "Battle boost (pad: R3)"},
                              {"F5", "Auto battle (pad: L3 + R3)"}, {"F6", "Art mode"},
                              {"F7", "Widescreen"},                {"F8", "Debug tab"},
@@ -571,12 +571,12 @@ OptionsChange ImGuiLayer::graphics_tab(platform::Config& cfg) {
                          "(35 = the PS1 view). Field rooms keep the PS1 view: their painted backgrounds are fixed to it.");
     ImGui::SetNextItemWidth(-FLT_MIN);
     if (ImGui::SliderInt("##fov", &cfg.fov_deg, 30, 110, "%d deg")) change.other = true;
-    row("Wide Menus/HUD", "Widescreen only. Default: the battle HUD and the main menu stay on the centred 4:3 canvas. 16:9: the HUD's left "
+    row("Wide Menus/HUD", "Widescreen only. 4:3: the battle HUD and the main menu layouts stay on the centred 4:3 canvas. 16:9: the HUD's left "
                             "group (field effect, command / element menus) and the party panels, and the main menu screens, spread out to a "
-                            "16:9 frame's width - on an ultrawide window that keeps them closer to the middle. Full: out to the window's edges.");
+                            "16:9 frame's width - on an ultrawide window that keeps them closer to the middle. Full (default): out to the window's edges.");
     ImGui::BeginDisabled(!cfg.widescreen);
     {
-      static const std::vector<std::string> kWideHud = {"Default", "16:9", "Full"};
+      static const std::vector<std::string> kWideHud = {"4:3", "16:9", "Full"};
       int wh = std::clamp(cfg.wide_hud, 0, 2);
       if (combo("##widehud", wh, kWideHud)) {
         cfg.wide_hud = wh;

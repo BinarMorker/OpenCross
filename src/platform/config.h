@@ -108,7 +108,7 @@ void bind_cheats(const Cheats* set);
 //            WideEdgeFade: widescreen only, fade the room picture's cut edge into black over this many layer pixels (0 = off).
 //            FovDeg: horizontal field of view in degrees of the 4:3 picture (battle, title sea); 35 = the PS1's own (H 512:
 //            2 atan(160 / 512) = 34.7); 30..110, larger = wider.
-//            WideHud ("Wide Menus/HUD", widescreen only): 0 = the battle HUD and the main menu on the 4:3 canvas, 1 = spread to a 16:9
+//            WideHud ("Wide Menus/HUD", widescreen only, default full): 0 = the battle HUD and the main menu on the 4:3 canvas, 1 = spread to a 16:9
 //            frame's width, 2 = spread to the window's edges (kWideHudNames; old `WideHudEdges=1` reads as 2).
 //            Widescreen (F7 toggles): the field, world map, battle and the title's 3D sea fill the window's own width (any shape wider
 //            than 4:3; render::wide_extra_for); menus, dialogue, the title logo / menu and movies stay 4:3. Off = 4:3 with black bars.
@@ -173,7 +173,7 @@ struct Config {
   TexFilter filter_effects = TexFilter::Bilinear;
   int wide_edge_fade = 4;
   int fov_deg = 35;
-  int wide_hud = 0;
+  int wide_hud = 2;
   static constexpr const char* kWideHudNames[] = {"default", "16:9", "full"};
   bool fast_mode = false;
   bool slow_mode = false;

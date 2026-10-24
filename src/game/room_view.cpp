@@ -566,6 +566,21 @@ void RoomView::draw(render::SpriteBatch& sprites, float vw, float vh, float alph
     sprites.set_blend(mode);
     sprites.draw_depth(set, ox + cx0 * scale_x, oy + cy0 * sy, (cx1 - cx0) * scale_x, (cy1 - cy0) * sy, depth, (cx0 - px) / fw,
                        (cy0 - py) / fh, (cx1 - px) / fw, (cy1 - py) / fh, col);
+    // A darkening layer over all 320 columns (the title's fade from black) also covers the widescreen columns beside them: the visible
+    // columns, or when the room is composed 4:3 over a widescreen backdrop (the title) the whole widened frame, every row. The strips
+    // repeat the layer's middle texel.
+    if (it->blend == 2 && px <= 0.0f && px + fw >= render::kLayerW) {
+      const render::Letterbox::Rect veil = render::Letterbox::veil_rect(vw, vh);
+      const bool whole = render::screen_extra() > render::wide_extra();
+      const float x0 = ox + cx0 * scale_x, x1 = ox + cx1 * scale_x, y0 = oy + cy0 * sy, y1 = oy + cy1 * sy;
+      const float left = whole ? veil.x : lb.left(), right = whole ? veil.x + veil.w : lb.left() + lb.width();
+      const float top = whole ? std::min(veil.y, y0) : y0, bottom = whole ? std::max(veil.y + veil.h, y1) : y1;
+      const float u = ((cx0 + cx1) * 0.5f - px) / fw, v = ((cy0 + cy1) * 0.5f - py) / fh;
+      if (left < x0) sprites.draw_depth(set, left, top, x0 - left, bottom - top, depth, u, v, u, v, col);
+      if (right > x1) sprites.draw_depth(set, x1, top, right - x1, bottom - top, depth, u, v, u, v, col);
+      if (top < y0) sprites.draw_depth(set, x0, top, x1 - x0, y0 - top, depth, u, v, u, v, col);
+      if (bottom > y1) sprites.draw_depth(set, x0, y1, x1 - x0, bottom - y1, depth, u, v, u, v, col);
+    }
   }
   sprites.set_blend(render::BlendMode::Alpha);
   if (bg_lin) sprites.set_filter(render::SpriteFilter::Sampler);

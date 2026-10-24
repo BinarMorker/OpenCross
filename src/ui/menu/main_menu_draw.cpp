@@ -253,21 +253,21 @@ std::string MainMenu::Impl::cm(std::string_view key) {
 }
 
 // ---- parchment backdrop: 8 x 7 tiles of hd/map/etc/tile.tim (the whole 256 x 256 image is one tile) or, with the PS1 disc art, the
-// disc's own tile; widescreen continues the grid out to x = -wide_s .. 1280 + wide_s with the edge tiles clipped. Then the two faint
+// disc's own tile; widescreen continues the grid out to x = -canvas_s .. 1280 + canvas_s with the edge tiles clipped. Then the two faint
 // compass swirls (menutim_02).
 void MainMenu::Impl::background() {
   if (Tex* tile = texs.ps1_or_hd(ps1_screen(), "ps1:tile", [&] { return ps1::parchment(*vfs); }, "hd/map/etc/tile.tim")) {
     const float tile_w = kCanvasW / 8.0f, tile_h = kCanvasH / 7.0f;
-    const int extra = static_cast<int>(std::ceil(wide_s / tile_w));
+    const int extra = static_cast<int>(std::ceil(canvas_s / tile_w));
     for (int ty = 0; ty < 7; ++ty)
       for (int tx = -extra; tx < 8 + extra; ++tx) {
         const float x0 = tile_w * static_cast<float>(tx), x1 = x0 + tile_w + 1.0f;
-        const float clip_x0 = std::max(x0, -wide_s), clip_x1 = std::min(x1, kCanvasW + wide_s);
+        const float clip_x0 = std::max(x0, -canvas_s), clip_x1 = std::min(x1, kCanvasW + canvas_s);
         if (clip_x1 <= clip_x0) continue;
         Img(tile, clip_x0, tile_h * static_cast<float>(ty), clip_x1 - clip_x0, tile_h + 1.0f, (clip_x0 - x0) / (x1 - x0), 0.0f, (clip_x1 - x0) / (x1 - x0), 1.0f);
       }
   } else {
-    rect(-wide_s, 0, kCanvasW + 2.0f * wide_s, kCanvasH, rgb(60, 38, 18));
+    rect(-canvas_s, 0, kCanvasW + 2.0f * canvas_s, kCanvasH, rgb(60, 38, 18));
   }
   if (Tex* deco = texs.load("hd/menu/menutim/menutim_02.png")) {
     Img(deco, -140, 537.8f, 640, 662, 0, 0, 1, 1, rgb(160, 160, 176));
@@ -533,17 +533,17 @@ void MainMenu::Impl::TPfit(float x, float y, const std::u32string& str, float ma
 
 void MainMenu::Impl::draw(const render::Frame& frame, float vw, float vh, bool resume) {
   if (closed || !gs || !ready) return;
-  // Wide Menus/HUD default: the 4:3 canvas (pillarboxed by the host); 16:9 / full: that frame's columns.
-  const float extra_cols = wide_cols;
-  wide_s = extra_cols > 0.0f ? 4.0f * extra_cols : 0.0f;
+  // Widescreen: the canvas covers the window's widened frame; Wide Menus/HUD 4:3 keeps the layout on its centre, 16:9 / full spread it.
+  wide_s = 4.0f * wide_cols;
+  canvas_s = 4.0f * canvas_cols;
   render::Frame lf;
   if (lowres_on()) {
     Ps1Display display = screen == MenuScreen::Save || screen == MenuScreen::Settings ? kMenuWide : kMenutest;
-    display.w = static_cast<u32>(std::lround(static_cast<float>(display.w) * (kCanvasW + 2.0f * wide_s) / kCanvasW));
-    if (lowres.begin(frame, display, text, lf, kCanvasW + 2.0f * wide_s, kCanvasH)) {
-      draw_view(lf, kCanvasW + 2.0f * wide_s, kCanvasH, resume, true);
-      if (wide_s > 0.0f) {
-        const render::Letterbox letterbox = render::Letterbox::wide(vw, vh, extra_cols);
+    display.w = static_cast<u32>(std::lround(static_cast<float>(display.w) * (kCanvasW + 2.0f * canvas_s) / kCanvasW));
+    if (lowres.begin(frame, display, text, lf, kCanvasW + 2.0f * canvas_s, kCanvasH)) {
+      draw_view(lf, kCanvasW + 2.0f * canvas_s, kCanvasH, resume, true);
+      if (canvas_s > 0.0f) {
+        const render::Letterbox letterbox = render::Letterbox::wide(vw, vh, canvas_cols);
         const render::Letterbox::Rect target_rect{letterbox.left(), letterbox.oy, letterbox.width(), render::kLayerH * letterbox.scale};
         lowres.end(frame, vw, vh, &target_rect);
       } else {
@@ -555,13 +555,13 @@ void MainMenu::Impl::draw(const render::Frame& frame, float vw, float vh, bool r
   draw_view(frame, vw, vh, resume, false);
 }
 
-// `in_pass`: vw x vh is the widened canvas itself (zoom 1; canvas x = 0 sits wide_s in). Otherwise the window: the 4:3 canvas fit, or
+// `in_pass`: vw x vh is the widened canvas itself (zoom 1; canvas x = 0 sits canvas_s in). Otherwise the window: the 4:3 canvas fit, or
 // with widescreen the widened frame's zoom (a quarter of the layer-column scale) and origin.
 void MainMenu::Impl::draw_view(const render::Frame& frame, float vw, float vh, bool resume, bool in_pass) {
   if (in_pass) {
-    zoom = 1.0f, ox = wide_s, oy = 0.0f;
-  } else if (wide_s > 0.0f) {
-    const render::Letterbox letterbox = render::Letterbox::wide(vw, vh, wide_s * 0.25f);
+    zoom = 1.0f, ox = canvas_s, oy = 0.0f;
+  } else if (canvas_s > 0.0f) {
+    const render::Letterbox letterbox = render::Letterbox::wide(vw, vh, canvas_cols);
     zoom = letterbox.scale * 0.25f, ox = letterbox.ox, oy = letterbox.oy;
   } else {
     const render::CanvasFit cf = render::canvas_fit(vw, vh, kCanvasW, kCanvasH);

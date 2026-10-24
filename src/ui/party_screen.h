@@ -48,6 +48,9 @@ class PartyScreen {
   // The player's names (may be null).
   void set_custom_names(const std::map<int, std::u32string>* names);
 
+  // [Video] Widescreen: `canvas_columns` = layer columns per side the backdrop extends by; [Video] WideHud: `layout_columns` = the
+  // columns the left half (status, current party) and the right half (member grid) move out by.
+  void set_wide_columns(float canvas_columns, float layout_columns);
   // Snapshot of the party, the grid (recruited and not excluded), the lock bitmap and the shown records.
   void open(const GameState& gs);
   // Relief Charm (memmenu2): the same grid; the relief member is save head 0x59F.

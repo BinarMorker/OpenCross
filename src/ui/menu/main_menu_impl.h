@@ -270,12 +270,13 @@ struct MainMenu::Impl {
   // Drawing DSL (all positions are emitted into `cmds` and drawn by draw_view): rect / box_outline / Img = canvas rectangles and sprites;
   // T = canvas-unit text; PX / PY map PS1 px to the canvas; Frame = a panel shape at PS1 (x, y); TP / TPfit = text with its top-left at
   // PS1 (x, y), optionally shrunk to a width; HT / HL / HN / HS = ink-box text (bn label / kb number / menutest style) at PS1 px;
-  // Digits = a right-aligned number field. Widescreen groups: with [Video] Widescreen the menus use a widened canvas (x from -wide_s to
-  // 1280 + wide_s) and every primitive adds the current group's shift (Left -wide_s, Right +wide_s, Centre none); wide_s is 0 at 4:3.
+  // Digits = a right-aligned number field. Widescreen groups: with [Video] Widescreen the menus use a widened canvas (x from -canvas_s
+  // to 1280 + canvas_s, the window's width) and every primitive adds the current group's shift (Left -wide_s, Right +wide_s, Centre
+  // none); wide_s ([Video] WideHud) is at most canvas_s, both are 0 at 4:3.
   enum Group { Left = -1, Right = 1, Centre = 2 };
-  float wide_s = 0.0f, gdx = 0.0f;
-  // Set by set_wide_columns ([Video] WideHud).
-  float wide_cols = 0.0f;
+  float wide_s = 0.0f, canvas_s = 0.0f, gdx = 0.0f;
+  // Set by set_wide_columns.
+  float wide_cols = 0.0f, canvas_cols = 0.0f;
   void group(Group which) { gdx = which == Left ? -wide_s : which == Right ? wide_s : 0.0f; }
 
   // Defined in main_menu_draw.cpp.
@@ -434,7 +435,7 @@ struct MainMenu::Impl {
   // [Video] Ps1Res (any art mode): the whole screen into a target of menutest's display size
   // (512 x 448; Save / Load and Settings on the 640 x 448 mode), scaled up nearest.
   // lowres_on() = that pass; ps1_screen() = the PS1 disc textures, classic art only (HD keeps its own art, point-sampled).
-  // Widescreen: the canvas grows by wide_s = 4 * screen_extra() canvas units per side; the target grows with it
+  // Widescreen: the canvas grows by canvas_s = 4 * screen_extra() canvas units per side; the target grows with it
   // (512 + 3.2 e / 640 + 4 e texels wide) and is shown in the window rectangle of the widened 240-row frame.
   bool lowres_on() const { return ps1_menus(); }
   bool ps1_screen() const { return mode == ArtMode::Original && ps1_menus(); }

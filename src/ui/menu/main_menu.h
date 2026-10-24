@@ -56,9 +56,9 @@ class MainMenu {
   void set_sfx(std::function<void(int)> fn);
   // Debug tab tools were used this session: the save screen shows "Debug tools used this session"; saving stays allowed.
   void set_save_locked(bool on);
-  // [Video] Widescreen + WideHudEdges = "Wide Menus/HUD": the screens use the widened canvas (parchment edge to edge,
-  // left / right groups at the window edges). `columns` = layer columns per side the screens spread out by (0 = the 4:3 canvas).
-  void set_wide_columns(float columns);
+  // [Video] Widescreen: `canvas_columns` = layer columns per side the backdrop (parchment) extends by, the window's own; [Video]
+  // WideHud ("Wide Menus/HUD"): `layout_columns` = the columns per side the left / right groups spread out by (0 = the 4:3 layout).
+  void set_wide_columns(float canvas_columns, float layout_columns);
   bool save_locked() const;
 
   void open(GameState& state, bool can_save);

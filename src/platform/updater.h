@@ -22,6 +22,7 @@ namespace oc::platform {
 
 inline constexpr const char* kReleasesUrl = "https://github.com/sp-hy/OpenCross/releases";
 inline constexpr const char* kNexusUrl = "https://www.nexusmods.com/chronocrosstheradicaldreamersedition/mods/97";
+inline constexpr const char* kNexusBugsUrl = "https://www.nexusmods.com/chronocrosstheradicaldreamersedition/mods/97?tab=bugs";
 
 // "v1.2.3" / "1.2" / "1.2.3.4" -> numbers (missing parts 0); nullopt when it does not start with a number.
 std::optional<std::vector<int>> parse_version(std::string_view text);

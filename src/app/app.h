@@ -11,6 +11,7 @@
 //   app_feedback.cpp  the encounter feed-back / damage-jolt pass over the scene target
 // The members stand in the order the objects are created; destruction runs in reverse, so every GPU resource goes before ctx and
 // the voice player before the mixer.
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -76,7 +77,7 @@ struct SceneFrame {
   // The window frame and its size.
   render::Frame frame;
   float vw = 0, vh = 0;
-  bool field_shown = false, battle_shown = false, title_scene = false, title_sea = false;
+  bool field_shown = false, battle_shown = false, title_scene = false, title_sea = false, title_lowres = false;
   bool field_lowres = false, results_up = false, battle_3d = false, battle_lowres = false;
   // OC_NO_WARP (0 = off, 1 = unwarped, 2 = the deep part only).
   int warp_debug = 0;
@@ -162,6 +163,7 @@ class App {
   // ---- app_run.cpp ------------------------------------------------------------------------------------------------------------
   void log_frametime();
   void frame_hotkeys();
+  void settings_pad_filter();
   // RDE's speed toggles do nothing in the Radius tutorial (its field map or its battle).
   bool speed_locked() const;
   void rde_toggle_keys();
@@ -177,6 +179,7 @@ class App {
   void draw_scene(SceneFrame& sf);
   void begin_scene_target(SceneFrame& sf);
   void draw_battle_picture(const SceneFrame& sf);
+  void draw_title_lowres(const SceneFrame& sf);
   void draw_field_lowres(const SceneFrame& sf);
   void draw_field_full(const SceneFrame& sf);
   void draw_battle_ui(const SceneFrame& sf);
@@ -311,6 +314,9 @@ class App {
   ui::FeatureIcons feature_icons;
   bool feature_icons_ok = false;
   game::RdeHotkeys rde_hotkeys;
+  // Pad buttons / axes held while the settings window was open: hidden from the game until let go.
+  std::array<bool, platform::Input::kButtons> settings_held_buttons{};
+  std::array<bool, platform::Input::kAxes> settings_held_axes{};
   game::SlowFieldCycle slow_field_cycle;
   // RDE's HD "Home / Another World" name over the world maps.
   ui::WorldName world_name;

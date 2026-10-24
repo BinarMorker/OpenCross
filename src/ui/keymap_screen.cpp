@@ -93,12 +93,15 @@ void KeyMapScreen::step() {
 
 void KeyMapScreen::update(const platform::Input& in, float dt) {
   if (done_) return;
-  // "Next" latch: a key press (anything but the F-key toggles) or the release of a pad button other than the stick clicks.
+  // "Next" latch: a key press (anything but the F-key toggles) or the release of a pad button other than the stick clicks and Back (the
+  // settings window).
   for (size_t i = 0; i < in.key_pressed.size(); ++i)
     if (in.key_pressed[i] && (i < SDL_SCANCODE_F1 || i > SDL_SCANCODE_F12)) next_ = true;
   for (size_t button = 0; button < pad_prev_.size(); ++button) {
     const bool down = in.pad_connected && in.pad_down[button];
-    if (pad_prev_[button] && !down && in.pad_connected && button != SDL_GAMEPAD_BUTTON_LEFT_STICK && button != SDL_GAMEPAD_BUTTON_RIGHT_STICK) next_ = true;
+    if (pad_prev_[button] && !down && in.pad_connected && button != SDL_GAMEPAD_BUTTON_LEFT_STICK && button != SDL_GAMEPAD_BUTTON_RIGHT_STICK &&
+        button != SDL_GAMEPAD_BUTTON_BACK)
+      next_ = true;
     pad_prev_[button] = down;
   }
   acc_ += std::clamp(dt, 0.0f, 0.25f) * 60.0f;

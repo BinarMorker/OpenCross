@@ -216,6 +216,13 @@ struct PartyScreen::Impl {
   // One text entry: canvas X = x * 2 + offX * scale, Y = y * 960/216 + offY * scale, scale = slot scale * mul.
   // Normal = c16 (x) colour, outline = colour * kB / 31; H4 (`shadow`) draws the drop shadow in the outline colour, H3 none.
   float zoom = 1, ox = 0, oy = 0;
+  // Widescreen: the backdrop and fades cover PS1 x edge_x0 .. edge_x0 + edge_w (the window's widened frame). While `grouped`, everything
+  // left of the gap between the windows (status, current party) moves `spread` PS1 px left and the rest (member grid) as far right;
+  // [Video] WideHud.
+  static constexpr float kGroupSplit = 300.0f;
+  float canvas_cols = 0, layout_cols = 0, edge_x0 = 0, edge_w = 640, spread = 0;
+  bool grouped = false;
+  float group_dx(float x) const { return !grouped ? 0.0f : x < kGroupSplit ? -spread : spread; }
   // draw() runs the screen twice: a preparing pass (loads every texture, prepares every glyph: neither may happen between the sprite
   // batch's begin / end) and the drawing pass.
   bool prep = false;
@@ -226,7 +233,7 @@ struct PartyScreen::Impl {
     if (face_id == render::kNoFace) return;
     const font::SlotInfo& si = font::slot(slot);
     const float scale = si.scale * mul;
-    const float canvas_x = x * kSx + si.off_x * scale, canvas_y = y * kSy + si.off_y * scale + dy_canvas;
+    const float canvas_x = (x + group_dx(x)) * kSx + si.off_x * scale, canvas_y = y * kSy + si.off_y * scale + dy_canvas;
     const font::Ink ink = shadow ? font::h4(col, c16, kB) : font::h3(col, c16, kB);
     render::TextStyle st;
     st.backdrop = true;
@@ -246,9 +253,19 @@ struct PartyScreen::Impl {
     if (prep || !set || w <= 0 || h <= 0) return;
     float left = std::max(x, cl.x0), top = std::max(y, cl.y0), right = std::min(x + w, cl.x1), bottom = std::min(y + h, cl.y1);
     if (left >= right || top >= bottom) return;
+    if (grouped && left < kGroupSplit && right > kGroupSplit) {
+      Clip half = cl;
+      half.x1 = kGroupSplit;
+      draw_quad(set, x, y, w, h, u0, v0, u1, v1, colour, half, ys, yoff);
+      half = cl;
+      half.x0 = kGroupSplit;
+      draw_quad(set, x, y, w, h, u0, v0, u1, v1, colour, half, ys, yoff);
+      return;
+    }
+    const float dx = group_dx(left);
     const float a0 = u0 + (u1 - u0) * (left - x) / w, a1 = u0 + (u1 - u0) * (right - x) / w;
     const float b0 = v0 + (v1 - v0) * (top - y) / h, b1 = v0 + (v1 - v0) * (bottom - y) / h;
-    sprites->draw(set, ox + left * kSx * zoom, oy + (y * kSy + yoff + (top - y) * kSy) * zoom, (right - left) * kSx * zoom,
+    sprites->draw(set, ox + (left + dx) * kSx * zoom, oy + (y * kSy + yoff + (top - y) * kSy) * zoom, (right - left) * kSx * zoom,
                   (bottom - top) * ys * zoom, a0, b0, a1, b1, colour);
   }
   // Portrait 64 x 32 PS1 px, drawn 4.0 canvas px per PS1 row and 7 px lower for portrait bytes 0..0x31.
@@ -351,6 +368,10 @@ void PartyScreen::open_relief(const GameState& gs) {
   log::info("party screen: relief screen opened, relief member {}", relief_member);
 }
 
+void PartyScreen::set_wide_columns(float canvas_columns, float layout_columns) {
+  impl_->canvas_cols = std::max(0.0f, canvas_columns);
+  impl_->layout_cols = std::clamp(layout_columns, 0.0f, impl_->canvas_cols);
+}
 bool PartyScreen::active() const { return impl_->phase != Impl::Phase::Idle; }
 PartyScreen::Kind PartyScreen::kind() const { return impl_->kind; }
 
@@ -443,24 +464,30 @@ void PartyScreen::Impl::draw_screen() {
   // The PS1 picture under the lists: the background sprite 640 x 220 at (0, 0), bg.tim through the texture window (0, 0, 64, 32).
   // The windows (w17.tim) are cdrom2's blank sheet in both art modes: nothing. PS1 fades:
   // a subtracted TILE of colour 0xE0 .. 0x20 on the first 7 frames; the closing loop subtracts 8 per frame from the double-buffered picture.
-  if (Tex* bg = tim("cdrom/map/etc/bg.tim"))
+  // Widescreen: the tiles continue over the widened frame.
+  grouped = false;
+  if (Tex* bg = tim("cdrom/map/etc/bg.tim")) {
+    const Clip edges{edge_x0, -1e9f, edge_x0 + edge_w, 1e9f};
+    const int first = static_cast<int>(std::floor(edge_x0 / 64.0f)) * 64;
     for (int y = 0; y < 220; y += 32)
-      for (int x = 0; x < 640; x += 64) {
+      for (int x = first; x < edge_x0 + edge_w; x += 64) {
         const float h = static_cast<float>(std::min(32, 220 - y));
-        draw_quad(bg->set, static_cast<float>(x), static_cast<float>(y), 64, h, 0, 0, 1, h / 32.0f, 0xFFFFFFFFu);
+        draw_quad(bg->set, static_cast<float>(x), static_cast<float>(y), 64, h, 0, 0, 1, h / 32.0f, 0xFFFFFFFFu, edges);
       }
+  }
   if (!prep) {
     int kp = 0;
     if (phase == Phase::Close) kp = std::min(255, 8 * ((close_frame + 1) / 2));
     else if (frame <= 7) kp = 0xE0 - 0x20 * std::max(0, frame - 1);
     if (kp > 0) {
       sprites->set_blend(render::BlendMode::Subtract);
-      draw_quad(white, 0, 0, 640, 224, 0, 0, 1, 1, render::pack_rgba(static_cast<u8>(kp), static_cast<u8>(kp), static_cast<u8>(kp)));
+      draw_quad(white, edge_x0, 0, edge_w, 224, 0, 0, 1, 1, render::pack_rgba(static_cast<u8>(kp), static_cast<u8>(kp), static_cast<u8>(kp)));
       sprites->set_blend(render::BlendMode::Alpha);
     }
   }
 
   // Main layer: backdrop, grid cells (visible rows), then the party slots (Party) or the fixed slot 0 + silhouette and icon (Relief).
+  grouped = true;
   if (Tex* bg = png(relief ? "hd/menu/shapes/memmenu2.png" : "hd/menu/shapes/memmenu.png")) draw_quad(bg->set, 0, 0, 640, 216, 0, 0, 1, 1, col(0x808080));
   const int roster_size = static_cast<int>(party_grid.roster().size());
   for (int i = 0; i < roster_size; ++i) {
@@ -607,12 +634,22 @@ void PartyScreen::draw(const render::Frame& frame, float vw, float vh, bool resu
   if (impl.phase == Impl::Phase::Idle || !impl.ctx) return;
   // Classic art with [Video] Ps1ResMenus (any art mode; the PS1 face TIMs stay classic-only, Impl::face): the screen into a
   // 640 x 224 target (216 rows shown = y * 960 / 216), scaled up nearest.
+  // Widescreen: the target grows with the canvas (640 + 4 e texels) and is shown in the window rectangle of the widened 240-row frame.
   render::Frame lf;
   if (ps1_menus()) {
     if (!impl.lowres.ready()) impl.lowres.init(*impl.ctx, *impl.sprites);
-    if (impl.lowres.begin(frame, kMemmenu, impl.text, lf)) {
-      draw_view(lf, kCanvasW, kCanvasH, resume);
-      impl.lowres.end(frame, vw, vh);
+    const float canvas_w = kCanvasW + 8.0f * impl.canvas_cols;
+    Ps1Display display = kMemmenu;
+    display.w = static_cast<u32>(std::lround(static_cast<float>(display.w) * canvas_w / kCanvasW));
+    if (impl.lowres.begin(frame, display, impl.text, lf, canvas_w, kCanvasH)) {
+      draw_view(lf, canvas_w, kCanvasH, resume);
+      if (impl.canvas_cols > 0.0f) {
+        const render::Letterbox letterbox = render::Letterbox::wide(vw, vh, impl.canvas_cols);
+        const render::Letterbox::Rect target_rect{letterbox.left(), letterbox.oy, letterbox.width(), render::kLayerH * letterbox.scale};
+        impl.lowres.end(frame, vw, vh, &target_rect);
+      } else {
+        impl.lowres.end(frame, vw, vh);
+      }
       return;
     }
   }
@@ -621,8 +658,11 @@ void PartyScreen::draw(const render::Frame& frame, float vw, float vh, bool resu
 
 void PartyScreen::draw_view(const render::Frame& frame, float vw, float vh, bool resume) {
   Impl& impl = *impl_;
-  const render::CanvasFit cf = render::canvas_fit(vw, vh, kCanvasW, kCanvasH);
-  impl.zoom = cf.s, impl.ox = cf.ox, impl.oy = cf.oy;
+  // One layer column = 2 PS1 px of this screen.
+  const render::Letterbox letterbox = render::Letterbox::wide(vw, vh, impl.canvas_cols);
+  impl.zoom = letterbox.scale / (2.0f * kSx), impl.ox = letterbox.ox, impl.oy = letterbox.oy;
+  impl.edge_x0 = 2.0f * letterbox.x0, impl.edge_w = 2.0f * letterbox.w;
+  impl.spread = 2.0f * impl.layout_cols;
   // Resources and glyphs before begin() (they may upload / wait for the GPU).
   for (int character : impl.grid().roster()) impl.face(character);
   impl.face(0);

@@ -304,7 +304,10 @@ void MainMenu::set_save_target(save::SaveDat* dat, std::filesystem::path out) {
 }
 void MainMenu::set_sfx(std::function<void(int)> fn) { impl_->sfx_fn = std::move(fn); }
 void MainMenu::set_save_locked(bool on) { impl_->save_locked = on; }
-void MainMenu::set_wide_columns(float columns) { impl_->wide_cols = std::max(0.0f, columns); }
+void MainMenu::set_wide_columns(float canvas_columns, float layout_columns) {
+  impl_->canvas_cols = std::max(0.0f, canvas_columns);
+  impl_->wide_cols = std::clamp(layout_columns, 0.0f, impl_->canvas_cols);
+}
 bool MainMenu::save_locked() const { return impl_->save_locked; }
 void MainMenu::open(GameState& state, bool can_save) { impl_->open(state, can_save); }
 void MainMenu::close() { impl_->closed = true; }

@@ -362,9 +362,11 @@ void GameFlow::start(FlowState state) {
 }
 
 bool GameFlow::any_button(const platform::Input& in) {
-  // Not the hotkeys (F-keys, the stick clicks) / the Esc settings key: opening the settings window over the attract demo must not end it.
+  // Not the hotkeys (F-keys, the stick clicks) / the settings keys (Esc, the pad's Back): opening the settings window over the attract
+  // demo must not end it.
   for (int i = 0; i < platform::Input::kButtons; ++i)
-    if (in.pad_pressed[static_cast<size_t>(i)] && i != SDL_GAMEPAD_BUTTON_LEFT_STICK && i != SDL_GAMEPAD_BUTTON_RIGHT_STICK) return true;
+    if (in.pad_pressed[static_cast<size_t>(i)] && i != SDL_GAMEPAD_BUTTON_LEFT_STICK && i != SDL_GAMEPAD_BUTTON_RIGHT_STICK && i != SDL_GAMEPAD_BUTTON_BACK)
+      return true;
   for (size_t i = 0; i < in.key_pressed.size(); ++i)
     if (in.key_pressed[i] && (i < SDL_SCANCODE_F1 || i > SDL_SCANCODE_F12) && i != SDL_SCANCODE_ESCAPE) return true;
   return false;

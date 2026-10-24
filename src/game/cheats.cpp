@@ -92,7 +92,7 @@ bool model_swap_skipped(int map, int ent, const StoryByte& story) {
 }
 
 // ------------------------------------------------------------------------------------------------ hotkeys
-bool RdeHotkeys::poll(const HotkeyLevels& in, bool speed_locked, Toggles& toggles) {
+void RdeHotkeys::poll(const HotkeyLevels& in, bool speed_locked, Toggles& toggles) {
   // Stick clicks act on release: both were held = the chord (and the later release of the other one does nothing), one alone = a tap.
   bool chord = false, tap_l3 = false, tap_r3 = false;
   if ((!in.l3 || !in.r3) && l3_ && r3_) {
@@ -102,10 +102,6 @@ bool RdeHotkeys::poll(const HotkeyLevels& in, bool speed_locked, Toggles& toggle
     (l3_ ? tap_l3 : tap_r3) = !chord_used_;
     chord_used_ = false;
   }
-  // LT + L3 fires the frame after the pair completes.
-  const bool menu = in.lt && in.l3 && (!lt_ || !l3_);
-  const bool open_menu = !menu && menu_;
-
   const bool slow = in.slow_key || in.lt, fast = in.fast_key || in.rt;
   if (slow && !slow_ && !speed_locked) {
     toggles.slow = !toggles.slow;
@@ -120,9 +116,8 @@ bool RdeHotkeys::poll(const HotkeyLevels& in, bool speed_locked, Toggles& toggle
   if (boost && !boost_) toggles.boost = !toggles.boost;
   if (auto_battle && !auto_) toggles.auto_battle = !toggles.auto_battle;
 
-  slow_ = slow, fast_ = fast, encounters_ = encounters, boost_ = boost, auto_ = auto_battle, menu_ = menu;
-  lt_ = in.lt, l3_ = in.l3, r3_ = in.r3;
-  return open_menu;
+  slow_ = slow, fast_ = fast, encounters_ = encounters, boost_ = boost, auto_ = auto_battle;
+  l3_ = in.l3, r3_ = in.r3;
 }
 
 float speed_factor(bool fast, bool slow, int fast_rate, int slow_percent, bool in_battle, bool speed_locked) {

@@ -124,7 +124,7 @@ int main() {
   {
     game::RdeHotkeys keys;
     game::Toggles on;
-    auto frame = [&](game::HotkeyLevels in, bool locked = false) { return keys.poll(in, locked, on); };
+    auto frame = [&](game::HotkeyLevels in, bool locked = false) { keys.poll(in, locked, on); };
     game::HotkeyLevels fast_key;
     fast_key.fast_key = true;
     frame(fast_key);
@@ -169,16 +169,6 @@ int main() {
     CHECK(on.auto_battle && on.encounters && on.boost);
     frame({});
     CHECK(on.auto_battle && on.encounters && on.boost);
-    // LT + L3: the settings window, the frame after the pair completes (LT also toggled slow, the L3 release taps encounters)
-    game::HotkeyLevels lt_l3;
-    lt_l3.lt = lt_l3.l3 = true;
-    on = {};
-    CHECK(!frame(lt));
-    CHECK(!frame(lt_l3));
-    CHECK(frame(lt_l3));
-    CHECK(on.slow && !on.encounters);
-    CHECK(!frame({}));
-    CHECK(on.encounters);
   }
   // --- speed factors: RDE's own = 4x field / 2x battle; slow = percent; nothing in the tutorial
   CHECK(game::speed_factor(true, false, 0, 50, false, false) == 4.0f && game::speed_factor(true, false, 0, 50, true, false) == 2.0f);

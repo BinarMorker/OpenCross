@@ -106,7 +106,10 @@ void App::log_frametime() {
 }
 
 void App::frame_hotkeys() {
-  if (input.key_pressed[SDL_SCANCODE_ESCAPE] && !routing && !replaying) ui.options_open = !ui.options_open;
+  // The settings window: Esc, or the pad's Back / View button.
+  const bool settings_key = input.key_pressed[SDL_SCANCODE_ESCAPE] || (input.pad_connected && input.pad_pressed[SDL_GAMEPAD_BUTTON_BACK]);
+  if (settings_key && !routing && !replaying) ui.options_open = !ui.options_open;
+  settings_pad_filter();
   if (input.key_pressed[SDL_SCANCODE_F8]) ui.toggle("Debug");
   // A mode switch / monitor move rebuilds the swapchain at the new size.
   if (window.take_resized()) ctx.request_resize();
@@ -119,13 +122,26 @@ void App::frame_hotkeys() {
   rde_toggle_keys();
 }
 
+// The settings window takes the pad (ImGui reads it from SDL directly): while it is open the game sees no pad input, and a button or
+// axis still held when it closes stays hidden from the game until it is let go.
+void App::settings_pad_filter() {
+  for (size_t i = 0; i < settings_held_buttons.size(); ++i) {
+    settings_held_buttons[i] = input.pad_down[i] && (ui.options_open || settings_held_buttons[i]);
+    if (ui.options_open || settings_held_buttons[i]) input.pad_down[i] = input.pad_pressed[i] = false;
+  }
+  for (size_t i = 0; i < settings_held_axes.size(); ++i) {
+    settings_held_axes[i] = std::fabs(input.pad_axis[i]) >= 0.25f && (ui.options_open || settings_held_axes[i]);
+    if (ui.options_open || settings_held_axes[i]) input.pad_axis[i] = 0.0f;
+  }
+}
+
 bool App::speed_locked() const {
   if (battle_ok || battle_in_field) return battle_ready && battle.scene_id() == game::kSpeedLockedMap;
   return world_ok && world.map_id() == game::kSpeedLockedMap;
 }
 
 // RDE's play-time toggles ([Game] SlowMode / FastMode, [Cheats] NoEncounters / BattleBoost / AutoBattle) from its keys and pad
-// buttons; LT + L3 opens the settings window as it opens RDE's own menu. What is on shows as RDE's icons (draw_frame).
+// buttons. What is on shows as RDE's icons (draw_frame).
 void App::rde_toggle_keys() {
   if (routing || replaying) return;
   auto held = [&](platform::Action action) {
@@ -150,7 +166,7 @@ void App::rde_toggle_keys() {
   platform::Cheats& cheats = config.cheats;
   game::Toggles toggles{config.slow_mode, config.fast_mode, cheats.no_encounters, cheats.battle_boost, cheats.auto_battle};
   const game::Toggles before = toggles;
-  if (rde_hotkeys.poll(levels, speed_locked(), toggles)) ui.options_open = !ui.options_open;
+  rde_hotkeys.poll(levels, speed_locked(), toggles);
   if (toggles == before) return;
   config.slow_mode = toggles.slow, config.fast_mode = toggles.fast;
   cheats.no_encounters = toggles.encounters, cheats.battle_boost = toggles.boost, cheats.auto_battle = toggles.auto_battle;
@@ -180,7 +196,9 @@ void App::frame_settings() {
   hud_cols = !config.widescreen || config.wide_hud == 0 ? 0.0f
              : config.wide_hud == 1 ? std::min(wide_extra, render::wide_extra_for(16.0f, 9.0f)) : wide_extra;
   if (battle_ready) battle.set_wide_hud_columns(hud_cols);
-  if (menu_ok) menu.set_wide_columns(hud_cols);
+  if (menu_ok) menu.set_wide_columns(wide_extra, hud_cols);
+  if (results_ok) results.set_wide_columns(wide_extra, hud_cols);
+  if (party_ok) party_screen.set_wide_columns(wide_extra, hud_cols);
   if (battle_ready) {
     battle.set_auto(config.debug_battle_auto);
     // Cheats: Auto battle = the command picks only; the results page stays manual (RDE).

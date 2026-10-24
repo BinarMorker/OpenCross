@@ -15,6 +15,10 @@ void draw_update_tab(platform::Updater& updater, bool* restart) {
   if (ImGui::Button("Open Nexus Mods Page")) SDL_OpenURL(platform::kNexusUrl);
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
     ImGuiLayer::tooltip("Opens the OpenCross page on Nexus Mods in your web browser (downloads, changelog, comments and bug reports).");
+  ImGui::SameLine();
+  if (ImGui::Button("Report a bug")) SDL_OpenURL(platform::kNexusBugsUrl);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+    ImGuiLayer::tooltip("Opens the Bugs tab of the OpenCross page on Nexus Mods in your web browser.");
 
   ImGuiLayer::section("Updates");
   const Updater::Status st = updater.status();

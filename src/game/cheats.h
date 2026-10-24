@@ -30,8 +30,8 @@ bool model_swap_skipped(int map, int ent, const StoryByte& story);
 
 // ---- RDE's play-time toggles and their keys / pad buttons. Keyboard: the slow / fast keys (default F1 / F2), F3 encounters off,
 // F4 battle boost, F5 auto battle. Pad: LT slow, RT fast, L3 tap encounters off, R3 tap battle boost, L3 + R3 auto battle (fires
-// when one of the two is let go; neither tap fires then), LT + L3 the settings window. Slow and fast exclude each other; a press
-// in the Radius tutorial (map / battle 386) is swallowed for them. Every toggle flips on the press, not while held.
+// when one of the two is let go; neither tap fires then). Slow and fast exclude each other; a press in the Radius tutorial
+// (map / battle 386) is swallowed for them. Every toggle flips on the press, not while held.
 constexpr int kSpeedLockedMap = 386;
 struct HotkeyLevels {
   bool slow_key = false, fast_key = false, encounters_key = false, boost_key = false, auto_key = false;
@@ -43,12 +43,12 @@ struct Toggles {
 };
 class RdeHotkeys {
  public:
-  // One frame: flips `toggles` on the presses; true = the settings window combination was completed.
-  bool poll(const HotkeyLevels& in, bool speed_locked, Toggles& toggles);
+  // One frame: flips `toggles` on the presses.
+  void poll(const HotkeyLevels& in, bool speed_locked, Toggles& toggles);
 
  private:
-  bool slow_ = false, fast_ = false, encounters_ = false, boost_ = false, auto_ = false, menu_ = false;
-  bool lt_ = false, l3_ = false, r3_ = false, chord_used_ = false;
+  bool slow_ = false, fast_ = false, encounters_ = false, boost_ = false, auto_ = false;
+  bool l3_ = false, r3_ = false, chord_used_ = false;
 };
 // The game-speed factor of the [Game] FastMode / SlowMode settings: fast_rate 0 = RDE's own (4x in the field, 2x in battle), else
 // that many times; slow_percent of normal speed. 1 when neither is on or the speed is locked.
