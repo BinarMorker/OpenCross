@@ -5,6 +5,7 @@ $tree = if ($env:OC_BUILD_DIR) { $env:OC_BUILD_DIR } else { 'build\win-x64' }
 $exe = Join-Path $root "$tree\bin\Debug\opencross.exe"
 $scratch = Join-Path $root 'tmp\save_route.dat'
 Remove-Item $scratch, "$scratch.bak" -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $root 'tmp\save_route_OpenCross') -Recurse -Force -ErrorAction SilentlyContinue
 & $exe occ save-blank (Join-Path $root 'tmp\save.dat') $scratch | Out-Host
 & (Join-Path $PSScriptRoot 'run.ps1') save
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

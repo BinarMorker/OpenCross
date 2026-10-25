@@ -192,7 +192,7 @@ void MainMenu::Impl::enter(MenuScreen target) {
     case MenuScreen::Equip: eslot = 0, eq_cur = eq_scroll = 0, eq_list = false; break;
     case MenuScreen::KeyItems: ki_cur = ki_scroll = 0; break;
     case MenuScreen::Settings: set_cur = 0, skin_pick = false; break;
-    case MenuScreen::Save: save_cur = 0, load_cur = 1, top_cur = can_save ? 0 : 1, save_phase = 0, save_card = 0, load_mode = false, save_confirm = false, load_previews(); break;
+    case MenuScreen::Save: save_cur = 0, load_cur = 1, top_cur = can_save ? 0 : 1, save_phase = 0, save_card = 1, load_mode = false, save_confirm = false, load_previews(); break;
     default: break;
   }
 }
@@ -298,8 +298,9 @@ void MainMenu::set_language(import::Lang lang) {
   impl_->fonts_mode = -1;
 }
 void MainMenu::set_portrait_set(const std::string& set) { impl_->portrait_set = set == "1999" ? "1999" : "2021"; }
-void MainMenu::set_save_target(save::SaveDat* dat, std::filesystem::path out) {
+void MainMenu::set_save_target(save::SaveDat* dat, std::filesystem::path out, save::OcSaves* page) {
   impl_->save_dat = dat;
+  impl_->page = page;
   impl_->save_out = std::move(out);
 }
 void MainMenu::set_sfx(std::function<void(int)> fn) { impl_->sfx_fn = std::move(fn); }
@@ -318,6 +319,15 @@ std::optional<MainMenu::LoadRequest> MainMenu::take_load_request() {
   Impl& impl = *impl_;
   if (!impl.load_pending) return std::nullopt;
   impl.load_pending = false;
+  if (impl.load_card == 0) {
+    const save::OcSaves::File* file = impl.page ? impl.page->file(impl.load_slot) : nullptr;
+    if (!file) return std::nullopt;
+    LoadRequest request;
+    request.card = 0;
+    request.slot = impl.load_slot;
+    request.data = file->data;
+    return request;
+  }
   const save::MemCard* card = impl.save_dat ? impl.save_dat->card(impl.load_card) : nullptr;
   if (!card) return std::nullopt;
   try {

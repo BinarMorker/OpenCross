@@ -43,6 +43,55 @@ constexpr float kLeadDy = 12.8f, kLeadBend[2] = {431.0f, 420.0f}, kLeadDx = 7.5f
 constexpr float kDialX = 420, kDialY = 64.5f, kDialW = 160, kDialH = 145.9f;
 constexpr float kPivotX = 500, kPivotY = 137.2f;
 
+// OpenCross save page (an OpenCross layout, not the PS1's): list frame 64 (416 x 210) at (112, 12), caption "OpenCross" in its tab
+// (the grid caption's offset), 10 rows of 18 px with the first row's cap top at 34; pointer at x 118 (1.5 px above the cap top);
+// columns (ink): number 146 (clear of the 23 px pointer), leader 182, location 248 (fit 128), playtime right 452, star 466, count 485. Scroll marks at x 508.
+// The in-game star sprite is drawn at row y + kRowStarDy: its centre then matches the digits' centre.
+// The detail and message frames stay as on the grid page.
+constexpr float kPageX = 112, kPageY = 12;
+constexpr int kPageRows = 10;
+// kRowScale is the largest row size: every row of the page shares one scale, the largest at which each file's leader and location fit
+// their columns. The caption is shrunk once to the tab gap (frame 64: no top border from x + 8 to x + 61).
+constexpr float kRowY0 = 34, kRowStep = 18, kRowScale = 0.29f, kPageCapMaxW = 49;
+constexpr float kRowCursorX = 118, kRowNumX = 146, kRowNameX = 182, kRowLocX = 248, kRowLocW = 128, kRowTimeRight = 452;
+constexpr float kRowStarX = 466, kRowStarsX = 485, kRowMarkX = 508, kRowStarDy = -0.6f;
+inline float row_y(int row) { return kRowY0 + kRowStep * static_cast<float>(row); }
+// Card choice with the page on top: "Please choose a slot." stays at (146, 336); the three lines at (298, 356 / 376 / 396), the pointer at
+// (266, line + 1).
+constexpr float kChoiceX = 298, kChoiceY0 = 356, kChoiceStep = 20, kChoiceCursorX = 266;
+inline float choice_y(int line) { return kChoiceY0 + kChoiceStep * static_cast<float>(line); }
+// Location caption of a save: savetbl row = the number of scenario start values <= the save's scenario (u16 head 0x40), at least 1.
+inline int location_key(int scenario) {
+  static constexpr int kStart[30] = {0, 8, 16, 24, 26, 28, 30, 36, 52, 64, 72, 80, 88, 92, 100, 108, 112, 116, 124, 128, 140, 144, 156, 164, 172, 184, 195, 202, 209, 999};
+  int key = 0;
+  for (int start : kStart)
+    if (scenario >= start) ++key;
+  return key < 1 ? 1 : key;
+}
+// Page file caption: "File# 1" .. "File# 100" / "File# Auto" (number 0 = the auto-save), one size for every number: the scale at
+// which the widest (page_caption_widest) fits the detail frame's tab gap (frame 84: no top border from x + 8 to x + 61, ink from
+// kFileCapX up to kFileCapMaxW wide).
+constexpr float kFileCapMaxW = 47;
+inline std::string page_caption(int number) { return number == 0 ? " Auto" : " " + std::to_string(number); }
+inline const char* const kPageCaptionWidest[2] = {" 100", " Auto"};
+// The page's captions ("OpenCross", "File# N") are centred on their frame's top border at whatever scale they fit: the double line's centre
+// lies 3.85 px below the frame's y (frames 64 and 84), the bn cap height is 24 px per unit scale (both measured on the HD frames).
+constexpr float kBorderMid = 3.85f, kCapPerScale = 24.0f;
+inline float caption_y(float frame_y, float scale) { return frame_y + kBorderMid - kCapPerScale * scale / 2.0f; }
+// Row location: the first savetbl line without its trailing dash and blanks (the quote that follows it is not shown in the row).
+inline std::u32string row_location(std::u32string line) {
+  while (!line.empty() && (line.back() == U' ' || line.back() == U'-' || line.back() == U'\u2013' || line.back() == U'\u2014' || line.back() == U'\u3000'))
+    line.pop_back();
+  return line;
+}
+// Row number: "Auto" / "001".
+inline std::string page_number(int number) {
+  if (number == 0) return "Auto";
+  char buffer[8];
+  std::snprintf(buffer, sizeof buffer, "%03d", number);
+  return buffer;
+}
+
 // Detail-panel name: the leader's name, or the auto-save box (slot 0) caption - two lines in FR / IT / DE / ES.
 // w = trunc(Measure(L == 5 ? kb : bn, text, 0.35) / 2) (sx = 2 on the 640 screen, the widest line); w > 97: scale *= 97 / w and
 // Y += k - k * 97 / w canvas px (k 28, JP 32); then line by line, pitch 16 * sy, minus 5 canvas px for the auto-save caption, which

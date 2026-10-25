@@ -13,11 +13,35 @@
 
 namespace oc::ui {
 
-// Fills the save-grid boxes from the chosen card in the card's directory (block) order.
+namespace {
+
+SavePrev preview_of(const save::SaveSlot& data, int slot, int block) {
+  SavePrev preview;
+  preview.used = true;
+  preview.slot = slot;
+  preview.block = block;
+  preview.party = data.party();
+  preview.frames = data.playtime_frames();
+  preview.gold = data.gold();
+  preview.stars = data.stars_total();
+  preview.scenario = static_cast<u32>(data.head[0x40]) | (static_cast<u32>(data.head[0x41]) << 8);
+  preview.flags = data.summary_flags();
+  return preview;
+}
+
+}  // namespace
+
+// Fills the save-grid boxes from the chosen card in the card's directory (block) order, or the page rows by file number.
 void MainMenu::Impl::load_previews() {
   prev.fill({});
+  page_prev.fill({});
+  if (save_card == 0) {
+    for (int number = 0; page && number <= save::kOcFiles; ++number)
+      if (const save::OcSaves::File* file = page->file(number)) page_prev[static_cast<size_t>(number)] = preview_of(file->data, number, 0);
+    return;
+  }
   if (!save_dat) return;
-  const save::MemCard* card = save_dat->card(save_card + 1);
+  const save::MemCard* card = save_dat->card(save_card);
   if (!card) return;
   std::vector<save::SlotRef> refs = save::list_slots(*card);
   std::sort(refs.begin(), refs.end(), [](const save::SlotRef& lhs, const save::SlotRef& rhs) { return lhs.block < rhs.block; });
@@ -25,17 +49,7 @@ void MainMenu::Impl::load_previews() {
   for (const save::SlotRef& ref : refs) {
     if (ref.slot < 0 || ref.slot >= 15 || box >= prev.size()) continue;
     try {
-      const save::SaveSlot data = save::read_slot(*card, ref.block);
-      SavePrev& preview = prev[box++];
-      preview.used = true;
-      preview.slot = ref.slot;
-      preview.block = ref.block;
-      preview.party = data.party();
-      preview.frames = data.playtime_frames();
-      preview.gold = data.gold();
-      preview.stars = data.stars_total();
-      preview.scenario = static_cast<u32>(data.head[0x40]) | (static_cast<u32>(data.head[0x41]) << 8);
-      preview.flags = data.summary_flags();
+      prev[box++] = preview_of(save::read_slot(*card, ref.block), ref.slot, ref.block);
     } catch (const std::exception& error) {
       log::warn("menu: save slot {} unreadable: {}", ref.slot, error.what());
     }
@@ -52,10 +66,11 @@ int MainMenu::Impl::save_list_angle(int sel) {
 }
 
 // Save / Load: phase 0 = the Save a File / Load a File choice (Save is greyed and unselectable when saving is blocked); phase 2 = the
-// memory-card choice (Slot 1 / Slot 2); phase 3 = "No save data in Slot N." (Load on a card without files; confirm or 120 frames
-// back to phase 0); phase 1 = the card's 2 x 8 box grid (card 1's box 0 is the auto-save, never a manual save target; up / down swap
-// rows, boxes 7 and 8 stay), with the overwrite / load confirmation on a used box. Cancel on the card choice or the grid returns to
-// phase 0.
+// save choice (OpenCross / Slot 1 / Slot 2; starts on OpenCross when the page holds a file); phase 3 = "No save data in ..." (Load on
+// an empty choice; confirm or 120 frames back to phase 0); phase 1 = the card's 2 x 8 box grid (card 1's box 0 is the auto-save, never
+// a manual save target; up / down swap rows, boxes 7 and 8 stay) or the page's list (file 0 is its auto-save, never a manual save
+// target; up / down one row, left / right one screen), with the overwrite / load confirmation on a used file. Cancel on the choice or
+// the list returns to phase 0.
 void MainMenu::Impl::update_save(const Nav& nav) {
   if (save_phase == 0) {
     if ((nav.up || nav.down) && can_save) top_cur = 1 - top_cur, sfx(1);
@@ -69,6 +84,7 @@ void MainMenu::Impl::update_save(const Nav& nav) {
       }
       load_mode = top_cur == 1;
       save_phase = 2;
+      save_card = page && !page->empty() ? 0 : 1;
       save_confirm = false;
       msg.clear();
       sfx(8);
@@ -76,21 +92,30 @@ void MainMenu::Impl::update_save(const Nav& nav) {
     return;
   }
   if (save_phase == 2) {
-    if (nav.up || nav.down) save_card = 1 - save_card, sfx(1);
+    if (nav.up) save_card = (save_card + 2) % 3, sfx(1);
+    if (nav.down) save_card = (save_card + 1) % 3, sfx(1);
     if (nav.cancel) {
       save_phase = 0;
       sfx(6);
     } else if (nav.ok) {
       sfx(8);
       load_previews();
-      const bool any = std::any_of(prev.begin(), prev.end(), [](const SavePrev& box) { return box.used; });
+      const bool any = save_card == 0 ? std::any_of(page_prev.begin(), page_prev.end(), [](const SavePrev& row) { return row.used; })
+                                      : std::any_of(prev.begin(), prev.end(), [](const SavePrev& box) { return box.used; });
       if (load_mode && !any) {
         save_phase = 3;
         card_msg_start = frames;
         return;
       }
       save_phase = 1;
-      save_cur = save_card == 0 ? 0 : -1;
+      if (save_card == 0) {
+        // The newest file (Load: the auto-save when there is no other; Save: file 1).
+        const int newest = page ? page->newest() : 0;
+        page_cur = newest ? newest : load_mode ? 0 : 1;
+        page_top = std::clamp(page_cur - save_layout::kPageRows / 2, 0, save::kOcFiles + 1 - save_layout::kPageRows);
+        return;
+      }
+      save_cur = save_card == 1 ? 0 : -1;
       if (load_mode) {
         load_cur = 0;
         for (int box = 0; box < 15; ++box)
@@ -120,62 +145,95 @@ void MainMenu::Impl::update_save(const Nav& nav) {
     }
     return;
   }
-  const int first_box = load_mode || save_card == 1 ? 0 : 1;
-  int box = load_mode ? load_cur : save_cur + 1;
-  if (nav.left) box = box - 1 >= first_box ? box - 1 : 14, sfx(1);
-  if (nav.right) box = box + 1 <= 14 ? box + 1 : first_box, sfx(1);
-  if (nav.up || nav.down) {
-    if (box < 7) box += 8;
-    else if (box >= 9) box -= 8;
-    if (box < first_box) box = first_box;
-    sfx(1);
-  }
-  if (load_mode) load_cur = box;
-  else save_cur = box - 1;
   if (nav.cancel) {
     save_phase = 0;
     msg.clear();
     sfx(6);
-  } else if (nav.ok) {
-    const bool used = prev[static_cast<size_t>(box)].used;
-    if (load_mode) {
-      if (!used) {
-        sfx(0x18);
-      } else {
-        save_confirm = true;
-        confirm_cur = 1;
-        sfx(8);
-      }
-    } else if (used) {
-      save_confirm = true;
-      confirm_cur = 1;
-      sfx(8);
-    } else {
-      do_save();
+    return;
+  }
+  bool used = false;
+  if (save_card == 0) {
+    constexpr int kCount = save::kOcFiles + 1;
+    const int before = page_cur;
+    if (nav.up) page_cur = (page_cur + kCount - 1) % kCount;
+    if (nav.down) page_cur = (page_cur + 1) % kCount;
+    if (nav.left) page_cur = std::max(0, page_cur - save_layout::kPageRows);
+    if (nav.right) page_cur = std::min(kCount - 1, page_cur + save_layout::kPageRows);
+    if (page_cur != before) sfx(1);
+    page_top = std::clamp(page_top, std::max(0, page_cur - save_layout::kPageRows + 1), page_cur);
+    if (!nav.ok) return;
+    if (!load_mode && page_cur == 0) {
+      sfx(0x18);
+      return;
     }
+    used = page_prev[static_cast<size_t>(page_cur)].used;
+  } else {
+    const int first_box = load_mode || save_card == 2 ? 0 : 1;
+    int box = load_mode ? load_cur : save_cur + 1;
+    if (nav.left) box = box - 1 >= first_box ? box - 1 : 14, sfx(1);
+    if (nav.right) box = box + 1 <= 14 ? box + 1 : first_box, sfx(1);
+    if (nav.up || nav.down) {
+      if (box < 7) box += 8;
+      else if (box >= 9) box -= 8;
+      if (box < first_box) box = first_box;
+      sfx(1);
+    }
+    if (load_mode) load_cur = box;
+    else save_cur = box - 1;
+    if (!nav.ok) return;
+    used = prev[static_cast<size_t>(box)].used;
+  }
+  if (load_mode && !used) {
+    sfx(0x18);
+  } else if (used) {
+    save_confirm = true;
+    confirm_cur = 1;
+    sfx(8);
+  } else {
+    do_save();
   }
 }
 
 // Load: the host picks the request up (take_load_request) after the menu closed and starts the slot like Continue does.
 void MainMenu::Impl::do_load() {
-  const SavePrev& box = prev[static_cast<size_t>(std::clamp(load_cur, 0, 14))];
-  if (!box.used || !save_dat) {
+  const SavePrev& file = save_card == 0 ? page_prev[static_cast<size_t>(std::clamp(page_cur, 0, save::kOcFiles))]
+                                        : prev[static_cast<size_t>(std::clamp(load_cur, 0, 14))];
+  if (!file.used || (save_card == 0 ? !page : !save_dat)) {
     sfx(0x18);
     return;
   }
-  load_card = save_card + 1;
-  load_slot = box.slot;
-  load_block = box.block;
+  load_card = save_card;
+  load_slot = file.slot;
+  load_block = file.block;
   load_pending = true;
   closed = true;
   sfx(8);
 }
 
-// A used box overwrites its own file; an empty box makes a new file with the lowest unused number, 0 being card 1's auto-save.
-// ext_save.dat (language, battle counter, custom names of the slot) is written with it; a no-op without a host.
+// Page: the cursor row's file (never the auto-save). Card: a used box overwrites its own file; an empty box makes a new file with the
+// lowest unused number, 0 being card 1's auto-save. The language, battle counter and custom names go with it (ext_save.dat for the
+// cards, the file itself for the page); a no-op without a host.
 void MainMenu::Impl::do_save() {
+  if (save_card == 0) {
+    if (!page || page_cur < 1 || page_cur > save::kOcFiles) {
+      sfx(0x18);
+      return;
+    }
+    try {
+      page->write(page_cur, gs->slot);
+      saved = true;
+      load_previews();
+      sfx(5);
+      say("Saved to OpenCross file " + save_layout::page_number(page_cur) + ".", 240);
+    } catch (const std::exception& error) {
+      log::warn("menu: OpenCross save {}: {}", page_cur, error.what());
+      sfx(0x18);
+      say("Failed to save to OpenCross. Please try again.");
+    }
+    return;
+  }
   const SavePrev& box = prev[static_cast<size_t>(std::clamp(save_cur + 1, 0, 14))];
-  const bool auto_card = save_card == 0;
+  const bool auto_card = save_card == 1;
   const u32 failed = auto_card ? 0x801F3115 : 0x801F3116;
   int slot_no = box.used ? box.slot : -1;
   if (slot_no < 0) {
@@ -190,7 +248,7 @@ void MainMenu::Impl::do_save() {
     sfx(0x18);
     return;
   }
-  save::MemCard* card = save_dat ? save_dat->card(save_card + 1) : nullptr;
+  save::MemCard* card = save_dat ? save_dat->card(save_card) : nullptr;
   if (!card) {
     sfx(0x18);
     say(menu_str(failed, ""));
@@ -203,7 +261,7 @@ void MainMenu::Impl::do_save() {
       say(menu_str(failed, ""));
       return;
     }
-    save_dat->write_ext(save_card + 1, slot_no);
+    save_dat->write_ext(save_card, slot_no);
     if (!save_out.empty()) save_dat->save(save_out);
     saved = true;
     load_previews();
@@ -260,13 +318,9 @@ void MainMenu::Impl::avatar(int character, float x, float y, float w, float h) {
   if (const Tex* tex = face_tex(character)) Img(tex, x, y, w, h);
 }
 
-// Location caption of a save: key = number of start values <= u16 var 0 (savetbl row), two lines split at the first newline.
+// Location caption of a save (savetbl row save_layout::location_key), two lines split at the first newline.
 std::pair<std::string, std::string> MainMenu::Impl::location_lines(u32 value) {
-  static const int kStart[30] = {0, 8, 16, 24, 26, 28, 30, 36, 52, 64, 72, 80, 88, 92, 100, 108, 112, 116, 124, 128, 140, 144, 156, 164, 172, 184, 195, 202, 209, 999};
-  int key = 0;
-  for (int start : kStart)
-    if (static_cast<int>(value) >= start) ++key;
-  std::string row = table_row("savetbl", std::max(1, key));
+  std::string row = table_row("savetbl", save_layout::location_key(static_cast<int>(value)));
   std::string first_line = row, second_line;
   for (size_t pos; (pos = row.find('\r')) != std::string::npos;) row.erase(pos, 1);
   if (const size_t nl = row.find('\n'); nl != std::string::npos) first_line = row.substr(0, nl), second_line = row.substr(nl + 1);
@@ -289,18 +343,21 @@ const Tex* MainMenu::Impl::slot_icon(int file) {
 
 // Save / Load screen (states 0 / 0x10 / 0x20 on the 640-wide display; layout: save_layout.h). No
 // portrait strip, no title and no bottom bar here: the parchment, the Save / Load list with its dial, the slot grid (one fixed face icon
-// per box, both art modes), the detail frame of the cursor box and the message frame.
+// per box, both art modes) or the OpenCross page's list, the detail frame of the cursor file and the message frame.
 void MainMenu::Impl::build_save() {
   namespace sl = save_layout;
-  // Box index; box 0 is the auto-save entry.
-  const int cursor = save_phase == 0 ? -1 : load_mode ? load_cur : save_cur + 1;
-  // Widescreen: list + dial right, slot grid left; the wide detail / message frames stay centred.
-  group(Right);
-  save_dial();
+  const bool on_page = save_card == 0;
+  // Box index; box 0 is the auto-save entry. Page: the row = the file number.
+  const int cursor = save_phase == 0 ? -1 : on_page ? page_cur : load_mode ? load_cur : save_cur + 1;
+  // Widescreen: list + dial right, slot grid left; the wide detail / message frames stay centred. The page's list takes the dial's place.
+  if (!(on_page && save_phase == 1)) {
+    group(Right);
+    save_dial();
+  }
   group(Centre);
-  // State 0: only the list + dial and frame 0x55 with the description of the highlighted choice. The card choice (state 1) and its
-  // "No save data" message keep them and add frame 0x56: "Please choose a slot." and the two card lines at (298, 360 + 24 card)
-  // with the pointer at (266, 361 + 24 card).
+  // State 0: only the list + dial and frame 0x55 with the description of the highlighted choice. The save choice and its "No save
+  // data" message keep them and add frame 0x56: "Please choose a slot." and the lines OpenCross / Slot 1 / Slot 2 (save_layout
+  // choice_y) with the pointer beside the current one.
   if (save_phase != 1) {
     Frame(85, sl::kTopMsgX, sl::kTopMsgY);
     const std::u32string description = utf32(menu_str(top_cur == 0 ? 0x801F2BE0 : 0x801F2C18, top_cur == 0 ? "Save a File" : "Load a File"));
@@ -309,49 +366,116 @@ void MainMenu::Impl::build_save() {
     Frame(86, sl::kMsgX, sl::kMsgY);
     auto line = [&](float x, float y, const std::string& str) { HLfit(x + 1.5f, y + 2.5f, utf32(str), sl::kMsgWidth, sl::kMsgScale); };
     if (save_phase == 3) {
-      line(146, 336, menu_str(save_card == 0 ? 0x801F3181 : 0x801F3182, save_card == 0 ? "No save data in Slot 1." : "No save data in Slot 2."));
+      if (on_page) line(146, 336, "No save data in OpenCross.");
+      else line(146, 336, menu_str(save_card == 1 ? 0x801F3181 : 0x801F3182, save_card == 1 ? "No save data in Slot 1." : "No save data in Slot 2."));
       return;
     }
     line(146, 336, menu_str(0x801F2CA4, "Please choose a slot."));
-    line(298, 360, menu_str(0x801F2CDC, "Slot 1"));
-    line(298, 384, menu_str(0x801F2CF8, "Slot 2"));
-    tri(266, 361.0f + 24.0f * static_cast<float>(save_card), true);
+    line(sl::kChoiceX, sl::choice_y(0), "OpenCross");
+    line(sl::kChoiceX, sl::choice_y(1), menu_str(0x801F2CDC, "Slot 1"));
+    line(sl::kChoiceX, sl::choice_y(2), menu_str(0x801F2CF8, "Slot 2"));
+    tri(sl::kChoiceCursorX, sl::choice_y(save_card) + 1.0f, true);
     return;
   }
-  group(Left);
-  Frame(82 + save_card, sl::kGridX, sl::kGridY);
-  // Caption tab: cmnmes "slot" in bn.
-  HT(face_gn, sl::kSlotCapX, sl::kSlotCapY, capt("slot", "Slot") + (save_card == 0 ? U" 1" : U" 2"), kText, sl::kSlotCapScale);
-  group(Centre);
-  Frame(84, sl::kDetailX, sl::kDetailY);
-  // Caption tab (bn): "File#" + the number + 1 of the cursor box's FILE, parsed from the CHRONOnn name; an
-  // empty box shows no number; "File#  1" = CHRONO00, the auto-save.
-  if (cursor >= 0) {
-    const SavePrev& cb = prev[static_cast<size_t>(cursor)];
-    HT(face_gn, sl::kFileCapX, sl::kFileCapY, capt("File#", "File#") + (cb.used ? utf32(sl::file_number(cb.slot)) : std::u32string()), kText,
-       sl::kFileCapScale);
-  }
-  group(Left);
-  // Boxes: no fill (the parchment shows); icon only when the box holds a file.
-  for (int box = 0; box < 15; ++box) {
-    const float x = sl::box_x(box), y = sl::box_y(box);
-    if (prev[static_cast<size_t>(box)].used) {
-      // Classic art + Ps1ResMenus: the PS1 box picture menutim.prd p<box>ic, texels 0..15 on the 32 x 32 box.
-      int max_n = 0;
-      for (const SavePrev& other : prev)
-        if (other.used) max_n = std::max(max_n, other.slot + 1);
-      // The PS1 draws this number + 1.
-      const int file_no = prev[static_cast<size_t>(box)].slot;
-      // Face icon choice: see save_layout.h.
-      const int fn = sl::box_icon(box, file_no, cursor, max_n);
-      Tex* p1 = ps1_screen() ? texs.ps1("ps1:icon" + std::to_string(file_no), [&] { return ps1::slot_icon(*vfs, file_no); }) : nullptr;
-      if (p1) Img(p1, PX(x), PY(y), PX(sl::kBox), PY(sl::kBox), 0, 0, ps1::kSlotIconUv, ps1::kSlotIconUv);
-      else if (const Tex* ic = slot_icon(fn)) Img(ic, PX(x), PY(y), PX(sl::kBox), PY(sl::kBox));
+  const SavePrev cp = cursor < 0 ? SavePrev{} : on_page ? page_prev[static_cast<size_t>(cursor)] : prev[static_cast<size_t>(cursor)];
+  if (on_page) {
+    // ---- OpenCross page: frame 64 with the caption in its tab, kPageRows rows from page_top (save_layout.h)
+    Frame(64, sl::kPageX, sl::kPageY);
+    {
+      text->prepare(face_gn, U"OpenCross");
+      float scale = sl::kSlotCapScale;
+      while (scale > 0.18f && text->measure(face_gn, U"OpenCross", scale) > PX(sl::kPageCapMaxW)) scale -= 0.01f;
+      HT(face_gn, sl::kPageX + (sl::kSlotCapX - sl::kGridX), sl::caption_y(sl::kPageY, scale), U"OpenCross", kText, scale);
     }
-    if (box == cursor) box_outline(PX(x - 1), PY(y - 1), PX(sl::kBox + 1), PY(sl::kBox + 1), 2, kWhite);
+    const u32 dim = rgb(140, 132, 132);
+    const std::u32string empty_text = utf32(menu_str(0x801F2E78, "EMPTY"));
+    auto face_of = [&](const std::u32string& str) { return glyphs_ok(str) || face_kb == render::kNoFace ? face_gn : face_kb; };
+    // Leader (auto-save caption on Auto) and first location line of every file; one row scale for the whole page.
+    std::vector<std::pair<std::u32string, std::u32string>> labels(page_prev.size());
+    float row_scale = sl::kRowScale;
+    const float name_w = sl::kRowLocX - sl::kRowNameX - 4.0f;
+    for (size_t number = 0; number < page_prev.size(); ++number) {
+      const SavePrev& row = page_prev[number];
+      if (!row.used) continue;
+      std::u32string name = number == 0 ? utf32(sl::auto_save_caption(lang_index()))
+                                         : row.party[0] < save::kNumChars ? char_name(row.party[0]) : std::u32string();
+      std::replace(name.begin(), name.end(), U'\n', U' ');
+      labels[number] = {std::move(name), sl::row_location(utf32(location_lines(row.scenario).first))};
+      for (const std::u32string* str : {&labels[number].first, &labels[number].second}) {
+        const render::FaceId face_id = face_of(*str);
+        text->prepare(face_id, *str);
+        const float width = str == &labels[number].first ? name_w : sl::kRowLocW;
+        while (row_scale > 0.18f && text->measure(face_id, *str, row_scale) > PX(width)) row_scale -= 0.01f;
+      }
+    }
+    auto label = [&](float x, float y, const std::u32string& str, u32 colour) { HT(face_of(str), x, y, str, colour, row_scale); };
+    for (int i = 0; i < sl::kPageRows; ++i) {
+      const int number = page_top + i;
+      if (number > save::kOcFiles) break;
+      const float y = sl::row_y(i);
+      const SavePrev& row = page_prev[static_cast<size_t>(number)];
+      const u32 colour = number == page_cur ? kSel : kText;
+      if (number == page_cur) tri(sl::kRowCursorX, y - 1.5f, true);
+      HL(sl::kRowNumX, y, utf32(sl::page_number(number)), colour, row_scale);
+      if (!row.used) {
+        HL(sl::kRowNameX, y, empty_text, number == page_cur ? kSel : dim, row_scale);
+        continue;
+      }
+      label(sl::kRowNameX, y, labels[static_cast<size_t>(number)].first, colour);
+      label(sl::kRowLocX, y, labels[static_cast<size_t>(number)].second, colour);
+      HN(sl::kRowTimeRight, y, sl::playtime(row.frames), colour, row_scale);
+      const u32 star_c = (row.flags & 1) ? sl::cleared_star_colour(colour) : colour;
+      StarGlyph(sl::kRowStarX, y + sl::kRowStarDy, 0.55f, 0.0f, star_c);
+      HT(face_kb != render::kNoFace ? face_kb : face_gn, sl::kRowStarsX, y, utf32(std::to_string(std::min(row.stars, 99))), star_c, row_scale);
+    }
+    if (page_top > 0) scroll_arrow(sl::kRowMarkX - 4.5f, sl::kRowY0 - 3.0f, true);
+    if (page_top + sl::kPageRows <= save::kOcFiles) scroll_arrow(sl::kRowMarkX - 4.5f, sl::row_y(sl::kPageRows - 1) + 10.0f, false);
+    Frame(84, sl::kDetailX, sl::kDetailY);
+    {
+      // One size for every number: the widest caption's.
+      const std::u32string caption = capt("File#", "File#") + utf32(sl::page_caption(page_cur));
+      float scale = sl::kFileCapScale;
+      for (const char* widest : sl::kPageCaptionWidest) {
+        const std::u32string str = capt("File#", "File#") + utf32(widest);
+        text->prepare(face_gn, str);
+        while (scale > 0.18f && text->measure(face_gn, str, scale) > PX(sl::kFileCapMaxW)) scale -= 0.01f;
+      }
+      text->prepare(face_gn, caption);
+      HT(face_gn, sl::kFileCapX, sl::caption_y(sl::kDetailY, scale), caption, kText, scale);
+    }
+  } else {
+    group(Left);
+    Frame(82 + save_card - 1, sl::kGridX, sl::kGridY);
+    // Caption tab: cmnmes "slot" in bn.
+    HT(face_gn, sl::kSlotCapX, sl::kSlotCapY, capt("slot", "Slot") + (save_card == 1 ? U" 1" : U" 2"), kText, sl::kSlotCapScale);
+    group(Centre);
+    Frame(84, sl::kDetailX, sl::kDetailY);
+    // Caption tab (bn): "File#" + the number + 1 of the cursor box's FILE, parsed from the CHRONOnn name; an
+    // empty box shows no number; "File#  1" = CHRONO00, the auto-save.
+    if (cursor >= 0)
+      HT(face_gn, sl::kFileCapX, sl::kFileCapY, capt("File#", "File#") + (cp.used ? utf32(sl::file_number(cp.slot)) : std::u32string()), kText,
+         sl::kFileCapScale);
+    group(Left);
+    // Boxes: no fill (the parchment shows); icon only when the box holds a file.
+    for (int box = 0; box < 15; ++box) {
+      const float x = sl::box_x(box), y = sl::box_y(box);
+      if (prev[static_cast<size_t>(box)].used) {
+        // Classic art + Ps1ResMenus: the PS1 box picture menutim.prd p<box>ic, texels 0..15 on the 32 x 32 box.
+        int max_n = 0;
+        for (const SavePrev& other : prev)
+          if (other.used) max_n = std::max(max_n, other.slot + 1);
+        // The PS1 draws this number + 1.
+        const int file_no = prev[static_cast<size_t>(box)].slot;
+        // Face icon choice: see save_layout.h.
+        const int fn = sl::box_icon(box, file_no, cursor, max_n);
+        Tex* p1 = ps1_screen() ? texs.ps1("ps1:icon" + std::to_string(file_no), [&] { return ps1::slot_icon(*vfs, file_no); }) : nullptr;
+        if (p1) Img(p1, PX(x), PY(y), PX(sl::kBox), PY(sl::kBox), 0, 0, ps1::kSlotIconUv, ps1::kSlotIconUv);
+        else if (const Tex* ic = slot_icon(fn)) Img(ic, PX(x), PY(y), PX(sl::kBox), PY(sl::kBox));
+      }
+      if (box == cursor) box_outline(PX(x - 1), PY(y - 1), PX(sl::kBox + 1), PY(sl::kBox + 1), 2, kWhite);
+    }
+    group(Centre);
   }
-  group(Centre);
-  const SavePrev cp = cursor >= 0 ? prev[static_cast<size_t>(cursor)] : SavePrev{};
   // message box (frame 0x56): "Please select a file." / the overwrite question / the result
   Frame(86, sl::kMsgX, sl::kMsgY);
   auto msg_line = [&](const std::u32string& str) { HLfit(sl::kMsgInkX, sl::kMsgInkY, str, sl::kMsgWidth, sl::kMsgScale); };
@@ -376,8 +500,8 @@ void MainMenu::Impl::build_save() {
     if (cp.party[static_cast<size_t>(i)] < save::kNumChars)
       avatar(cp.party[static_cast<size_t>(i)], PX(sl::kFaceX + sl::kFaceStep * static_cast<float>(i)), PY(sl::kFaceY), PX(sl::kFace), PY(sl::kFace));
   const std::u32string leader = cp.party[0] < save::kNumChars ? char_name(cp.party[0]) : std::u32string();
-  // The auto-save FILE (card 1's CHRONO00) shows its caption wherever its box is.
-  const bool auto_file = cp.slot == 0 && save_card == 0;
+  // The auto-save FILES (card 1's CHRONO00, the page's file 0) show their caption wherever their box is.
+  const bool auto_file = cp.slot == 0 && save_card <= 1;
   const std::u32string name = auto_file ? utf32(sl::auto_save_caption(lang_index())) : leader;
   const std::string stars = std::to_string(std::min(cp.stars, 99)), tb = sl::playtime(cp.frames);
   std::string gold = grouped_gold(cp.gold);

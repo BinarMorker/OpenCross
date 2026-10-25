@@ -97,6 +97,7 @@ struct MainMenu::Impl {
   bool ready = false;
   std::function<void(int)> sfx_fn;
   save::SaveDat* save_dat = nullptr;
+  save::OcSaves* page = nullptr;
   std::filesystem::path save_out;
 
   // ---- state
@@ -141,13 +142,15 @@ struct MainMenu::Impl {
   int set_cur = 0;
   bool skin_pick = false;
   // save_cur: save grid cursor, slot - 1 (slots 1..14); top_cur: Save / Load choice (0 save, 1 load);
-  // save_phase: 0 = Save / Load choice, 1 = slot grid, 2 = memory-card choice, 3 = "No save data" message (since frame
-  // card_msg_start); save_card: the card of the grid (0 = Slot 1, 1 = Slot 2); load_mode: the grid is the Load tab;
-  // load_cur: load grid cursor, slot 0..14 (0 = the auto-save).
+  // save_phase: 0 = Save / Load choice, 1 = slot grid / page list, 2 = save choice, 3 = "No save data" message (since frame
+  // card_msg_start); save_card: the choice (0 = the OpenCross page, 1 = Slot 1, 2 = Slot 2); load_mode: the grid is the Load tab;
+  // load_cur: load grid cursor, slot 0..14 (0 = the auto-save); page_cur / page_top: the page's cursor row (= file number, 0 = its
+  // auto-save) and first visible row.
   int save_cur = 0;
   int top_cur = 0;
   int save_phase = 0;
-  int save_card = 0;
+  int save_card = 1;
+  int page_cur = 1, page_top = 0;
   int card_msg_start = 0;
   bool load_mode = false;
   int load_cur = 0;
@@ -155,11 +158,13 @@ struct MainMenu::Impl {
   bool load_pending = false;
   // A file was written since open().
   bool saved = false;
+  // load_card: 0 = the OpenCross page, 1 / 2 = the memory cards.
   int load_card = 1, load_slot = 0, load_block = 0;
   int confirm_cur = 1;
   // dial needle: current angle, the settled selection, the 0..10 easing step, the list the angle belongs to
   int hand_angle = 0, hand_settled = 0, hand_step = 0, hand_list = -1;
   std::array<SavePrev, 15> prev{};
+  std::array<SavePrev, save::kOcFiles + 1> page_prev{};
   // transient message
   std::string msg;
   int msg_frames = 0;

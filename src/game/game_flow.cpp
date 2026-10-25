@@ -274,7 +274,7 @@ void GameFlow::set_sfx(std::function<void(int)> fn) {
 }
 
 void GameFlow::enter_title(bool fresh) {
-  const bool any_save = ui::SlotList::any(dat_);
+  const bool any_save = ui::SlotList::any(dat_, page_);
   machine_.set_save_available(any_save);
   machine_.start(FlowState::Title);
   title_.begin(lang_, mode_, any_save, title_song_, scene_enabled_);
@@ -284,7 +284,7 @@ void GameFlow::enter_title(bool fresh) {
 
 void GameFlow::enter_slots() {
   machine_.start(FlowState::SlotSelect);
-  slots_.begin(dat_, lang_, mode_);
+  slots_.begin(dat_, page_, lang_, mode_);
 }
 
 void GameFlow::enter_keymap() {
@@ -416,7 +416,8 @@ FlowAction GameFlow::tick_fade(float dt) {
         return action;
       }
       // ext_save.dat: custom names (same language only) + the battle counter.
-      if (dat_) machine_.set_ext_names(dat_->read_ext(load_entry_.card, load_entry_.slot, static_cast<u32>(lang_)).names);
+      if (load_entry_.card == 0 && page_) machine_.set_ext_names(page_->read_ext(load_entry_.slot, static_cast<u32>(lang_)).names);
+      else if (dat_) machine_.set_ext_names(dat_->read_ext(load_entry_.card, load_entry_.slot, static_cast<u32>(lang_)).names);
       action = load_from_slots_ ? machine_.on_slot(load_entry_) : machine_.on_load(load_entry_);
       load_entry_ = {};
     }
@@ -483,7 +484,7 @@ FlowAction GameFlow::update(const platform::Input& in, float dt) {
         ngp_result_ = NgPlusResult::NewGamePlus;
       } else if (choice == ui::TitleChoice::Continue) {
         ngp_slots_ = true;
-        slots_.begin(dat_, lang_, mode_, true);
+        slots_.begin(dat_, page_, lang_, mode_, true);
       }
     } else {
       slots_.update(nav, dt);

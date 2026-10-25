@@ -1,22 +1,26 @@
 #pragma once
-// Continue: the memory-card choice (Slot 1 / Slot 2), then that card's save slot list (15 slots per card, CHRONOnn, slot 00 = the
-// RDE auto-save). Confirm on a card opens its list ("No save data" for an empty card); confirm on a file picks it; cancel on the list
-// goes back to the card choice, cancel on the card choice leaves.
+// Continue: the save choice (OpenCross / Slot 1 / Slot 2), then the OpenCross page (an auto-save + 100 files, a scrolling list) or
+// that memory card's slot grid (15 slots per card, CHRONOnn, slot 00 = the RDE auto-save). Confirm on a choice opens it ("No save
+// data" when it is empty); confirm on a file picks it; cancel on a list goes back to the choice, cancel on the choice leaves. The
+// choice starts on OpenCross when the page holds a file, else on Slot 1.
 #include <array>
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "save/cc_save.h"
+#include "save/oc_saves.h"
 #include "ui/title/canvas.h"
 #include "ui/title/nav.h"
 
 namespace oc::ui {
 
 struct SlotEntry {
-  // card: the memory card (1 or 2); slot: the CHRONOnn number; block: the memory-card block.
+  // card: the memory card (1 or 2), 0 = the OpenCross page; slot: the CHRONOnn number (page: the file number, 0 = its auto-save);
+  // block: the memory-card block (page: 0).
   int card = 1;
   int slot = 0;
   int block = 0;
@@ -27,13 +31,15 @@ class SlotList {
  public:
   // All decodable slots of `card` (empty when the card is absent), in the card's directory order (= box order).
   static std::vector<SlotEntry> collect(const save::SaveDat& dat, int card = 1);
-  // True when either card holds a slot.
-  static bool any(const save::SaveDat* dat);
+  // Every file of the OpenCross page, indexed by number (0 = its auto-save).
+  static std::vector<std::optional<SlotEntry>> collect(const save::OcSaves& page);
+  // True when either card or the page holds a file.
+  static bool any(const save::SaveDat* dat, const save::OcSaves* page);
 
-  // Starts on the card choice with the files of both cards of `dat` (none when null).
+  // Starts on the save choice with the files of both cards of `dat` and of `page` (none when null).
   // `plus`: the Continue+ list of the New Game+ title: slots whose 2 summary flag bits are set (a
   // cleared save or a New Game+ game) show the menutest message instead of their details and are refused (sfx 0x18).
-  void begin(const save::SaveDat* dat, import::Lang lang, ArtMode mode, bool plus = false);
+  void begin(const save::SaveDat* dat, const save::OcSaves* page, import::Lang lang, ArtMode mode, bool plus = false);
   bool plus() const { return plus_; }
   void set_mode(ArtMode mode) { mode_ = mode; }
   // Character id -> display name (default sysmes name); unset = "#id".
@@ -46,7 +52,9 @@ class SlotList {
   // The file list of the chosen card is open (false on the card choice and its "No save data" message).
   bool listing() const { return phase_ == Phase::Files; }
   const SlotEntry* selected() const {
-    return phase_ != Phase::Files || entries_.empty() ? nullptr : &entries_[static_cast<size_t>(sel_)];
+    if (phase_ != Phase::Files) return nullptr;
+    if (card_ == 0) return rows_[static_cast<size_t>(sel_)] ? &*rows_[static_cast<size_t>(sel_)] : nullptr;
+    return entries_.empty() ? nullptr : &entries_[static_cast<size_t>(sel_)];
   }
   int selected_index() const { return sel_; }
   size_t size() const { return entries_.size(); }
@@ -69,14 +77,18 @@ class SlotList {
   // Which face folder face_files_ lists: 0 none, 1 = face/2021 (HD), 2 = face/1999 (original art).
   mutable int faces_listed_ = 0;
   mutable std::unique_ptr<import::LangTables> tables_;
-  // Card: Slot 1 / Slot 2 choice; NoData: "No save data in Slot N." (confirm or 2 s back to the card choice); Files: the list.
+  // Card: OpenCross / Slot 1 / Slot 2 choice; NoData: "No save data in ..." (confirm or 2 s back to the choice); Files: the list.
   enum class Phase { Card, NoData, Files };
   Phase phase_ = Phase::Card;
-  // card_: 0 = Slot 1, 1 = Slot 2; entries_: the files of that card once chosen.
-  int card_ = 0;
+  // card_: 0 = the OpenCross page, 1 = Slot 1, 2 = Slot 2; entries_: the files of a card once chosen; rows_: the page by number.
+  // sel_: grid box, or page row (= file number); top_: the page's first visible row.
+  int card_ = 1;
   float phase_time_ = 0, clock_ = 0;
   std::array<std::vector<SlotEntry>, 2> cards_;
   std::vector<SlotEntry> entries_;
+  std::vector<std::optional<SlotEntry>> rows_ = std::vector<std::optional<SlotEntry>>(save::kOcFiles + 1);
+  // The page's newest manual file (0 = none): the page cursor's start.
+  int newest_ = 0;
   import::Lang lang_ = import::Lang::En;
   ArtMode mode_ = ArtMode::Hd;
   int sel_ = 0, top_ = 0;

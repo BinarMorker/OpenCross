@@ -45,13 +45,30 @@ std::vector<SlotEntry> SlotList::collect(const save::SaveDat& dat, int card_no) 
   return out;
 }
 
-bool SlotList::any(const save::SaveDat* dat) { return dat && (!collect(*dat, 1).empty() || !collect(*dat, 2).empty()); }
+std::vector<std::optional<SlotEntry>> SlotList::collect(const save::OcSaves& page) {
+  std::vector<std::optional<SlotEntry>> out(save::kOcFiles + 1);
+  for (int number = 0; number <= save::kOcFiles; ++number)
+    if (const save::OcSaves::File* file = page.file(number)) {
+      SlotEntry entry;
+      entry.card = 0;
+      entry.slot = number;
+      entry.data = file->data;
+      out[static_cast<size_t>(number)] = std::move(entry);
+    }
+  return out;
+}
 
-void SlotList::begin(const save::SaveDat* dat, import::Lang lang, ArtMode mode, bool plus) {
+bool SlotList::any(const save::SaveDat* dat, const save::OcSaves* page) {
+  return (page && !page->empty()) || (dat && (!collect(*dat, 1).empty() || !collect(*dat, 2).empty()));
+}
+
+void SlotList::begin(const save::SaveDat* dat, const save::OcSaves* page, import::Lang lang, ArtMode mode, bool plus) {
   for (int card = 0; card < 2; ++card) cards_[static_cast<size_t>(card)] = dat ? collect(*dat, card + 1) : std::vector<SlotEntry>{};
+  rows_ = page ? collect(*page) : std::vector<std::optional<SlotEntry>>(save::kOcFiles + 1);
+  newest_ = page ? page->newest() : 0;
   entries_.clear();
   phase_ = Phase::Card;
-  card_ = 0;
+  card_ = page && !page->empty() ? 0 : 1;
   phase_time_ = 0;
   plus_ = plus;
   lang_ = lang;
@@ -64,15 +81,24 @@ void SlotList::update(const Nav& nav, float dt) {
   if (picked_ || cancelled_) return;
   clock_ += dt;
   phase_time_ += dt;
-  // Card choice: up / down toggle Slot 1 / 2; confirm scans the card (an empty one shows "No save data in Slot N.").
+  // Choice: up / down step OpenCross / Slot 1 / Slot 2 (wrap); confirm opens it (an empty one shows "No save data in ...").
   if (phase_ == Phase::Card) {
-    if (nav.up || nav.down) card_ = 1 - card_, play(1);
+    if (nav.up) card_ = (card_ + 2) % 3, play(1);
+    if (nav.down) card_ = (card_ + 1) % 3, play(1);
     if (nav.confirm) {
       play(8);
-      entries_ = cards_[static_cast<size_t>(card_)];
-      sel_ = top_ = 0;
-      phase_ = entries_.empty() ? Phase::NoData : Phase::Files;
       phase_time_ = 0;
+      sel_ = top_ = 0;
+      if (card_ == 0) {
+        const bool any_file = std::any_of(rows_.begin(), rows_.end(), [](const auto& row) { return row.has_value(); });
+        // The cursor starts on the newest file (the auto-save when there is no other).
+        sel_ = newest_ ? newest_ : 0;
+        top_ = std::clamp(sel_ - save_layout::kPageRows / 2, 0, save::kOcFiles + 1 - save_layout::kPageRows);
+        phase_ = any_file ? Phase::Files : Phase::NoData;
+      } else {
+        entries_ = cards_[static_cast<size_t>(card_ - 1)];
+        phase_ = entries_.empty() ? Phase::NoData : Phase::Files;
+      }
     } else if (nav.cancel) {
       cancelled_ = true, play(6);
     }
@@ -81,6 +107,25 @@ void SlotList::update(const Nav& nav, float dt) {
   // The message closes on confirm or after 120 frames.
   if (phase_ == Phase::NoData) {
     if (nav.confirm || phase_time_ > 120.0f / 60.0f) phase_ = Phase::Card, phase_time_ = 0;
+    return;
+  }
+  auto refused = [&](const SlotEntry& entry) { return plus_ && game::ngplus::refusal(entry.data) != game::ngplus::Refusal::None; };
+  // OpenCross page: up / down one row (wrap), left / right one screen; the list scrolls with the cursor.
+  if (card_ == 0) {
+    constexpr int kCount = save::kOcFiles + 1;
+    const int before = sel_;
+    if (nav.up) sel_ = (sel_ + kCount - 1) % kCount;
+    if (nav.down) sel_ = (sel_ + 1) % kCount;
+    if (nav.left) sel_ = std::max(0, sel_ - save_layout::kPageRows);
+    if (nav.right) sel_ = std::min(kCount - 1, sel_ + save_layout::kPageRows);
+    if (sel_ != before) play(1);
+    top_ = std::clamp(top_, std::max(0, sel_ - save_layout::kPageRows + 1), sel_);
+    if (nav.confirm) {
+      const auto& row = rows_[static_cast<size_t>(sel_)];
+      if (!row || refused(*row)) play(0x18);
+      else picked_ = true, play(8);
+    }
+    if (nav.cancel) phase_ = Phase::Card, phase_time_ = 0, play(6);
     return;
   }
   const int cnt = static_cast<int>(entries_.size());
@@ -94,7 +139,7 @@ void SlotList::update(const Nav& nav, float dt) {
     }
     if (nav.confirm) {
       // Continue+ (variant 2): a slot with summary flags != 0 is refused with sfx 0x18.
-      if (plus_ && game::ngplus::refusal(entries_[static_cast<size_t>(sel_)].data) != game::ngplus::Refusal::None) play(0x18);
+      if (refused(entries_[static_cast<size_t>(sel_)])) play(0x18);
       else picked_ = true, play(8);
     }
   } else if (nav.confirm) {
@@ -264,8 +309,25 @@ void SlotList::draw(DrawList& dl, UiKit& kit) const {
     return import::utf8_to_u32(fb);
   };
 
-  // Card choice (no grid): message frame 86 with "Please choose a slot." and the two card lines at PS1 (298, 360 + 24 card), the
-  // pointer at (266, 361 + 24 card); an empty card's "No save data in Slot N." replaces them until it closes.
+  // Pointer: menutest_cur.png (23 x 11) pulsing like the menu's; the PS1 red triangle when the sprite is missing.
+  auto pointer = [&](float cx, float cy) {
+    const int ph = static_cast<int>(clock_ * 60.0f) % 96;
+    const int pulse = 0x90 + (ph < 48 ? ph * 2 : (95 - ph) * 2);
+    const NamePic cursor = ps1_art ? NamePic{} : pic("hd/menu/menutest_cur.png");
+    if (cursor.set) {
+      const int red = std::min(255, (pulse >> 1) * 255 / 128), rest = std::min(255, ((pulse - 0x80) >> 1) * 255 / 128);
+      dl.image(cursor.set, canvas_x(cx), canvas_y(cy), canvas_x(23), canvas_y(11), pack_rgba(static_cast<u8>(red), static_cast<u8>(rest), static_cast<u8>(rest)));
+      return;
+    }
+    const int green = std::min(255, (pulse - 0x80) * 2);
+    for (int i = 0; i < 12; ++i) {
+      const float width_factor = 1.0f - std::fabs(static_cast<float>(i) + 0.5f - 6.0f) / 6.0f;
+      dl.rect(white_set, canvas_x(cx), canvas_y(cy + static_cast<float>(i)), canvas_x(23.0f * width_factor), canvas_y(1) + 0.6f,
+              pack_rgba(255, static_cast<u8>(green), static_cast<u8>(green)));
+    }
+  };
+  // Save choice (no grid): message frame 86 with "Please choose a slot." and the lines OpenCross / Slot 1 / Slot 2 (save_layout
+  // choice_y), the pointer beside the current one; an empty choice's "No save data in ..." replaces them until it closes.
   if (phase_ != Phase::Files) {
     frame(86, sl::kMsgX, sl::kMsgY);
     auto line = [&](float x, float y, const std::u32string& str) {
@@ -273,41 +335,106 @@ void SlotList::draw(DrawList& dl, UiKit& kit) const {
       else txt(x, y, str, white, 1.0f);
     };
     if (phase_ == Phase::NoData) {
-      line(146, 336, menu_str(card_ == 0 ? 0x801F3181 : 0x801F3182, card_ == 0 ? "No save data in Slot 1." : "No save data in Slot 2."));
+      if (card_ == 0) line(146, 336, U"No save data in OpenCross.");
+      else line(146, 336, menu_str(card_ == 1 ? 0x801F3181 : 0x801F3182, card_ == 1 ? "No save data in Slot 1." : "No save data in Slot 2."));
       return;
     }
     line(146, 336, menu_str(0x801F2CA4, "Please choose a slot."));
-    line(298, 360, menu_str(0x801F2CDC, "Slot 1"));
-    line(298, 384, menu_str(0x801F2CF8, "Slot 2"));
-    // Pointer: menutest_cur.png (23 x 11) pulsing like the menu's; the PS1 red triangle when the sprite is missing.
-    const float cx = 266.0f, cy = 361.0f + 24.0f * static_cast<float>(card_);
-    const int ph = static_cast<int>(clock_ * 60.0f) % 96;
-    const int pulse = 0x90 + (ph < 48 ? ph * 2 : (95 - ph) * 2);
-    const NamePic cursor = ps1_art ? NamePic{} : pic("hd/menu/menutest_cur.png");
-    if (cursor.set) {
-      const int red = std::min(255, (pulse >> 1) * 255 / 128), rest = std::min(255, ((pulse - 0x80) >> 1) * 255 / 128);
-      dl.image(cursor.set, canvas_x(cx), canvas_y(cy), canvas_x(23), canvas_y(11), pack_rgba(static_cast<u8>(red), static_cast<u8>(rest), static_cast<u8>(rest)));
-    } else {
-      const int green = std::min(255, (pulse - 0x80) * 2);
-      for (int i = 0; i < 12; ++i) {
-        const float width_factor = 1.0f - std::fabs(static_cast<float>(i) + 0.5f - 6.0f) / 6.0f;
-        dl.rect(white_set, canvas_x(cx), canvas_y(cy + static_cast<float>(i)), canvas_x(23.0f * width_factor), canvas_y(1) + 0.6f,
-                pack_rgba(255, static_cast<u8>(green), static_cast<u8>(green)));
-      }
-    }
+    line(sl::kChoiceX, sl::choice_y(0), U"OpenCross");
+    line(sl::kChoiceX, sl::choice_y(1), menu_str(0x801F2CDC, "Slot 1"));
+    line(sl::kChoiceX, sl::choice_y(2), menu_str(0x801F2CF8, "Slot 2"));
+    pointer(sl::kChoiceCursorX, sl::choice_y(card_) + 1.0f);
     return;
   }
 
+  // Location caption of a save: the savetbl row of its scenario key, split at the first newline.
+  auto location_lines = [&](const save::SaveSlot& data) -> std::pair<std::u32string, std::u32string> {
+    const int scenario = data.head[0x40] | (data.head[0x41] << 8);
+    std::string row;
+    if (const import::TextTable* table = tables_->table("savetbl"))
+      if (const std::string* found = table->get(static_cast<u64>(sl::location_key(scenario)), lang_)) row = *found;
+    for (size_t pos; (pos = row.find('\r')) != std::string::npos;) row.erase(pos, 1);
+    const size_t nl = row.find('\n');
+    if (nl == std::string::npos) return {import::utf8_to_u32(row), {}};
+    return {import::utf8_to_u32(row.substr(0, nl)), import::utf8_to_u32(row.substr(nl + 1))};
+  };
+  const SlotEntry* cur = nullptr;
+  if (card_ == 0) {
+    // ---- OpenCross page: frame 64 with the caption in its tab, kPageRows rows from top_ (save_layout.h)
+    cur = rows_[static_cast<size_t>(sel_)] ? &*rows_[static_cast<size_t>(sel_)] : nullptr;
+    frame(64, sl::kPageX, sl::kPageY, 8, 53);
+    const float cap_x = sl::kPageX + (sl::kSlotCapX - sl::kGridX);
+    float page_cap_scale = sl::kSlotCapScale;
+    while (page_cap_scale > 0.18f && dl.measure(kit.face_bn(), U"OpenCross", page_cap_scale) > canvas_x(sl::kPageCapMaxW)) page_cap_scale -= 0.01f;
+    if (ink) ink_text(kit.face_bn(), cap_x, sl::caption_y(sl::kPageY, page_cap_scale), U"OpenCross", text_c, page_cap_scale);
+    else txt(cap_x, sl::kPageY - 4.0f, U"OpenCross", white, 0.55f);
+    const u32 sel_c = pack_rgba(192, 120, 0), dim_c = pack_rgba(140, 132, 132);
+    const std::u32string empty_text = menu_str(0x801F2E78, "EMPTY");
+    // Leader (auto-save caption on Auto) and first location line of every file; one row scale for the whole page.
+    std::vector<std::pair<std::u32string, std::u32string>> labels(rows_.size());
+    float row_scale = sl::kRowScale;
+    const float name_w = sl::kRowLocX - sl::kRowNameX - 4.0f;
+    for (size_t file_no = 0; file_no < rows_.size(); ++file_no) {
+      if (!rows_[file_no]) continue;
+      const save::SaveSlot& data = rows_[file_no]->data;
+      const auto party = data.party();
+      std::u32string name = file_no == 0 ? import::utf8_to_u32(sl::auto_save_caption(li))
+                                        : party[0] < save::kNumChars && name_of_ ? name_of_(party[0]) : std::u32string();
+      std::replace(name.begin(), name.end(), U'\n', U' ');
+      labels[file_no] = {std::move(name), sl::row_location(location_lines(data).first)};
+      while (ink && row_scale > 0.18f && (dl.measure(bnf, labels[file_no].first, row_scale) > canvas_x(name_w) ||
+                                          dl.measure(bnf, labels[file_no].second, row_scale) > canvas_x(sl::kRowLocW)))
+        row_scale -= 0.01f;
+    }
+    auto row_text = [&](render::FaceId face_id, float x, float y, const std::u32string& str, u32 col, bool right = false) {
+      if (!ink) {
+        txt(right ? x - dl.measure(gnf, str, 0.6f) / 2.0f : x, y - 2.0f, str, col, 0.6f);
+        return;
+      }
+      ink_text(face_id, x, y, str, col, row_scale, right);
+    };
+    for (int i = 0; i < sl::kPageRows; ++i) {
+      const int row_no = top_ + i;
+      if (row_no > save::kOcFiles) break;
+      const float y = sl::row_y(i);
+      const auto& row = rows_[static_cast<size_t>(row_no)];
+      const u32 col = row_no == sel_ ? sel_c : text_c;
+      if (row_no == sel_) pointer(sl::kRowCursorX, y - 1.5f);
+      row_text(bnf, sl::kRowNumX, y, import::utf8_to_u32(sl::page_number(row_no)), col);
+      if (!row) {
+        row_text(bnf, sl::kRowNameX, y, empty_text, row_no == sel_ ? sel_c : dim_c);
+        continue;
+      }
+      const save::SaveSlot& data = row->data;
+      row_text(bnf, sl::kRowNameX, y, labels[static_cast<size_t>(row_no)].first, col);
+      row_text(bnf, sl::kRowLocX, y, labels[static_cast<size_t>(row_no)].second, col);
+      const std::string time = sl::playtime(data.playtime_frames());
+      row_text(ink ? kbf : gnf, sl::kRowTimeRight, y, std::u32string(time.begin(), time.end()), col, true);
+      const u32 star_c = (data.summary_flags() & 1) ? sl::cleared_star_colour(col) : col;
+      const std::string stars = std::to_string(std::min<int>(data.stars_total(), 99));
+      row_text(ink ? kbf : gnf, sl::kRowStarX, y, U"\u2605", star_c);
+      row_text(ink ? kbf : gnf, sl::kRowStarsX, y, std::u32string(stars.begin(), stars.end()), star_c);
+    }
+    // Scroll marks: small triangles at the top / bottom right while rows lie above / below.
+    auto mark = [&](float y, bool up) {
+      for (int i = 0; i < 5; ++i) {
+        const float half = up ? static_cast<float>(i) : static_cast<float>(4 - i);
+        dl.rect(white_set, canvas_x(sl::kRowMarkX - half), canvas_y(y + static_cast<float>(i)), canvas_x(2.0f * half + 1.0f), canvas_y(1) + 0.6f, text_c);
+      }
+    };
+    if (top_ > 0) mark(sl::kRowY0 - 2.0f, true);
+    if (top_ + sl::kPageRows <= save::kOcFiles) mark(sl::row_y(sl::kPageRows - 1) + 10.0f, false);
+  } else {
   // Indexed by BOX: the k-th file in directory order.
   std::array<const SlotEntry*, 15> by_slot{};
   for (size_t i = 0; i < entries_.size() && i < by_slot.size(); ++i) by_slot[i] = &entries_[i];
-  const SlotEntry* cur = entries_.empty() ? nullptr : &entries_[static_cast<size_t>(sel_)];
+  cur = entries_.empty() ? nullptr : &entries_[static_cast<size_t>(sel_)];
 
   // ---- slot grid
-  frame(82 + card_, sl::kGridX, sl::kGridY, 8, 40);
+  frame(82 + card_ - 1, sl::kGridX, sl::kGridY, 8, 40);
   {
     // Caption tab (memory-card slot), bn font in every language.
-    const std::u32string caption = cmn("slot", "Slot") + (card_ == 0 ? U" 1" : U" 2");
+    const std::u32string caption = cmn("slot", "Slot") + (card_ == 1 ? U" 1" : U" 2");
     if (ink) ink_text(kit.face_bn(), sl::kSlotCapX, sl::kSlotCapY, caption, text_c, sl::kSlotCapScale);
     else txt(sl::kSlotCapX, sl::kGridY - 4.0f, caption, white, 0.55f);
   }
@@ -340,19 +467,28 @@ void SlotList::draw(DrawList& dl, UiKit& kit) const {
       dl.rect(white_set, canvas_x(x + sl::kBox), canvas_y(y - 1), 2, canvas_y(sl::kBox + 1), white);
     }
   }
+  }
   // ---- detail frame + caption
   frame(84, sl::kDetailX, sl::kDetailY, 30, 34);
-  if (cur) {
-    // Caption: the box FILE's number + 1 (used boxes only), bn font in every language.
-    const std::u32string caption = cmn("File#", "File#") + import::utf8_to_u32(sl::file_number(cur->slot));
-    if (ink) ink_text(kit.face_bn(), sl::kFileCapX, sl::kFileCapY, caption, text_c, sl::kFileCapScale);
+  if (cur || card_ == 0) {
+    // Caption: the box FILE's number + 1 (used boxes only; page: the row's number), bn font in every language.
+    const std::u32string caption =
+        cmn("File#", "File#") + import::utf8_to_u32(card_ == 0 ? sl::page_caption(sel_) : sl::file_number(cur->slot));
+    float cap_scale = sl::kFileCapScale;
+    auto fits = [&](const std::u32string& str) { return dl.measure(kit.face_bn(), str, cap_scale) <= canvas_x(sl::kFileCapMaxW); };
+    // Page: one size for every number (the widest caption's).
+    while (cap_scale > 0.18f && !(fits(caption) && (card_ != 0 || (fits(cmn("File#", "File#") + import::utf8_to_u32(sl::kPageCaptionWidest[0])) &&
+                                                                     fits(cmn("File#", "File#") + import::utf8_to_u32(sl::kPageCaptionWidest[1]))))))
+      cap_scale -= 0.01f;
+    const float cap_y = card_ == 0 ? sl::caption_y(sl::kDetailY, cap_scale) : sl::kFileCapY;
+    if (ink) ink_text(kit.face_bn(), sl::kFileCapX, cap_y, caption, text_c, cap_scale);
     else txt(sl::kFileCapX, sl::kDetailY - 4.0f, caption, white, 0.5f);
   }
   // ---- message frame
   frame(86, sl::kMsgX, sl::kMsgY);
   {
-    const u32 addr = entries_.empty() ? 0x801F2F1C : 0x801F2E08;
-    const std::u32string message = menu_str(addr, entries_.empty() ? "No Data" : "Please select a file.");
+    const bool none = card_ != 0 && entries_.empty();
+    const std::u32string message = menu_str(none ? 0x801F2F1C : 0x801F2E08, none ? "No Data" : "Please select a file.");
     if (ink) label(sl::kMsgInkX, sl::kMsgInkY, message, sl::kMsgScale, sl::kMsgWidth);
     else txt(146, 336, message, white, 1.0f);
   }
@@ -380,8 +516,8 @@ void SlotList::draw(DrawList& dl, UiKit& kit) const {
     else txt(fx + 2.0f, 262, name_of_ ? name_of_(party[i]) : std::u32string(), white, 0.6f);
   }
   const std::u32string leader = !party.empty() && party[0] < save::kNumChars && name_of_ ? name_of_(party[0]) : std::u32string();
-  // Card 1's CHRONO00 is the auto-save.
-  const bool auto_file = cur->slot == 0 && cur->card == 1;
+  // Card 1's CHRONO00 and the page's file 0 are the auto-saves.
+  const bool auto_file = cur->slot == 0 && cur->card <= 1;
   const std::u32string name = auto_file ? import::utf8_to_u32(sl::auto_save_caption(li)) : leader;
   const std::string stars = std::to_string(std::min<int>(save_data.stars_total(), 99)), tb = sl::playtime(save_data.playtime_frames());
   std::string gold;
@@ -397,22 +533,7 @@ void SlotList::draw(DrawList& dl, UiKit& kit) const {
   std::u32string pl = cmn("PLAY", "Time");
   // A cleared save (summary flag bit 0) prints its star and count in yellow (0x108080 instead of 0x808080).
   const u32 star_c = (save_data.summary_flags() & 1) ? sl::cleared_star_colour(text_c) : text_c;
-  // location: key = number of start values <= u16 var 0 (head[0x40]); two lines split at the first newline
-  std::u32string l1, l2;
-  {
-    static const int kStart[30] = {0, 8, 16, 24, 26, 28, 30, 36, 52, 64, 72, 80, 88, 92, 100, 108, 112, 116, 124, 128, 140, 144, 156, 164, 172, 184, 195, 202, 209, 999};
-    const int scenario = save_data.head[0x40] | (save_data.head[0x41] << 8);
-    int key = 0;
-    for (int st : kStart)
-      if (scenario >= st) ++key;
-    std::string row;
-    if (const import::TextTable* table = tables_->table("savetbl"))
-      if (const std::string* found = table->get(static_cast<u64>(std::max(1, key)), lang_)) row = *found;
-    for (size_t pos; (pos = row.find('\r')) != std::string::npos;) row.erase(pos, 1);
-    std::string first_line = row, second_line;
-    if (const size_t nl = row.find('\n'); nl != std::string::npos) first_line = row.substr(0, nl), second_line = row.substr(nl + 1);
-    l1 = import::utf8_to_u32(first_line), l2 = import::utf8_to_u32(second_line);
-  }
+  const auto [l1, l2] = location_lines(save_data);
   if (ink) {
     {
       // Name / auto-save caption (save_layout.h name_fit): shrink to 97, two lines for the auto-save outside EN / JP.

@@ -150,7 +150,8 @@ class GameFlow {
   // -1 = silent title (default; the title script plays none).
   void set_title_song(int song) { title_song_ = song; }
   // Save file for Continue (not owned; may be null). Re-read on every entry to Title.
-  void set_save_dat(const save::SaveDat* dat) { dat_ = dat; }
+  // The memory cards and the OpenCross save page (either may be null).
+  void set_save_dat(const save::SaveDat* dat, const save::OcSaves* page = nullptr) { dat_ = dat, page_ = page; }
   void set_sfx(std::function<void(int)> fn);
 
   // Title scene: with a field world behind it (set_title_scene(true), app/app_boot.cpp) entering Title asks the host to run the title room
@@ -274,6 +275,7 @@ class GameFlow {
   ui::ArtMode mode_ = ui::ArtMode::Hd;
   audio::Mixer* mixer_ = nullptr;
   const save::SaveDat* dat_ = nullptr;
+  const save::OcSaves* page_ = nullptr;
   const vfs::Vfs* vfs_ = nullptr;
   int title_song_ = -1;
   bool ready_ = false;

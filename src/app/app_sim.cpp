@@ -490,18 +490,28 @@ void App::advance(const platform::Input& in, double dt, int ticks) {
   }
   world.update(in, ticks);
   if (flow_ready && config.auto_save && have_save_dat && !save_path.empty() && world.view().loaded() && flow.state() == game::FlowState::Field) {
-    // RDE auto-save: card 1 slot 0 on a location change; written to the same save.dat the Save menu uses.
+    // RDE auto-save on a location change: card 1 slot 0 in the save.dat the Save menu uses, and / or the OpenCross page's
+    // auto-save (Autosave::targets: each only where saves already exist; with none anywhere, the OpenCross page).
     if (autosave.update({static_cast<u16>(std::max(world.map_id(), 0)), world.can_save(), world.map_id(), world.entrance_param()})) {
       world.capture_state();
+      const game::Autosave::Targets targets = game::Autosave::targets(&save_dat, &oc_saves);
+      bool written = false;
       try {
-        if (game::Autosave::write(save_dat, flow.game_state().slot)) {
+        if (targets.card && game::Autosave::write(save_dat, flow.game_state().slot)) {
           save_dat.save(save_path);
-          log::info("autosave: map {:#x} written", world.map_id());
-          // RDE's "AUTO SAVE" strip.
-          if (feature_icons_ok) feature_icons.show_autosave();
+          written = true;
+        }
+        if (targets.page) {
+          game::Autosave::write(oc_saves, flow.game_state().slot);
+          written = true;
         }
       } catch (const std::exception& error) {
         log::warn("autosave failed: {}", error.what());
+      }
+      if (written) {
+        log::info("autosave: map {:#x} written ({}{})", world.map_id(), targets.card ? "card 1" : "", targets.page ? (targets.card ? " + OpenCross" : "OpenCross") : "");
+        // RDE's "AUTO SAVE" strip.
+        if (feature_icons_ok) feature_icons.show_autosave();
       }
     }
   }

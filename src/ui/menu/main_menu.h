@@ -19,6 +19,7 @@
 #include "render/sprite_batch.h"
 #include "render/text_batch.h"
 #include "save/cc_save.h"
+#include "save/oc_saves.h"
 #include "ui/dialogue_box.h"  // ArtMode
 #include "ui/menu/game_state.h"
 #include "ui/menu/menu_model.h"
@@ -51,7 +52,8 @@ class MainMenu {
   // "2021" or "1999" (HD art; original art always uses the 1999 folder).
   void set_portrait_set(const std::string& set);
   // Save screen target: slots are read from / written to card 1 of `dat`; `out` is where save() writes it.
-  void set_save_target(save::SaveDat* dat, std::filesystem::path out);
+  // `page`: the OpenCross save page (null = the memory cards only).
+  void set_save_target(save::SaveDat* dat, std::filesystem::path out, save::OcSaves* page = nullptr);
   // Sound hook: 1 cursor, 8 confirm, 6 cancel, 0x18 denied, 0x17 placed, 0x48 equipped.
   void set_sfx(std::function<void(int)> fn);
   // Debug tab tools were used this session: the save screen shows "Debug tools used this session"; saving stays allowed.
@@ -71,7 +73,8 @@ class MainMenu {
   // Save/Load > Load: the menu closes and this reports the chosen slot once (card block + decoded data); the host starts it like Continue
   // (GameFlow::load_slot). Load is always available, Save only when `can_save` of open() is set.
   struct LoadRequest {
-    // card: memory card 1 / 2; slot: CHRONOnn (0 = auto-save on card 1); block: memory-card block.
+    // card: memory card 1 / 2, 0 = the OpenCross page; slot: CHRONOnn (0 = auto-save on card 1) or the page's file number;
+    // block: memory-card block.
     int card = 1;
     int slot = 0;
     int block = 0;

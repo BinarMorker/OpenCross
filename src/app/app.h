@@ -50,6 +50,7 @@
 #include "render/text_batch.h"
 #include "render/texture.h"
 #include "save/cc_save.h"
+#include "save/oc_saves.h"
 #include "ui/keyitem_popup.h"
 #include "ui/lowres.h"
 #include "ui/menu/main_menu.h"
@@ -296,6 +297,8 @@ class App {
   bool flow_ready = false;
   save::SaveDat save_dat;
   bool have_save_dat = false;
+  // The OpenCross save page (folder OpenCross next to save.dat).
+  save::OcSaves oc_saves;
   std::filesystem::path save_path;
   save::ExtHost ext_host;
   game::Autosave autosave;

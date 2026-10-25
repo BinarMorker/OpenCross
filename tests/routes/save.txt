@@ -45,6 +45,8 @@
 - screenshot sv_02_save_screen.png
 - tap confirm                         # Save a File -> the file list (cursor on slot 1, auto-save slot 0 is not offered)
 - wait 20
+- tap down                            # the auto-save went to the empty OpenCross page, so the choice starts there
+- wait 10
 - tap confirm                         # Slot 1 (memory-card choice)
 - wait 20
 - tap right                           # slot 2 (file# 3)

@@ -1,6 +1,8 @@
-// Auto-save (RDE): trigger rule + slot 0 round trip through a save.dat built in memory (no real save is touched).
+// Auto-save (RDE): trigger rule + slot 0 round trip through a save.dat built in memory (no real save is touched); the OpenCross
+// save page (a temp folder) and where an auto-save goes.
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <map>
 
 #include "game/autosave.h"
@@ -108,9 +110,98 @@ static void test_write() {
   CHECK(re.ext().slot(0).battles == 77 && re.ext().slot(0).names == names);
 }
 
+static save::SaveDat blank_dat() {
+  save::MemCard blank = save::MemCard::blank();
+  std::vector<save::ZipMember> members;
+  members.push_back({"memcard1.mcr", blank.bytes(), true});
+  members.push_back({"memcard2.mcr", blank.bytes(), true});
+  return save::SaveDat::open(save::zip_write(members, save::kRdeSavePassword, 1));
+}
+
+static void test_page() {
+  const std::filesystem::path dir = std::filesystem::temp_directory_path() / "oc_test_ocsaves";
+  std::filesystem::remove_all(dir);
+  std::map<int, std::u32string> names{{0, U"Sergio"}, {43, U"Pipp\u00e9"}};
+  save::ExtHost host;
+  host.language = 1;
+  host.battles = 42;
+  host.names = &names;
+  save::OcSaves page;
+  page.set_dir(dir);
+  page.set_ext_host(&host);
+  page.load();
+  CHECK(page.empty() && page.newest() == 0);
+  save::SaveSlot st;
+  st.head[0] = 'S';
+  st.head[1] = 'C';
+  st.set_gold(4321);
+  page.write(7, st);
+  page.write(100, st);
+  Autosave::write(page, st);
+  CHECK(std::filesystem::exists(dir / "007.ocsav") && std::filesystem::exists(dir / "100.ocsav") && std::filesystem::exists(dir / "auto.ocsav"));
+  // A fresh scan reads them back: block, names, counter; the auto-save carries the caption, the newest is the last manual write.
+  save::OcSaves again;
+  again.set_dir(dir);
+  again.set_ext_host(&host);
+  again.load();
+  CHECK(again.file(7) && again.file(100) && again.file(0) && !again.file(1));
+  CHECK(again.file(7)->data.gold() == 4321);
+  CHECK(again.file(0)->data.head[save::head::kLeaderName] == 0x83);
+  CHECK(again.newest() == 100);
+  host.battles = 0;
+  CHECK(again.read_ext(7, 1).names == names && host.battles == 42);
+  CHECK(again.read_ext(7, 0).names.empty());
+  // A damaged file is skipped.
+  {
+    Bytes bytes = save::OcSaves::serialize(st, {});
+    bytes[bytes.size() - 1] ^= 0xFF;
+    save::OcSaves::File parsed;
+    bool threw = false;
+    try {
+      parsed = save::OcSaves::parse(bytes);
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    CHECK(threw);
+  }
+  std::filesystem::remove_all(dir);
+}
+
+static void test_targets() {
+  const std::filesystem::path dir = std::filesystem::temp_directory_path() / "oc_test_targets";
+  std::filesystem::remove_all(dir);
+  save::OcSaves page;
+  page.set_dir(dir);
+  save::SaveDat dat = blank_dat();
+  save::SaveSlot st;
+  st.head[0] = 'S';
+  st.head[1] = 'C';
+  // Nothing anywhere: the page only.
+  Autosave::Targets targets = Autosave::targets(&dat, &page);
+  CHECK(!targets.card && targets.page);
+  // A memory-card save only (card 2 counts too): the card only.
+  CHECK(save::write_slot(*dat.card(2), 3, st) != 0);
+  targets = Autosave::targets(&dat, &page);
+  CHECK(targets.card && !targets.page);
+  // Both hold saves: both.
+  page.write(1, st);
+  targets = Autosave::targets(&dat, &page);
+  CHECK(targets.card && targets.page);
+  // The page only.
+  save::SaveDat empty = blank_dat();
+  targets = Autosave::targets(&empty, &page);
+  CHECK(!targets.card && targets.page);
+  // No page (no save folder): the card rule alone.
+  targets = Autosave::targets(&empty, nullptr);
+  CHECK(!targets.card && !targets.page);
+  std::filesystem::remove_all(dir);
+}
+
 int main() {
   test_trigger();
   test_write();
+  test_page();
+  test_targets();
   std::printf(g_fail ? "test_autosave: %d FAILED\n" : "test_autosave: OK\n", g_fail);
   return g_fail ? 1 : 0;
 }

@@ -297,12 +297,19 @@ void App::init_saves() {
       log::warn("save {}: {}", save_path.string(), error.what());
     }
   }
-  if (flow_ready && have_save_dat) flow.set_save_dat(&save_dat);
+  if (have_save_dat) {
+    // The OpenCross page lives next to its save file: "OpenCross" for save.dat, "<name>_OpenCross" for another [Paths] SaveFile.
+    const std::string stem = save_path.stem().string();
+    oc_saves.set_dir(save_path.parent_path() / (stem == "save" ? std::string("OpenCross") : stem + "_OpenCross"));
+    oc_saves.load();
+  }
+  if (flow_ready && have_save_dat) flow.set_save_dat(&save_dat, &oc_saves);
   // ext_save.dat: every slot write (Save menu, auto-save) also stores the language, the battle counter and the custom character
   // names; a load (GameFlow::tick_fade) restores them for RDE-compatible saves.
   ext_host.language = static_cast<u32>(lang);
   if (flow_ready) ext_host.names = &flow.machine().custom_names();
   save_dat.set_ext_host(&ext_host);
+  oc_saves.set_ext_host(&ext_host);
 }
 
 void App::init_menus() {
@@ -322,7 +329,7 @@ void App::init_menus() {
         bak += ".ocbak";
         std::error_code ec;
         if (!std::filesystem::exists(bak, ec)) std::filesystem::copy_file(save_path, bak, ec);
-        menu.set_save_target(&save_dat, save_path);
+        menu.set_save_target(&save_dat, save_path, &oc_saves);
       }
     }
     shop_ok = shop.init(ctx, files, sprites, menu_text, tables, lang);

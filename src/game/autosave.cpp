@@ -35,15 +35,32 @@ bool Autosave::update(const Field& field) {
 
 // The slot list shows the header caption ("auto save" in katakana, 12 bytes Shift-JIS) instead of the leader's name; the RDE
 // extension record of slot 0 (language, battle counter, custom names) follows the block.
-bool Autosave::write(save::SaveDat& dat, const save::SaveSlot& state) {
-  save::MemCard* card = dat.card(1);
-  if (!card) return false;
+namespace {
+save::SaveSlot captioned(const save::SaveSlot& state) {
   save::SaveSlot slot = state;
   static const u8 kCaption[12] = {0x83, 0x49, 0x81, 0x5B, 0x83, 0x67, 0x83, 0x5A, 0x81, 0x5B, 0x83, 0x75};
   std::copy(std::begin(kCaption), std::end(kCaption), slot.head.begin() + save::head::kLeaderName);
-  if (!save::write_slot(*card, 0, slot)) return false;
+  return slot;
+}
+}  // namespace
+
+bool Autosave::write(save::SaveDat& dat, const save::SaveSlot& state) {
+  save::MemCard* card = dat.card(1);
+  if (!card) return false;
+  if (!save::write_slot(*card, 0, captioned(state))) return false;
   dat.write_ext(1, 0);
   return true;
+}
+
+void Autosave::write(save::OcSaves& page, const save::SaveSlot& state) { page.write(0, captioned(state)); }
+
+Autosave::Targets Autosave::targets(const save::SaveDat* dat, const save::OcSaves* page) {
+  Targets out;
+  for (int card_no = 1; card_no <= 2 && dat; ++card_no)
+    if (const save::MemCard* card = dat->card(card_no); card && !save::list_slots(*card).empty()) out.card = true;
+  out.page = page && !page->empty();
+  if (!out.card && !out.page) out.page = page != nullptr;
+  return out;
 }
 
 }  // namespace oc::game
