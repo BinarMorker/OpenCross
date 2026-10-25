@@ -36,6 +36,8 @@ struct Equip {
   u32 resist_lo = 0, resist_hi = 0, status_lo = 0, status_hi = 0;
   // Armour mask | flag-0x40 accessory masks: weapon raw x3/4 vs the attacker's hi word.
   u32 guard_hi = 0;
+  // The armour record's colour byte (+3): bits 2..7 a colour mask, bit 1 = elements of that colour are absorbed (the colour plates).
+  u8 armour_colour = 0;
   // Accessory ids (0xF9..0xFB let the hi 0xE0000000 statuses land).
   std::array<u16, 3> acc{};
   int stamina_mod = 0, start_gauge = 0;
@@ -207,6 +209,10 @@ struct ActionEvent {
   // when Frozen newly landed on a target left alive.
   int sys_msg = -1;
   int hp_before = 0, hp_after = 0;
+  // The field ring before this event's cast changed it (the view shows the ring of the action it presents).
+  std::array<int, 3> ring{-1, -1, -1};
+  // The cast repaints the whole ring when it ends (modes 6 / 37 / 47) instead of pushing its colour.
+  bool ring_repaint = false;
   // The log line the rules wrote for this effect (shown when the hit is presented).
   std::string text;
   // Scripted action: Event::seq of the queue_attack that made it; the view starts the hit once its script cursor passed it.
@@ -373,7 +379,7 @@ class Battle {
   int evo_pending() const { return evo_pending_; }
   void set_evo_pending(int element) { evo_pending_ = element; }
   void evolve(int unit, int form);
-  // Element colour (pgdat +5) as the battle sees it: Pip's 18 techs take Pip's innate colour.
+  // Element colour (pgdat +5) as the battle sees it: Pip's 18 techs take Pip's innate colour, Vary Innate its last caster's.
   u8 element_colour(int id) const;
   void set_cast_bit(int unit, bool on) {
     if (unit >= 0 && unit < kUnits) cast_mask_ = on ? cast_mask_ | (1u << unit) : cast_mask_ & ~(1u << unit);
@@ -457,6 +463,7 @@ class Battle {
     event.script_seq = cur_script_seq_;
     event.group = cur_group_;
     event.hit_index = hit_counter_++;
+    event.ring = ring_;
     events_.push_back(event);
   }
   WeaponIn weapon_in(const Unit& attacker, const Unit& target_unit, int mult, int strength) const;
@@ -484,7 +491,11 @@ class Battle {
   bool run_plan(int unit, const std::vector<EnemyAction>& plan, bool set_countdown);
   void finish(Outcome outcome, int code = -1);
   void compute_rewards();
-  int colour_of(const Unit& unit) const { return data::colour_index_of_bit(unit.innate); }
+  // The innate byte's colour mask is bits 2..7; bit 1 makes the unit absorb elements of its own colour.
+  int colour_of(const Unit& unit) const { return data::colour_index_of_bit(static_cast<u8>(unit.innate & 0xFC)); }
+  // The field ring at the end of a cast: a repaint (modes 6 / 37 / 47) replaces all three slots, else the cast's colour enters as the newest
+  // slot; an element with record byte 0 bit 0x80 and an element trap (mode 5) leave the ring as it was.
+  void finish_ring(const data::ElemRec& element, int colour);
   void init_pc(int slot, const PartyMember& member);
   void init_enemy(int slot, int monster_id, const BattleOptions& opt);
   int next_ready_enemy();
@@ -542,8 +553,12 @@ class Battle {
   int field_state_ = 0;
   // Mode 5: element id the PC side / the enemy side has trapped (0 none).
   std::array<int, 2> trap_{};
-  // The last cast repainted the ring (modes 6 / 37) instead of pushing its colour.
+  // The running cast repaints the ring (modes 6 / 37 / 47) with ring_repaint_ when it ends instead of pushing its colour; the targets of the
+  // cast all see the ring as it was.
   bool ring_repainted_ = false;
+  std::array<int, 3> ring_repaint_{-1, -1, -1};
+  // Vary Innate's colour: the element takes its caster's innate colour mask when it is cast and keeps it for the rest of the battle (0 = its own).
+  u8 vary_innate_colour_ = 0;
   // The last cast hit the other side's element trap.
   bool fizzled_ = false;
 };

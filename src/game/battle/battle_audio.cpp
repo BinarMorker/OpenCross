@@ -68,8 +68,10 @@ void BattleAudio::stop_sounds() {
 
 void BattleAudio::begin_battle() {
   stop_sounds();
-  if (base_) live_tbl_ = std::make_shared<audio::InstrumentTable>(*base_);
-  if (bank_) bank_->set_table(nullptr);
+  // The battle's banks upload over the table and sound RAM the field left (its room's banks, the last battle's battle.prd).
+  const std::shared_ptr<const audio::InstrumentTable> field = mixer_ ? mixer_->sfx_instruments() : nullptr;
+  if (field || base_) live_tbl_ = std::make_shared<audio::InstrumentTable>(*(field ? field : base_));
+  if (bank_) bank_->set_table(live_tbl_ ? std::make_shared<audio::InstrumentTable>(*live_tbl_) : nullptr);
   live_.clear();
   groups_.clear();
   started_music_ = false;
@@ -93,9 +95,12 @@ void BattleAudio::activate(const std::string& key) {
   const Kind kind = it->second.kind;
   if (kind != Kind::Resident) release_kind(kind);
   live_.push_back(key);
-  if (live_tbl_) {
+  if (live_tbl_ && !it->second.banks.empty()) {
     for (const auto& bank : it->second.banks) live_tbl_->overlay(bank);
-    if (bank_ && !it->second.banks.empty()) bank_->set_table(std::make_shared<audio::InstrumentTable>(*live_tbl_));
+    // Published: the field resumes on what the battle's last upload left.
+    auto published = std::make_shared<const audio::InstrumentTable>(*live_tbl_);
+    if (bank_) bank_->set_table(published);
+    if (mixer_) mixer_->set_sfx_instruments(published);
   }
 }
 

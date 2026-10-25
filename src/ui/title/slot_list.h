@@ -87,8 +87,6 @@ class SlotList {
   std::array<std::vector<SlotEntry>, 2> cards_;
   std::vector<SlotEntry> entries_;
   std::vector<std::optional<SlotEntry>> rows_ = std::vector<std::optional<SlotEntry>>(save::kOcFiles + 1);
-  // The page's newest manual file (0 = none): the page cursor's start.
-  int newest_ = 0;
   import::Lang lang_ = import::Lang::En;
   ArtMode mode_ = ArtMode::Hd;
   int sel_ = 0, top_ = 0;

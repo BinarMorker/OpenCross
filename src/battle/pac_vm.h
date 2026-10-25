@@ -141,6 +141,10 @@ class Host {
   virtual ~Host() = default;
   // Bit u (0..8): unit present and not KO.
   virtual u32 alive_mask() const = 0;
+  // Bit u: unit in the battle roster (PCs also while KO'd; enemies until their kill script ends).
+  virtual u32 roster_mask() const { return alive_mask(); }
+  // Bit u: unit present at battle start (kept after its death).
+  virtual u32 present_mask() const { return roster_mask(); }
   virtual int read_field(int unit, u16 code) = 0;
   virtual void write_field(int unit, u16 code, int value) = 0;
   // Op A7: Pip's pending form element.

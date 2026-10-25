@@ -1,8 +1,11 @@
 #include "render/mesh_pipeline.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 
 #include "core/log.h"
 #include "render/camera.h"
@@ -77,6 +80,52 @@ constexpr float kKeyStrength = 0.70f;
 // 8 x vec4 of draw state followed by the slot number in x of a ninth vec4.
 constexpr u32 kPushFloats = 36;
 
+// Faces meeting at a corner at a larger angle than this keep their own normal there (a hard edge).
+constexpr float kHardEdgeDegrees = 60.0f;
+
+// The smoothed normal of every corner of the rigid meshes' unindexed triangles (SkinnedVertex::smooth). `source[i]` = the vertex of
+// `rigid_vertex` that flat corner i came from. Corners match by their model-space position.
+void smooth_rigid_normals(std::vector<SkinnedVertex>& flat, const std::vector<u8>& rigid_vertex, const std::vector<u32>& source) {
+  using Key = std::array<float, 3>;
+  const size_t tris = flat.size() / 3;
+  std::vector<std::array<float, 3>> face(tris);
+  std::map<Key, std::vector<size_t>> at;
+  for (size_t tri = 0; tri < tris; ++tri) {
+    if (!rigid_vertex[source[tri * 3]]) continue;
+    const float* p0 = flat[tri * 3].pos[0][0];
+    const float* p1 = flat[tri * 3 + 1].pos[0][0];
+    const float* p2 = flat[tri * 3 + 2].pos[0][0];
+    const float e1[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]}, e2[3] = {p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]};
+    face[tri] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+    for (size_t k = 0; k < 3; ++k) {
+      const float* p = flat[tri * 3 + k].pos[0][0];
+      at[Key{p[0], p[1], p[2]}].push_back(tri);
+    }
+  }
+  auto unit = [](const std::array<float, 3>& v) {
+    const float length = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    return length > 0.0f ? std::array<float, 3>{v[0] / length, v[1] / length, v[2] / length} : std::array<float, 3>{0, 0, 0};
+  };
+  const float min_cos = std::cos(kHardEdgeDegrees * 3.14159265f / 180.0f);
+  for (size_t tri = 0; tri < tris; ++tri) {
+    if (!rigid_vertex[source[tri * 3]]) continue;
+    const std::array<float, 3> own = unit(face[tri]);
+    if (own[0] == 0.0f && own[1] == 0.0f && own[2] == 0.0f) continue;
+    for (size_t k = 0; k < 3; ++k) {
+      SkinnedVertex& corner = flat[tri * 3 + k];
+      const float* p = corner.pos[0][0];
+      std::array<float, 3> sum{0, 0, 0};
+      for (size_t other : at[Key{p[0], p[1], p[2]}]) {
+        const std::array<float, 3> n = unit(face[other]);
+        if (n[0] * own[0] + n[1] * own[1] + n[2] * own[2] < min_cos) continue;
+        for (size_t c = 0; c < 3; ++c) sum[c] += face[other][c];
+      }
+      const std::array<float, 3> n = unit(sum);
+      corner.smooth[0] = n[0], corner.smooth[1] = n[1], corner.smooth[2] = n[2], corner.smooth[3] = 1.0f;
+    }
+  }
+}
+
 }  // namespace
 
 bool MeshPipeline::init(GpuContext& ctx) {
@@ -90,9 +139,9 @@ bool MeshPipeline::init(GpuContext& ctx) {
   if (const char* cull_env = std::getenv("OC_MESH_CULL")) cull_ = cull_env[0] == '0' ? 0.0f : cull_env[0] == '-' ? -1.0f : 1.0f;
   if (!nearest_.create(ctx, false) || !linear_.create(ctx, true)) return false;
 
-  // 14 attributes: 8 joint-local positions, the joints and weights of the 4 corners packed by two, uv + quad info,
-  // the VDDM normal + its joint (lit path).
-  VertexAttribute attributes[14];
+  // 16 attributes: 8 joint-local positions, the joints and weights of the 4 corners packed by two, uv + quad info,
+  // the VDDM normal + its joint (lit path), the corner colour, the smoothed normal.
+  VertexAttribute attributes[16];
   for (u32 corner = 0; corner < 4; ++corner)
     for (u32 i = 0; i < 2; ++i)
       attributes[corner * 2 + i] = {corner * 2 + i, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
@@ -103,6 +152,8 @@ bool MeshPipeline::init(GpuContext& ctx) {
   attributes[11] = {11, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, static_cast<u32>(offsetof(SkinnedVertex, weight) + 4 * sizeof(float))};
   attributes[12] = {12, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, static_cast<u32>(offsetof(SkinnedVertex, uv))};
   attributes[13] = {13, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, static_cast<u32>(offsetof(SkinnedVertex, normal))};
+  attributes[14] = {14, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, static_cast<u32>(offsetof(SkinnedVertex, rgb))};
+  attributes[15] = {15, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, static_cast<u32>(offsetof(SkinnedVertex, smooth))};
   static_assert(offsetof(SkinnedVertex, quad) == offsetof(SkinnedVertex, uv) + 2 * sizeof(float) &&
                 offsetof(SkinnedVertex, corner) == offsetof(SkinnedVertex, uv) + 3 * sizeof(float));
   PipelineDesc pd;
@@ -242,6 +293,8 @@ std::unique_ptr<MeshModel> MeshPipeline::create_model(const assets::ModelAsset& 
   // Concatenate all meshes into one vertex and one index buffer (corner 0 of each vertex only; the rest is filled when unindexing).
   std::vector<SkinnedVertex> verts;
   std::vector<u32> idx;
+  // Per vertex of verts: it belongs to a rigid mesh.
+  std::vector<u8> rigid_vertex;
   // Per triangle of idx: assets::Mesh::tri_quad.
   std::vector<u8> tri_quad;
   const u16 max_joint = static_cast<u16>(kMaxJoints - 1);
@@ -258,6 +311,7 @@ std::unique_ptr<MeshModel> MeshPipeline::create_model(const assets::ModelAsset& 
       }
       vertex.uv[0] = mv.uv[0];
       vertex.uv[1] = mv.uv[1];
+      for (size_t k = 0; k < 3; ++k) vertex.rgb[k] = static_cast<float>(mv.rgb[k]) / 128.0f;
       vertex.joint[0][0] = rigid ? u16{0} : std::min(sv.joint[0], max_joint);
       vertex.joint[0][1] = rigid ? u16{0} : std::min(sv.joint[1], max_joint);
       vertex.weight[0][0] = rigid ? 1.0f : sv.weight[0];
@@ -267,6 +321,7 @@ std::unique_ptr<MeshModel> MeshPipeline::create_model(const assets::ModelAsset& 
       for (size_t k = 0; k < 3; ++k) vertex.normal[k] = static_cast<float>(sv.normal[k]) / 128.0f;
       vertex.normal[3] = static_cast<float>(vertex.joint[0][sv.normal_joint & 1]);
       verts.push_back(vertex);
+      rigid_vertex.push_back(rigid ? u8{1} : u8{0});
     }
     const u32 first_of_mesh = static_cast<u32>(idx.size());
     for (u32 i : mesh.indices) idx.push_back(base + i);
@@ -319,6 +374,7 @@ std::unique_ptr<MeshModel> MeshPipeline::create_model(const assets::ModelAsset& 
       vertex.corner = static_cast<float>(corner_in_tri);
       flat[i] = vertex;
     }
+    smooth_rigid_normals(flat, rigid_vertex, idx);
     verts.swap(flat);
     idx.resize(flat_count);
     for (size_t i = 0; i < flat_count; ++i) idx[i] = static_cast<u32>(i);
@@ -381,7 +437,7 @@ void MeshPipeline::draw(const MeshModel& model, const DrawParams& params) {
       for (size_t channel = 0; channel < 3; ++channel) uniforms->el[17][channel] = light_set->ambient[channel];
       uniforms->el[17][3] = 1.0f;
     }
-    uniforms->el[0][0] = enhanced_ ? 1.0f : 0.0f;
+    uniforms->el[0][0] = enhanced_ && !params.solid ? 1.0f : 0.0f;
     uniforms->el[0][1] = kKeyStrength;
     uniforms->el[0][2] = light_set ? static_cast<float>(light_set->count) : 0.0f;
     for (int i = 0; light_set && i < light_set->count; ++i) {
@@ -450,7 +506,9 @@ void MeshPipeline::draw(const MeshModel& model, const DrawParams& params) {
   const int model_abr = flash ? 1 : all_semi ? params.model_abr : -1;
   Pass passes[8];
   int npass = 0;
-  if (!split_wet) {
+  if (params.solid) {
+    passes[npass++] = {Kind::Solid, 0.0f};
+  } else if (!split_wet) {
     if (flash) {
       passes[npass++] = {Kind::Solid, 0.0f, true};
       passes[npass++] = {Kind::Semi, 0.0f, true, 2};
@@ -482,7 +540,7 @@ void MeshPipeline::draw(const MeshModel& model, const DrawParams& params) {
       const bool part_semi = model_draw.mesh < 32 && ((params.part_semi >> model_draw.mesh) & 1u) != 0;
       const bool env_over = model_draw.mesh < 32 && ((params.stock_env_over >> model_draw.mesh) & 1u) && static_cast<bool>(params.stock_env_set);
       if (pass.env && !env_over) continue;
-      const bool semi_mesh = pass.env || all_semi || part_semi || (model_draw.trans >= 1 && model_draw.trans <= 4);
+      const bool semi_mesh = !params.solid && (pass.env || all_semi || part_semi || (model_draw.trans >= 1 && model_draw.trans <= 4));
       if (pass.kind == Kind::Semi && !semi_mesh) continue;
       const Pipeline* pipe = &pipeline_;
       float blend_scale = 1.0f, out_alpha = 1.0f;
@@ -524,8 +582,10 @@ void MeshPipeline::draw(const MeshModel& model, const DrawParams& params) {
       const bool near_sort = model_draw.mesh < 32 && ((params.near_meshes >> model_draw.mesh) & 1u);
       float tr = params.tint[0], tg = params.tint[1], tb = params.tint[2];
       if (model_draw.mesh < 32 && ((params.part_mask >> model_draw.mesh) & 1u)) tr *= params.part_tint[model_draw.mesh][0], tg *= params.part_tint[model_draw.mesh][1], tb *= params.part_tint[model_draw.mesh][2];
+      if (params.solid) tr = tg = tb = 1.0f;
+      const float* flat_rgb = params.solid ? params.solid_rgb : model_draw.color;
       const float cull = model_draw.one_sided ? (params.mirror ? -cull_ : cull_) : 0.0f;
-      const float push[kPushFloats] = {model_draw.color[0], model_draw.color[1], model_draw.color[2], cull, model_draw.texture < 0 ? 1.0f : 0.0f,
+      const float push[kPushFloats] = {flat_rgb[0], flat_rgb[1], flat_rgb[2], cull, params.solid || model_draw.texture < 0 ? 1.0f : 0.0f,
                                        1.0f / (kActorDepthDivisor * kDepthRange), wet ? 1.0f : 0.0f, wet ? params.water_level : 0.0f,
                                        tr * blend_scale, tg * blend_scale, tb * blend_scale, blend_scale,
                                        params.water_tint[0], params.water_tint[1], params.water_tint[2], 1.0f,

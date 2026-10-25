@@ -69,13 +69,16 @@ class SfxBank {
   bool load(const vfs::Vfs& fs);
   // Same from raw images (tests/tools).
   bool load(Bytes effect00, const Bytes& wave0000);
-  // Room sound from the room's subfile 10 (yos0, instrument banks) and subfile 9 (yos1, SFX frames). Empty spans
-  // clear that half. Replaces the previous room.
-  void set_room(ByteSpan yos0, ByteSpan yos1);
-  void clear_room();
-  // Battle: the live instrument table (wave0000 + every opened battle bank) replaces the room table for the global effects; effect00
+  // Room sound from the room's subfile 10 (yos0, instrument banks) and subfile 9 (yos1, SFX frames). The frames replace the previous
+  // room's; the banks are uploaded over `current` (the table the last loader left; null = this bank's own) and nothing restores
+  // wave0000, so a room without banks keeps the last ones.
+  void set_room(ByteSpan yos0, ByteSpan yos1, std::shared_ptr<const InstrumentTable> current = nullptr);
+  // The field resumes after another loader (a battle) wrote the shared table: the room's banks are uploaded again over `current`.
+  void reload_room(std::shared_ptr<const InstrumentTable> current);
+  // Battle: the live instrument table (the field's, then every opened battle bank) replaces the table for the global effects; effect00
   // programs read slots 177..181 (battle.prd's bank) and 208..211 (the stage / unit / pack bank). nullptr = wave0000 only.
-  void set_table(std::shared_ptr<const InstrumentTable> table) { room_ = table ? std::move(table) : base_; }
+  void set_table(std::shared_ptr<const InstrumentTable> table) { table_ = table ? std::move(table) : base_; }
+  const std::shared_ptr<const InstrumentTable>& table() const { return table_; }
 
   // Global SFX id (effect00 index). Returns false if the id is undefined. Chained ids (chain_count) are appended via
   // `extra` (each a further program).
@@ -91,7 +94,8 @@ class SfxBank {
   std::vector<u16> chain_;
   std::vector<std::pair<u16, u16>> pcs_;
   std::shared_ptr<const InstrumentTable> base_;  // wave0000
-  std::shared_ptr<const InstrumentTable> room_;  // wave0000 + room banks
+  std::shared_ptr<const InstrumentTable> table_;  // what every bank loaded so far left
+  std::vector<std::shared_ptr<const Bank>> room_banks_;  // the current room's yos0 banks
   std::vector<std::shared_ptr<AkaoCode>> frames_;  // yos1 frames (null = empty slot)
 };
 
@@ -117,6 +121,9 @@ class AkaoSfx final : public Sfx {
  private:
   // Sets volume / pan / mask on every program and queues them on the mixer, `first` before `extra`.
   void play_programs(SfxProgram& first, std::vector<SfxProgram>& extra, float volume, int pan, u32 mask);
+  // Before a field sound: when another loader (a battle) published a table since this bank's last upload, the room's banks are
+  // uploaded again over it, as the field reloads its room after a battle.
+  void resume_shared();
 
   Mixer* mixer_;
   SfxBank* bank_;

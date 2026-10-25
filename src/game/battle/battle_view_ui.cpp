@@ -1384,7 +1384,8 @@ void BattleView::build_target_ui(bool cam_hint) {
     const int sex = tu.gender >> 14;
     if (sex == 1 || sex == 2) btext(0x10002, sex == 2 ? U"♀" : U"♂", 0x1E - 12, 0xC5 + 1, 0x8A8A8A);
     btext(jp ? 0x10002 : 2, kInnateLabel[li], 0x30 + kInnateDx[li], static_cast<float>(0xC6) - (jp ? 0.0f : 1.0f), 0x8A8A8A);
-    const int ci = data::colour_index_of_bit(tu.innate);
+    // The innate byte's colour mask is bits 2..7 (bit 1 = absorbs its own colour).
+    const int ci = data::colour_index_of_bit(static_cast<u8>(tu.innate & 0xFC));
     // Style 0xB: the colour word is not remapped.
     if (ci >= 0 && ci < 6) btext(0xB, U"●", 0x48 + 7, 0xC5 + 2, kInnateDot[ci]);
     const int cs = data::colour_index_of_bit(static_cast<u8>((tu.hi & 0x3Fu) << 2));

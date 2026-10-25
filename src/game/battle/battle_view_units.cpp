@@ -171,6 +171,7 @@ void BattleView::fill_ctx(int unit, bseq::Ctx& ctx) const {
   if (visual.spawn) ctx.rand = [this]() { return static_cast<int>(spawn_rng_() & 0x7FFF); };
   ctx.status_lo = unit_rec.lo;
   ctx.status_hi = unit_rec.hi;
+  ctx.attrib = visual.attrib;
   // A Dopplegang creature form runs the creature's scripts.
   ctx.monster = !unit_rec.pc || unit_rec.form >= 0;
   ctx.model_num = unit_rec.pc && unit_rec.form < 0 ? unit_rec.src_id : static_cast<int>(tables_->enemies[static_cast<size_t>(unit_rec.form >= 0 ? unit_rec.form : unit_rec.src_id)].model());
@@ -667,6 +668,11 @@ void BattleView::tick_units() {
     Visual& visual = vis_[static_cast<size_t>(i)];
     const battle::Unit& unit_rec = battle_->unit(i);
     if (!unit_rec.present) continue;
+    // Vary Innate (element mode 42) writes the caster's control-block colour together with its innate byte.
+    if (act_.phase != Act::Phase::None && act_.actor == i && !act_.ev.empty()) {
+      const size_t element = static_cast<size_t>(act_.ev.front().element);
+      if (element < tables_->elements.size() && tables_->elements[element].mode() == 42) visual.attrib = unit_rec.innate;
+    }
     visual.px = visual.x;
     visual.pz = visual.z;
     visual.py = visual.y;

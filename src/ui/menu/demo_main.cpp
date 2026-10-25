@@ -81,35 +81,36 @@ int ocmenudemo_main(int argc, char** argv) {
           demo.set_mode(hd ? ui::ArtMode::Hd : ui::ArtMode::Original);
         }
         if (drive) {
-          // One scripted key every 6 frames; the log shows the screen after each key.
+          // One scripted key every 48 frames (past the element grid input holds); the log shows the screen after each key.
           static const SDL_Scancode kScript[] = {
               // Status: pick member
               SDL_SCANCODE_RETURN,
               // status, next member, back
-              SDL_SCANCODE_RETURN, SDL_SCANCODE_E, SDL_SCANCODE_X,
+              SDL_SCANCODE_RETURN, SDL_SCANCODE_E, SDL_SCANCODE_BACKSPACE,
               // Elements -> Grid -> member
               SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN,
-              // enter grid, options, Auto Allocate
-              SDL_SCANCODE_RETURN, SDL_SCANCODE_C, SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN,
-              // member only, Yes
-              SDL_SCANCODE_RETURN, SDL_SCANCODE_RETURN,
+              // back to the first member, enter grid, Right to Auto Allocate, ask
+              SDL_SCANCODE_UP, SDL_SCANCODE_RETURN, SDL_SCANCODE_RIGHT, SDL_SCANCODE_RETURN,
+              // member only
+              SDL_SCANCODE_RETURN,
               // back, Equip, member
-              SDL_SCANCODE_X, SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_RETURN,
+              SDL_SCANCODE_BACKSPACE, SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_RETURN,
               // weapon list, equip, back
-              SDL_SCANCODE_RETURN, SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_X, SDL_SCANCODE_X,
+              SDL_SCANCODE_RETURN, SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_BACKSPACE, SDL_SCANCODE_BACKSPACE,
               // Key items
-              SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_DOWN, SDL_SCANCODE_X,
+              SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_DOWN, SDL_SCANCODE_BACKSPACE,
               // Settings
-              SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_RIGHT, SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_X,
+              SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_RIGHT, SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_BACKSPACE,
               // Save: confirm Yes
               SDL_SCANCODE_DOWN, SDL_SCANCODE_RETURN, SDL_SCANCODE_RETURN, SDL_SCANCODE_LEFT, SDL_SCANCODE_RETURN,
-              SDL_SCANCODE_X, SDL_SCANCODE_X};
+              SDL_SCANCODE_BACKSPACE, SDL_SCANCODE_BACKSPACE};
           constexpr int kScriptLength = static_cast<int>(sizeof kScript / sizeof kScript[0]);
-          const int step = drive_frame / 6;
-          if (drive_frame % 6 == 3 && step < kScriptLength) input.key_pressed[static_cast<size_t>(kScript[step])] = input.key_down[static_cast<size_t>(kScript[step])] = true;
+          constexpr int kStep = 48;
+          const int step = drive_frame / kStep;
+          if (drive_frame % kStep == 3 && step < kScriptLength) input.key_pressed[static_cast<size_t>(kScript[step])] = input.key_down[static_cast<size_t>(kScript[step])] = true;
           // Events are persistent, so the key is released one frame after the press.
-          if (drive_frame % 6 == 4 && step < kScriptLength) input.key_down[static_cast<size_t>(kScript[step])] = false;
-          if (drive_frame % 6 == 5 && step < kScriptLength) {
+          if (drive_frame % kStep == 4 && step < kScriptLength) input.key_down[static_cast<size_t>(kScript[step])] = false;
+          if (drive_frame % kStep == kStep - 1 && step < kScriptLength) {
             ui::GameState& state = demo.state();
             int placed = 0, stock = 0;
             for (int row = 0; row < 8; ++row)

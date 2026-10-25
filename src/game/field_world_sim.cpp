@@ -58,9 +58,12 @@ bool FieldWorld::controls_free() const {
 }
 
 void FieldWorld::update_input_lock() {
+  // The lock of an inactive entity (SET_VISIBLE 0) does not count.
   bool locked = false;
-  for (size_t i = 0; i < ents_.size(); ++i)
-    if (vm_.entity(static_cast<int>(i)).flags270 & script::flag270::kInputLock) locked = true;
+  for (size_t i = 0; i < ents_.size(); ++i) {
+    const script::Entity& script_ent = vm_.entity(static_cast<int>(i));
+    if ((script_ent.flags270 & script::flag270::kInputLock) && !(script_ent.flags38 & script::flag38::kInactive)) locked = true;
+  }
   u32 flags = vm_.global_flags();
   flags = locked ? (flags | script::gflag::kInputLock) : (flags & ~script::gflag::kInputLock);
   vm_.set_global_flags(flags);

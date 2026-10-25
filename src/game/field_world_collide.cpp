@@ -186,7 +186,6 @@ float FieldWorld::ground_y(const Ent& ent_state) const {
 bool FieldWorld::blocked_by_solids(int player, float x, float z, float old_x, float old_z) {
   const float py = ents_[static_cast<size_t>(player)].actor.current().y;
   const float rp = ent_radius(player);
-  const float vx = x - old_x, vz = z - old_z;
   bool blocked = false;
   // The walk-mesh probe on the pending velocity of every pushed actor: a step the mesh refuses clears it (the actor then stays).
   for (Ent& pushed : ents_)
@@ -237,10 +236,13 @@ bool FieldWorld::blocked_by_solids(int player, float x, float z, float old_x, fl
     ent_state.press_ticks = std::min(ent_state.press_ticks + 1, 0x7FFF);
     // FE 06: pushable.
     if (hit && (script_ent.flags38 & 0x2000u)) {
-      const bool free = !push_target_inside_box(i, vx, vz) && push_step_ok(ent_state, vx, vz);
-      ent_state.pend = free && (std::fabs(vx) > 1e-4f || std::fabs(vz) > 1e-4f);
-      ent_state.pend_x = vx;
-      ent_state.pend_z = vz;
+      // The pushed actor takes the player's pad velocity as it was before the player's own probe / slide / slope rebuild.
+      const Actor& player_actor = ents_[static_cast<size_t>(player)].actor;
+      const float push_x = player_actor.pad_step_x(), push_z = player_actor.pad_step_z();
+      const bool free = !push_target_inside_box(i, push_x, push_z) && push_step_ok(ent_state, push_x, push_z);
+      ent_state.pend = free && (std::fabs(push_x) > 1e-4f || std::fabs(push_z) > 1e-4f);
+      ent_state.pend_x = push_x;
+      ent_state.pend_z = push_z;
       fresh[static_cast<size_t>(i)] = 1;
     } else if (hit) {
       ent_state.pend = false;

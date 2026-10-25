@@ -283,6 +283,8 @@ void BattleView::tick_action() {
     }
     // The script has not reached this queue_attack yet (a window / delay before it).
     if (script_gated(queue_.front().front())) return;
+    // The field ring's shift after the last action runs to its end first.
+    if (!ring_settled()) return;
     begin_group();
     return;
   }

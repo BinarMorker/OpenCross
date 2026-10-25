@@ -245,6 +245,14 @@ void Mixer::trace_report(const char* why) {
   if (sfx_player_) sfx_player_->trace_report(why);
 }
 void Mixer::stop_sfx() { push({Cmd::StopSfx, nullptr, -1, 0, 0}); }
+void Mixer::set_sfx_instruments(std::shared_ptr<const InstrumentTable> table) {
+  const bool new_ram = table && table->ram() && (!sfx_instruments_ || sfx_instruments_->ram() != table->ram());
+  sfx_instruments_ = std::move(table);
+  if (!new_ram) return;
+  Cmd cmd{Cmd::SpuUpload, nullptr, -1, 0, 0};
+  cmd.ram = sfx_instruments_->ram();
+  push(std::move(cmd));
+}
 
 void Mixer::arm_level(float gain) {
   level_ = level_target_ = gain;
@@ -333,6 +341,10 @@ void Mixer::apply(const Cmd& cmd) {
       break;
     case Cmd::SfxFade:
       if (sfx_player_) sfx_player_->fade_sfx_volume(cmd.mask, cmd.pan, cmd.volume);
+      break;
+    case Cmd::SpuUpload:
+      if (!sfx_player_) sfx_player_ = std::make_unique<AkaoPlayer>(kRate, true);
+      sfx_player_->upload_ram(cmd.ram);
       break;
     case Cmd::Switch:
       if (!cmd.stream && !cmd.akao) break;

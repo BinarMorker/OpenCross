@@ -92,6 +92,9 @@ class AkaoPlayer {
   void set_reverb(int mode, int depth);
   int reverb_mode() const { return rev_.mode(); }
   int reverb_depth() const { return rev_depth_ >> 16; }
+  // A bank upload left this sound RAM image: the sounding SFX voices whose sample bytes changed play the new bytes from their
+  // current position on, and later notes read the image instead of an older table's copy (the SPU voice reads the RAM live).
+  void upload_ram(std::shared_ptr<const std::vector<u8>> ram);
   void stop();                                   // silence everything at once
   void set_master(float gain) { master_ = gain; }  // linear output gain
 
@@ -218,7 +221,10 @@ class AkaoPlayer {
     int chan = -1;
     u64 serial = 0;
     std::shared_ptr<const AdpcmSample> smp;
-    u32 counter = 0;   // SPU pitch counter: bits 4..11 = interpolation index, a carry out of bit 11 = next sample
+    // SFX voices: the sound RAM the sample was read from and its addresses, so an upload over it reaches the sounding voice.
+    std::shared_ptr<const std::vector<u8>> ram;
+    u32 spu_start = 0, spu_loop = 0;
+    u32 counter = 0;  // SPU pitch counter: bits 4..11 = interpolation index, a carry out of bit 11 = next sample
     size_t next = 1;   // index of the next source sample to enter the history
     s16 hist[4] = {};  // the four samples the Gaussian filter reads (oldest first; hist[3] = current)
     int reg = 0x1000;  // pitch register (0x1000 = one source sample per 44.1 kHz output sample)
@@ -258,6 +264,7 @@ class AkaoPlayer {
 
   u32 rate_;
   bool sfx_mode_;
+  std::shared_ptr<const std::vector<u8>> ram_;  // the last uploaded sound RAM image (SFX mode)
   float master_ = 1.0f;
   std::array<Channel, kMaxChannels> ch_{};
   std::array<Voice, kVoices> voice_{};

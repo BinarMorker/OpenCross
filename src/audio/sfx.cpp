@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <format>
+#include <string>
 
 #include "audio/byte_io.h"
 #include "audio/mixer.h"
@@ -36,6 +38,23 @@ std::vector<ByteSpan> split_yos(ByteSpan data, bool keep_empty) {
 // C6 volume 0..127 -> modifier (1.0 = 0x7F); pan 0..127 (-1 = the programme's own) -> the modifier the channel takes.
 float sfx_volume_modifier(int volume) { return std::clamp(float(volume) / 127.0f, 0.0f, 1.5f); }
 int sfx_pan_modifier(int pan) { return pan >= 0 ? (pan & 0x7F) : -1; }
+
+// Runs of slots 176..239 by the bank id their entry came from, '*' = its sample RAM was overwritten by a later upload
+// ("176-207:1* 208-223:201 ..."; diagnostics).
+std::string slot_banks(const InstrumentTable& table) {
+  std::string out;
+  auto key = [&](int slot) {
+    const Instrument* inst = table.peek(slot);
+    return inst ? std::format("{}{}", inst->bank_id, inst->overwritten ? "*" : "") : std::string("-");
+  };
+  int run_start = 176;
+  for (int slot = 177; slot <= 240; ++slot) {
+    if (slot <= 239 && key(slot) == key(run_start)) continue;
+    out += std::format("{}{}-{}:{}", out.empty() ? "" : " ", run_start, slot - 1, key(run_start));
+    run_start = slot;
+  }
+  return out;
+}
 }  // namespace
 
 bool SfxBank::load(const vfs::Vfs& fs) {
@@ -58,27 +77,23 @@ bool SfxBank::load(Bytes effect00, const Bytes& wave0000) {
   auto table = std::make_shared<InstrumentTable>();
   table->overlay(bank);
   base_ = table;
-  room_ = table;
+  table_ = table;
+  room_banks_.clear();
   effect_ = std::make_shared<AkaoCode>();
   effect_->data = std::move(effect00);
   frames_.clear();
   return true;
 }
 
-void SfxBank::clear_room() {
-  room_ = base_;
+// The room's banks overwrite their slots of the table the previous loaders left; a room without banks keeps that table, so a global
+// effect reading a room slot (208..223) plays the sample the last bank put there.
+void SfxBank::set_room(ByteSpan yos0, ByteSpan yos1, std::shared_ptr<const InstrumentTable> current) {
   frames_.clear();
-}
-
-void SfxBank::set_room(ByteSpan yos0, ByteSpan yos1) {
-  clear_room();
+  room_banks_.clear();
   if (!base_) return;
-  auto banks = split_yos(yos0, false);
-  if (!banks.empty()) {
-    auto table = std::make_shared<InstrumentTable>(*base_);
-    for (ByteSpan bank : banks) table->overlay(parse_bank(bank));
-    room_ = table;
-  }
+  for (ByteSpan bank : split_yos(yos0, false))
+    if (auto parsed = parse_bank(bank)) room_banks_.push_back(std::move(parsed));
+  reload_room(current ? std::move(current) : table_);
   for (ByteSpan frame : split_yos(yos1, true)) {
     if (frame.empty()) {
       frames_.push_back(nullptr);
@@ -90,6 +105,17 @@ void SfxBank::set_room(ByteSpan yos0, ByteSpan yos1) {
   }
 }
 
+void SfxBank::reload_room(std::shared_ptr<const InstrumentTable> current) {
+  if (!current) return;
+  if (room_banks_.empty()) {
+    table_ = std::move(current);
+    return;
+  }
+  auto table = std::make_shared<InstrumentTable>(*current);
+  for (const auto& bank : room_banks_) table->overlay(bank);
+  table_ = std::move(table);
+}
+
 int SfxBank::defined_ids() const {
   int count = 0;
   for (auto& pcs : pcs_) count += (pcs.first != 0xFFFF || pcs.second != 0xFFFF);
@@ -97,13 +123,13 @@ int SfxBank::defined_ids() const {
 }
 
 // The instrument table is one global array: the room's yos0 bank overwrites instruments 208..223 and the effect00 programs use
-// 208..211 (footsteps, etc.), so a global effect plays the current room's sample.
+// 208..211 (footsteps, etc.), so a global effect plays the sample of the last room that loaded a bank.
 bool SfxBank::make_global(int id, SfxProgram& out, std::vector<SfxProgram>* extra) const {
   if (!effect_ || id < 0 || id > 255) return false;
   const auto [pc_a, pc_b] = pcs_[size_t(id)];
   out = SfxProgram{};
   out.code = effect_;
-  out.table = room_ ? room_ : base_;
+  out.table = table_ ? table_ : base_;
   out.tag = "g" + std::to_string(id);
   for (u16 rel : {pc_a, pc_b})
     if (rel != 0xFFFF && 0x810u + rel < effect_->data.size()) out.pc[out.count++] = 0x810u + rel;
@@ -148,7 +174,7 @@ bool make_pointer_programs(const std::shared_ptr<const AkaoCode>& code, const st
 
 bool SfxBank::make_room(int frame, SfxProgram& out, std::vector<SfxProgram>* extra) const {
   if (frame < 0 || size_t(frame) >= frames_.size() || !frames_[size_t(frame)]) return false;
-  if (!make_pointer_programs(frames_[size_t(frame)], room_, out, extra)) return false;
+  if (!make_pointer_programs(frames_[size_t(frame)], table_, out, extra)) return false;
   out.tag = "r" + std::to_string(frame);
   if (extra)
     for (SfxProgram& program : *extra) program.tag = out.tag;
@@ -160,7 +186,17 @@ void AkaoSfx::stop_all() {
 }
 
 void AkaoSfx::set_room(ByteSpan yos0, ByteSpan yos1) {
-  if (bank_) bank_->set_room(yos0, yos1);
+  if (!bank_) return;
+  bank_->set_room(yos0, yos1, mixer_ ? mixer_->sfx_instruments() : nullptr);
+  if (mixer_) mixer_->set_sfx_instruments(bank_->table());
+}
+
+void AkaoSfx::resume_shared() {
+  const std::shared_ptr<const InstrumentTable>& shared = mixer_->sfx_instruments();
+  if (!shared || shared == bank_->table()) return;
+  bank_->reload_room(shared);
+  mixer_->set_sfx_instruments(bank_->table());
+  log::debug("sfx: room banks uploaded again over the table another loader left; slots 176..239 by bank id: {}", slot_banks(*bank_->table()));
 }
 
 void AkaoSfx::play_programs(SfxProgram& first, std::vector<SfxProgram>& extra, float volume, int pan, u32 mask) {
@@ -175,6 +211,7 @@ void AkaoSfx::play_programs(SfxProgram& first, std::vector<SfxProgram>& extra, f
 
 void AkaoSfx::play_room(int frame, int volume, int pan) {
   if (!mixer_ || !bank_) return;
+  resume_shared();
   SfxProgram program;
   std::vector<SfxProgram> extra;
   if (!bank_->make_room(frame, program, &extra)) return;
@@ -184,6 +221,7 @@ void AkaoSfx::play_room(int frame, int volume, int pan) {
 // The C6 pan is written into the channel for both forms (0x80 = centre by default).
 void AkaoSfx::play(int /*mode*/, int id, int volume, int pan, int) {
   if (!mixer_ || !bank_) return;
+  resume_shared();
   SfxProgram program;
   std::vector<SfxProgram> extra;
   if (!bank_->make_global(id, program, &extra)) return;
@@ -224,6 +262,7 @@ void AkaoSfx::play_field(int id, int volume, int pan, u32 mask) {
   else mixer_->evict_sfx();
   if (id < 0x100) room_masks_ |= mask;
   else room_masks_ &= ~mask;
+  resume_shared();
   SfxProgram program;
   std::vector<SfxProgram> extra;
   if (id < 0x100) {

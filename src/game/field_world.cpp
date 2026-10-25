@@ -334,12 +334,8 @@ bool FieldWorld::load_room(std::string_view name, int param) {
   room_models_.assign(scene->models.size(), nullptr);
   room_model_tried_.assign(scene->models.size(), false);
 
-  // Derived control yaw (used until the room script sets one with op 63): pad-up walks away from the camera.
-  {
-    float rx, rz, ux, uz;
-    view_.camera().ground_axes(rx, rz, ux, uz);
-    control_yaw_ = static_cast<int>(std::lround(std::atan2(ux, uz) * kUnitsPerRad)) & 0xFFF;
-  }
+  // The control yaw is 0 at every room load; only a room script's op 63 turns the pad.
+  control_yaw_ = 0;
   const RoomView::Limits lim = view_.default_limits();
   camera_.cam.limits = lim;
 

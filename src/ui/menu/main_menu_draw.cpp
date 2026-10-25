@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 
 #include "core/log.h"
 #include "platform/keymap.h"
@@ -53,6 +54,7 @@ MtStyle mt_style(u32 flags, int lang_index) {
     case 0x65: out.mul = kMul65[lang_index], out.slot = global_slot; break;
     case 0x66: out.mul = kMul66[lang_index], out.slot = global_slot; break;
     case 0x67: out.mul = kMul67[lang_index], out.slot = global_slot; break;
+    case 0x74: out.mul = lang_index == 3 ? 0.65f : 0.7f, out.slot = global_slot; break;
     case 0x76: out.mul = 0.62f, out.dx = kDx76[lang_index], out.dy = -2; break;
     case 0x77: out.mul = 0.62f, out.dy = lang_index != 5 ? 1.0f : -3.0f; break;
     case 0x78: out.mul = 0.54f, out.slot = font::kKb, out.dy = 2; break;
@@ -67,6 +69,14 @@ MtStyle mt_style(u32 flags, int lang_index) {
 }  // namespace mainmenu
 
 void MainMenu::Impl::emit(Cmd&& cmd) {
+  if (cmd.kind != Cmd::Text && cmd.w > 0 && (cmd.x < sprite_clip_left || cmd.x + cmd.w > sprite_clip_right)) {
+    const float left = std::max(cmd.x, sprite_clip_left), right = std::min(cmd.x + cmd.w, sprite_clip_right);
+    if (right <= left) return;
+    const float u_per_x = (cmd.u1 - cmd.u0) / cmd.w, u0 = cmd.u0;
+    cmd.u0 = u0 + (left - cmd.x) * u_per_x;
+    cmd.u1 = u0 + (right - cmd.x) * u_per_x;
+    cmd.x = left, cmd.w = right - left;
+  }
   cmd.x += gdx;
   cmds.push_back(std::move(cmd));
 }
@@ -153,11 +163,13 @@ void MainMenu::Impl::Frame(int frame, float x, float y, u32 colour, float* out_w
   if (!tex) return;
   if (Tex* wind = ps1_screen() ? texs.ps1("ps1:wind", [&] { return ps1::menutim(*vfs, "wind"); }) : nullptr) {
     const float gap = ps1::caption_gap_end(frame);
+    const ps1::EdgeGap foot = ps1::bottom_gap(frame);
     ps1::frame_pieces(
         [&](float dx, float dy, float dw, float dh, float sx, float sy, float sw, float sh) {
           Img(wind, dx, dy, dw, dh, sx / wind->w, sy / wind->h, (sx + sw) / wind->w, (sy + sh) / wind->h, colour);
         },
-        PX(x), PY(y), PX(w), PY(h), PX(1), PY(1), gap > 0 ? PX(8) : 0.0f, gap > 0 ? PX(gap - 8) : 0.0f);
+        PX(x), PY(y), PX(w), PY(h), PX(1), PY(1), gap > 0 ? PX(8) : 0.0f, gap > 0 ? PX(gap - 8) : 0.0f, PX(foot.start),
+        PX(foot.end - foot.start));
   } else {
     Img(tex, PX(x), PY(y), PX(w), PY(h), 0, 0, 1, 1, colour);
   }
@@ -213,6 +225,7 @@ const Tex* MainMenu::Impl::portrait(int character) {
 void MainMenu::Impl::build() {
   cmds.clear();
   audit_boxes.clear();
+  model_layer = 0;
   group(Centre);
   xscale = screen == MenuScreen::Save ? 2.0f : 2.5f;
   select_fonts();
@@ -228,6 +241,8 @@ void MainMenu::Impl::build() {
     case MenuScreen::Settings: build_settings(); break;
     case MenuScreen::Save: build_save(); break;
   }
+  cmds.insert(cmds.end(), std::make_move_iterator(key_caps.begin()), std::make_move_iterator(key_caps.end()));
+  key_caps.clear();
 }
 
 // Face of a font slot (kb / bn / ik); falls back to the label face.
@@ -269,6 +284,7 @@ void MainMenu::Impl::background() {
   } else {
     rect(-canvas_s, 0, kCanvasW + 2.0f * canvas_s, kCanvasH, rgb(60, 38, 18));
   }
+  model_layer = cmds.size();
   if (Tex* deco = texs.load("hd/menu/menutim/menutim_02.png")) {
     Img(deco, -140, 537.8f, 640, 662, 0, 0, 1, 1, rgb(160, 160, 176));
     Img(deco, 287, -300, 512, 529, 0, 0, 1, 1, rgb(160, 160, 176));
@@ -490,28 +506,32 @@ void MainMenu::Impl::pointer(float x, float y, bool left) {
 // i = {8, 9, 0xB, 0xA, 0x17, 0x18, 0x15, 0x16}[slot_index] (13 x 4 atlas: column i % 13, row (i / 13) * 2 + 1); keyboard mode swaps it for the key
 // cap of the action's first key (platform/keymap.h; ui/keyboard_<e f i g s j>.png, 16 x 7 cells, moved up 1; the pad glyph at
 // (0x10, 0x182 / 0x19A) is moved up 5). The slots are the PS1 pad functions, identity-mapped: 0 OK, 1 Cancel, 2 Square, 3 Triangle, 4 L1, 5 R1.
-// Classic art + Ps1ResMenus draws nothing: the PS1 sheet's own glyph frames are not decoded.
-void MainMenu::Impl::btn(float x, float y, int slot_index) {
-  if (ps1_screen()) return;
+// Classic art + Ps1ResMenus draws the disc's glyph, frame 0x7C + slot of the menu sheet. Glyphs go to `key_caps`, drawn last.
+void MainMenu::Impl::btn(float x, float y, int slot_index, u32 colour) {
+  const size_t first = cmds.size();
   static const int pad_i[8] = {8, 9, 0xB, 0xA, 0x17, 0x18, 0x15, 0x16};
   using platform::Action;
   static const Action kAction[6] = {Action::Ok, Action::Cancel, Action::Item, Action::Menu, Action::SelectLeft, Action::SelectRight};
   static const char* const atlas[6] = {"e", "f", "i", "g", "s", "j"};
   slot_index = std::clamp(slot_index, 0, 7);
-  if (kb_mode && slot_index < 6) {
+  if (ps1_screen()) {
+    const int frame = 0x7C + slot_index;
+    if (Tex* tex = texs.ps1("ps1:sheet" + std::to_string(frame), [&] { return ps1::sheet_frame(*vfs, frame); }))
+      Img(tex, PX(x - ps1::kSheetFrameOriginX), PY(y - ps1::kSheetFrameOriginY), PX(ps1::kSheetFrameW), PY(ps1::kSheetFrameH), 0, 0, 1, 1, colour);
+  } else if (kb_mode && slot_index < 6) {
     if (Tex* tex = texs.load(std::string("ui/keyboard_") + atlas[std::clamp(lang_index(), 0, 5)] + ".png")) {
       const int cell = platform::keyboard_cell(platform::action_vk(kAction[slot_index]));
       Img(tex, PX(x), PY(y - 1.0f), PX(24), PY(24), static_cast<float>(cell & 15) / 16.0f, static_cast<float>(cell >> 4) / 7.0f,
-          static_cast<float>((cell & 15) + 1) / 16.0f, static_cast<float>((cell >> 4) + 1) / 7.0f);
+          static_cast<float>((cell & 15) + 1) / 16.0f, static_cast<float>((cell >> 4) + 1) / 7.0f, colour);
     }
-    return;
-  }
-  if (Tex* tex = texs.load("ui/gamepad.png")) {
+  } else if (Tex* tex = texs.load("ui/gamepad.png")) {
     const int i = pad_i[slot_index], col = i % 13, row = (i / 13) * 2 + 1;
     const float dy = (x == 0x10 && (y == 0x182 || y == 0x19A)) ? -5.0f : 0.0f;
     Img(tex, PX(x), PY(y + dy), PX(24), PY(24), static_cast<float>(col) / 13.0f, static_cast<float>(row) / 4.0f,
-        static_cast<float>(col + 1) / 13.0f, static_cast<float>(row + 1) / 4.0f);
+        static_cast<float>(col + 1) / 13.0f, static_cast<float>(row + 1) / 4.0f, colour);
   }
+  key_caps.insert(key_caps.end(), std::make_move_iterator(cmds.begin() + static_cast<std::ptrdiff_t>(first)), std::make_move_iterator(cmds.end()));
+  cmds.resize(first);
 }
 
 void MainMenu::Impl::portrait_strip(int character, float x, u32 col) {
@@ -568,42 +588,61 @@ void MainMenu::Impl::draw_view(const render::Frame& frame, float vw, float vh, b
     zoom = cf.s, ox = cf.ox, oy = cf.oy;
   }
   build();
+  auto draw_cmds = [&](size_t first, size_t last) {
+    for (size_t i = first; i < last; ++i) {
+      const Cmd& cmd = cmds[i];
+      if (cmd.kind == Cmd::Text) {
+        text->draw(cmd.face, cmd.text, ox + cmd.x * zoom, oy + cmd.y * zoom, cmd.color, cmd.scale * zoom);
+      } else {
+        sprites->draw(cmd.set, ox + cmd.x * zoom, oy + cmd.y * zoom, cmd.w * zoom, cmd.h * zoom, cmd.u0, cmd.v0, cmd.u1, cmd.v1, cmd.color);
+      }
+    }
+  };
+  const bool with_model = model_view && model_wanted && screen == MenuScreen::Status;
+  const size_t split = with_model ? std::min(model_layer, cmds.size()) : cmds.size();
   sprites->begin(frame, vw, vh, resume);
   sprites->draw(texs.white_set(), 0, 0, vw, vh, 0, 0, 1, 1, rgb(0, 0, 0, 255));
-  for (const Cmd& cmd : cmds) {
-    if (cmd.kind == Cmd::Text) {
-      text->draw(cmd.face, cmd.text, ox + cmd.x * zoom, oy + cmd.y * zoom, cmd.color, cmd.scale * zoom);
-    } else {
-      sprites->draw(cmd.set, ox + cmd.x * zoom, oy + cmd.y * zoom, cmd.w * zoom, cmd.h * zoom, cmd.u0, cmd.v0, cmd.u1, cmd.v1, cmd.color);
-    }
-  }
+  draw_cmds(0, split);
   sprites->end();
-  if (text->audit_enabled()) {
-    text->audit_view(vw, vh);
-    for (const AuditBox& box : audit_boxes) text->audit_obstacle(ox + box.x * zoom, oy + box.y * zoom, box.w * zoom, box.h * zoom, box.label);
-  }
-  if (model_view && model_wanted && screen == MenuScreen::Status) {
+  if (with_model) {
     const auto now = std::chrono::steady_clock::now();
     float dt = model_clock.time_since_epoch().count() == 0 ? 0.0f : std::chrono::duration<float>(now - model_clock).count();
     model_clock = now;
     dt = std::min(dt, 0.1f);
-    model_yaw = std::fmod(model_yaw + 8.0f / 4096.0f * 30.0f * dt, 1.0f);
-    const save::SaveChar& ch = gs->slot.chars[static_cast<size_t>(cur_char())];
+    const int character = cur_char();
+    const save::SaveChar& ch = gs->slot.chars[static_cast<size_t>(character)];
     MenuModelSlot slot;
-    slot.char_id = cur_char();
-    slot.cx = ox + 344.0f * xscale * zoom;
-    slot.feet_y = oy + PY(371) * zoom;
-    slot.height = PY(262) * zoom;
-    slot.yaw_turns = model_yaw;
+    slot.char_id = character;
+    slot.model = model_number(character, kLastMenuModel);
+    slot.weapon_model = model_number(character, kLastWeaponModel);
+    slot.origin_x = ox, slot.origin_y = oy;
+    slot.unit_x = xscale * zoom, slot.unit_y = PY(1) * zoom;
+    slot.camera = model_cam;
+    slot.session = model_session;
     slot.hd = mode == ArtMode::Hd;
-    slot.low_hp = ch.cur_hp < ch.max_hp / 8 && (ch.status & 0x39) == 0;
-    slot.pose = model_pose;
-    if (const int weapon = gs->equipped(cur_char(), 0); weapon > 0 && rules && rules->tables)
+    slot.status = ch.status;
+    slot.tick = static_cast<u32>(model_frames / 2);
+    // The hurt pose replaces pose 0 below an eighth of the HP or with a status of mask 0x39.
+    const bool hurt = ch.cur_hp < ch.max_hp / 8 || (ch.status & 0x39) != 0;
+    slot.pose = hurt && model_pose == 0 ? 3 : model_pose;
+    if (const int weapon = gs->equipped(character, 0); weapon > 0 && rules && rules->tables)
       if (const data::GearRec* gear = rules->tables->gear_rec(weapon)) slot.weapon_part = gear->tier() & 0xF;
+    // Pierre's construct 3 (the Hero's Shield) shows only while he wears one.
+    constexpr int kPierre = 41, kHerosShield = 0xC1, kShieldConstruct = 3;
+    if (character == kPierre && gs->equipped(character, 2) != kHerosShield && gs->equipped(character, 3) != kHerosShield &&
+        gs->equipped(character, 4) != kHerosShield)
+      slot.hidden_meshes = 1u << kShieldConstruct;
     slot.dt = dt;
     model_view->draw(frame, vw, vh, slot);
+    sprites->begin(frame, vw, vh, true);
+    draw_cmds(split, cmds.size());
+    sprites->end();
   } else {
     model_clock = {};
+  }
+  if (text->audit_enabled()) {
+    text->audit_view(vw, vh);
+    for (const AuditBox& box : audit_boxes) text->audit_obstacle(ox + box.x * zoom, oy + box.y * zoom, box.w * zoom, box.h * zoom, box.label);
   }
   model_wanted = false;
 }

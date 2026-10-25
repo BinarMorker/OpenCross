@@ -345,7 +345,7 @@ int Vm::step(const Ctx& ctx, std::vector<Event>& out) {
     case 0x55: wr(arg(2), static_cast<int>(ctx.status_lo >> 16)); return 3;
     case 0x56: wr(arg(2), static_cast<int>(ctx.status_hi & 0xFFFF)); return 3;
     case 0x57: wr(arg(2), static_cast<int>(ctx.status_hi >> 16)); return 3;
-    case 0x58: wr(arg(2), 0); return 3;
+    case 0x58: wr(arg(2), ctx.attrib); return 3;
     case 0x63: wr(arg(2), ctx.monster ? 1 : 0); return 3;
     case 0x65: wr(arg(1), ctx.pose); return 2;
     case 0x67: wr(arg(1), ctx.model_num); return 2;

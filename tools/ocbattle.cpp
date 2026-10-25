@@ -2,8 +2,10 @@
 //   ocbattle tables                       counts and a few named rows (compare with tools/py/cc_tables.py)
 //   ocbattle sim <scene> [seed] [--auto]  play one battle with the auto policy and print the log
 //        [--party 0,1,2] [--star N] [--set char|char_w0..] [--quiet] [--brain scripted|random]  (default scripted)
+//        [--attack] [--field N]           weapon chains only (no element casts); battlefield N; ring changes print as `ring [..]`
 //   ocbattle pac-disasm <scene>           disassemble battle/event/evtNNN.pac (same text as cc_tables.py bscript dump)
-//   ocbattle pac-soak [turns]             run every scene's scripts in a dummy battle for N commands (default 40)
+//   ocbattle pac-soak [turns] [-v]        run every scene's scripts in a dummy battle for N commands (default 40)
+//        [--scene N | --from A --to B]    only these scenes; OC_SOAK_LIST=1 prints each scene's outcome
 //   ocbattle formula <name> <args...>     evaluate one formula; `ocbattle formula` lists them
 //   ocbattle fx-audit [--csv F] [--md F]  play every battle effect pack headless, per-pack status (tools/ocbattle_fx.cpp)
 //        [--rng lo|mid|hi|seed:N]         roll source for formulas with random terms (default mid)
@@ -718,10 +720,14 @@ int cmd_sim(const data::GameTables& tables, const vfs::Vfs& vfs, const std::vect
   std::string brain_name = "scripted";
   std::string party_from;
   int positional = 0;
+  bool attack_only = false;
+  int battlefield = -1;
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string& arg = args[i];
     if (arg == "--auto") continue;
     if (arg == "--quiet") quiet = true;
+    else if (arg == "--attack") attack_only = true;
+    else if (arg == "--field" && i + 1 < args.size()) battlefield = std::atoi(args[++i].c_str());
     else if (arg == "--brain" && i + 1 < args.size()) brain_name = args[++i];
     else if (arg == "--party-from" && i + 1 < args.size()) party_from = args[++i];
     else if (arg == "--party" && i + 1 < args.size()) party_ids = parse_ids(args[++i]);
@@ -754,13 +760,19 @@ int cmd_sim(const data::GameTables& tables, const vfs::Vfs& vfs, const std::vect
   else if (!quiet) print_party(party, star);
   BattleOptions opt;
   opt.growth.star = star;
+  opt.battlefield = battlefield;
   if (!battle.start(party, scene, opt)) {
     std::fprintf(stderr, "scene %d is invalid\n", scene);
     return 1;
   }
+  std::array<int, 3> shown_ring = battle.ring();
   auto flush = [&] {
     for (const auto& line : battle.drain_log())
       if (!quiet) std::printf("%s\n", ascii(line).c_str());
+    if (!quiet && battle.ring() != shown_ring) {
+      shown_ring = battle.ring();
+      std::printf("  ring [%s %s %s]\n", data::colour_name(shown_ring[0]), data::colour_name(shown_ring[1]), data::colour_name(shown_ring[2]));
+    }
   };
   flush();
   int turns = 0;
@@ -773,6 +785,20 @@ int cmd_sim(const data::GameTables& tables, const vfs::Vfs& vfs, const std::vect
       }
     if (pc < 0) break;
     Command command = auto_command(battle, pc);
+    if (attack_only && command.kind == Command::Kind::Element) {
+      command.kind = Command::Kind::Attack;
+      command.cell = command.target = -1;
+      int budget = battle.unit(pc).stamina;
+      constexpr int max_chain = 4;
+      for (int k = 0; k < max_chain; ++k) {
+        int strength = std::min(k, 2);
+        while (strength >= 0 && battle.chain_cost(strength, battle.unit(pc)) > budget) --strength;
+        if (strength < 0) break;
+        budget -= battle.chain_cost(strength, battle.unit(pc));
+        command.chain.push_back(strength);
+      }
+      if (command.chain.empty()) command.kind = Command::Kind::Defend;
+    }
     std::string why;
     if (!battle.apply(command, &why)) {
       std::fprintf(stderr, "auto policy produced an invalid command: %s\n", why.c_str());
@@ -918,15 +944,24 @@ int cmd_pac_disasm(const vfs::Vfs& vfs, const std::vector<std::string>& args) {
 }
 
 int cmd_pac_soak(const data::GameTables& tables, const vfs::Vfs& vfs, const std::vector<std::string>& args) {
-  const int turns = args.empty() || args[0] == "-v" ? 40 : std::atoi(args[0].c_str());
-  const bool verbose = !args.empty() && args.back() == "-v";
-  int started = 0, no_pac = 0, failed = 0, cmds = 0;
+  int turns = 40, from = 0, to = static_cast<int>(tables.scenes.size()) - 1;
+  bool verbose = false;
+  for (size_t i = 0; i < args.size(); ++i) {
+    const std::string& arg = args[i];
+    if (arg == "-v") verbose = true;
+    else if (arg == "--scene" && i + 1 < args.size()) from = to = std::atoi(args[++i].c_str());
+    else if (arg == "--from" && i + 1 < args.size()) from = std::atoi(args[++i].c_str());
+    else if (arg == "--to" && i + 1 < args.size()) to = std::atoi(args[++i].c_str());
+    else turns = std::atoi(arg.c_str());
+  }
+  int started = 0, no_pac = 0, failed = 0, cmds = 0, scenes = 0;
   u64 ops = 0;
   std::array<u64, 256> opc{};
   pac::ScriptedBrain::Stats tot;
   std::set<int> unimpl, invalid, fields;
   int ended[4] = {};
-  for (int scene = 0; scene < static_cast<int>(tables.scenes.size()); ++scene) {
+  for (int scene = std::max(0, from); scene <= to && scene < static_cast<int>(tables.scenes.size()); ++scene) {
+    ++scenes;
     try {
       GameRng rng(static_cast<u32>(scene) + 1, tables.rng_table);
       pac::ScriptedBrain brain(pac_loader(vfs));
@@ -989,8 +1024,7 @@ int cmd_pac_soak(const data::GameTables& tables, const vfs::Vfs& vfs, const std:
       ++failed;
     }
   }
-  std::printf("pac-soak: %zu scenes, %d battles started (%d without pac), %d commands, %d exceptions\n", tables.scenes.size(), started, no_pac,
-              cmds, failed);
+  std::printf("pac-soak: %d scenes, %d battles started (%d without pac), %d commands, %d exceptions\n", scenes, started, no_pac, cmds, failed);
   std::printf("  outcomes: victory %d wiped %d fled %d ongoing/other %d\n", ended[0], ended[1], ended[2], ended[3]);
   std::printf("  ops executed %llu; scripted turns %d (empty plans %d, no slot-2 fallbacks %d, timeouts %d, slot-4 reaction attacks %d)\n",
               static_cast<unsigned long long>(ops), tot.turns, tot.empty_plans, tot.fallbacks, tot.timeouts, tot.reaction_attacks);

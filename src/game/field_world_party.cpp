@@ -84,7 +84,10 @@ void FieldWorld::setup_npc(int ent, int model) {
   if (ent < 0 || ent >= static_cast<int>(ents_.size())) return;
   Ent& ent_state = ents_[static_cast<size_t>(ent)];
   ent_state.model = model;
-  if (auto handle = room_model(model)) ent_state.actor.set_model(handle);
+  if (auto handle = room_model(model)) {
+    ent_state.actor.set_model(handle);
+    if (!ent_state.actor.has_anim_seq()) ent_state.actor.stand_on_clip_zero();
+  }
   // SETUP_NPC and D1: solid; bit 21 marks the NPC class that attr 3 / 5 walls block.
   vm_.entity(ent).flags38 = (vm_.entity(ent).flags38 & ~0x4000u) | 0x200100;
 }

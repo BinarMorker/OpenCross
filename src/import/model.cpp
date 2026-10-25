@@ -841,7 +841,7 @@ Mesh parse_mesh(ByteSpan data, float tw, float th) {
     for (size_t k = 0; k < 3; ++k) skin.bind_pos[k] = static_cast<float>(static_cast<s16>(reader.at<u16>(vo + 8ull * i + 2 * k)));
     skin.local[0] = skin.bind_pos;
   }
-  std::map<std::tuple<u32, float, float, u32>, u32> dedupe;
+  std::map<std::tuple<u32, float, float, u32, u32>, u32> dedupe;
   u32 faces = 0;
   const u32 ng = reader.at<u32>(go);
   if (ng > 4096) fail("mesh group count");
@@ -878,15 +878,19 @@ Mesh parse_mesh(ByteSpan data, float tw, float th) {
         const u16 idx = reader.at<u16>(idx_pos + 2 * (rotated ? (k + 1) % 3 : k));
         if (idx >= nv) fail("mesh index out of range");
         float u = 0, v = 0;
+        std::array<u8, 3> rgb{128, 128, 128};
         if (tex) {
           u = (static_cast<float>(reader.at<u8>(rec + 4 * ncol + uv_off[k])) + 0.5f) / tw;
           v = (static_cast<float>(reader.at<u8>(rec + 4 * ncol + uv_off[k] + 1)) + 0.5f) / th;
+          // The texel is modulated by the packet colour: one per corner on a Gouraud face (GT3 / GT4), the face's own on FT3 / FT4.
+          const size_t colour = rec + 4 * (gour ? k : 0);
+          rgb = {reader.at<u8>(colour), reader.at<u8>(colour + 1), reader.at<u8>(colour + 2)};
         }
-        const auto key = std::make_tuple(static_cast<u32>(idx), u, v, mi);
+        const auto key = std::make_tuple(static_cast<u32>(idx), u, v, mi, static_cast<u32>(rgb[0] | rgb[1] << 8 | rgb[2] << 16));
         auto it = dedupe.find(key);
         if (it == dedupe.end()) {
           it = dedupe.emplace(key, static_cast<u32>(mesh.vertices.size())).first;
-          mesh.vertices.push_back({idx, {u, v}});
+          mesh.vertices.push_back({idx, {u, v}, rgb});
         }
         corner[k] = it->second;
       }

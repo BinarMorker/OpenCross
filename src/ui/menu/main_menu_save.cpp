@@ -109,9 +109,16 @@ void MainMenu::Impl::update_save(const Nav& nav) {
       }
       save_phase = 1;
       if (save_card == 0) {
-        // The newest file (Load: the auto-save when there is no other; Save: file 1).
-        const int newest = page ? page->newest() : 0;
-        page_cur = newest ? newest : load_mode ? 0 : 1;
+        // As the card grid: Load starts on the first used row (the auto-save when it exists), Save on the first savable row (file 1).
+        page_cur = 1;
+        if (load_mode) {
+          page_cur = 0;
+          for (int row = 0; row <= save::kOcFiles; ++row)
+            if (page_prev[static_cast<size_t>(row)].used) {
+              page_cur = row;
+              break;
+            }
+        }
         page_top = std::clamp(page_cur - save_layout::kPageRows / 2, 0, save::kOcFiles + 1 - save_layout::kPageRows);
         return;
       }

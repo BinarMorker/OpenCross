@@ -10,6 +10,7 @@ void BattleView::fx_spell_run_begin() {
 void BattleView::fx_spell_light_tick() {
   effects::ViewParams view;
   if (fx_) view = fx_view();
+  else fx_ambient_release();
   if (spell_.tick(fx_.get(), view, fx_lights_, fx_ambient_.scur, fx_lit_, tick_count_)) stage_scene_.set_spell_lights(spell_.set);
 }
 

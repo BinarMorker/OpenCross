@@ -16,6 +16,7 @@
 #include "audio/hca_stream.h"
 #include "audio/mixer.h"
 #include "audio/sab.h"
+#include "audio/sfx.h"
 
 using namespace oc;
 
@@ -427,6 +428,97 @@ void test_sfx_channels() {
   }
 }
 
+// A room yos0 subfile holding one bank: tag, size - 8, count 1, the block's start / end offsets relative to byte 8, the block.
+Bytes room_yos0(const Bytes& bank) {
+  Bytes bytes(20, 0);
+  std::memcpy(bytes.data(), "yos0", 4);
+  put32(bytes, 4, u32(bytes.size() + bank.size() - 8));
+  put32(bytes, 8, 1);
+  put32(bytes, 12, 12);
+  put32(bytes, 16, u32(12 + bank.size()));
+  bytes.insert(bytes.end(), bank.begin(), bank.end());
+  return bytes;
+}
+
+// tiny_bank() with its one instrument at `first`, uploaded to `spu`, its sample's data nibbles all `nibbles`.
+Bytes tiny_bank_at(u32 first, u32 spu, u8 nibbles) {
+  Bytes bytes = tiny_bank();
+  put32(bytes, 0x10, spu);
+  put32(bytes, 0x18, first);
+  for (size_t k = 2; k < 16; ++k) bytes[0x40 + 16 + k] = nibbles;
+  return bytes;
+}
+
+// The banks share one table and one sound RAM: a room's bank overwrites only its own slots of the table the earlier loaders left, and a
+// room without banks keeps it (after a room whose bank fills slot 208, a bankless room still plays that instrument there). A later upload
+// to the same RAM leaves an earlier slot's entry but makes it play the new bytes (208 keeps its bank id, decodes the bank at 209's
+// sample); wave0000's RAM elsewhere stays untouched. reload_room uploads the room's banks again over a table another loader published:
+// that loader's slot on the same RAM (176) keeps its entry and plays the room's bytes.
+void test_sfx_room_banks() {
+  Bytes effect00(0x820, 0);
+  std::memcpy(effect00.data(), "AKAO", 4);
+  for (size_t i = 0; i < 256; ++i) put32(effect00, 0x10 + i * 4, 0xFFFFFFFFu);
+  put32(effect00, 0x10, 0xFFFF0000u);
+  audio::SfxBank bank;
+  CHECK(bank.load(effect00, tiny_bank_at(0, 0x71100, 0x79)));
+  auto slots = [&](int index) { return bank.table()->peek(index); };
+  const audio::Instrument* wave0000 = slots(0);
+  CHECK(wave0000 != nullptr && slots(208) == nullptr);
+  bank.set_room(room_yos0(tiny_bank_at(208, 0x1100, 0x79)), {});
+  const audio::Instrument* room = slots(208);
+  CHECK(room != nullptr && slots(0) == wave0000);
+  bank.set_room({}, {});
+  CHECK(slots(208) == room && slots(0) == wave0000);
+  const std::shared_ptr<const audio::InstrumentTable> before = bank.table();
+  bank.set_room(room_yos0(tiny_bank_at(209, 0x1100, 0x17)), {});
+  const audio::Instrument* later = slots(209);
+  CHECK(later && later->sample && slots(0) == wave0000);
+  const audio::Instrument* reached = slots(208);
+  CHECK(reached && reached != room && reached->overwritten && reached->bank_id == room->bank_id && reached->start == room->start);
+  CHECK(reached && reached->sample && later && later->sample && reached->sample->pcm == later->sample->pcm && reached->sample->pcm != room->sample->pcm);
+  CHECK(before->peek(208) == room);
+  auto other = std::make_shared<audio::InstrumentTable>(*bank.table());
+  other->overlay(audio::parse_bank(tiny_bank_at(176, 0x1100, 0x35)));
+  bank.reload_room(other);
+  const audio::Instrument* kept = slots(176);
+  CHECK(kept && kept->overwritten && kept->sample && slots(209)->sample && kept->sample->pcm == slots(209)->sample->pcm);
+}
+
+// The SPU voice reads the sound RAM live: a held note on instrument 0 (uploaded at 0x1100) keeps sounding when a later bank for slot 1
+// is uploaded over the same RAM, and from then on plays the new bytes - the same output as a note started on those bytes; a note that
+// starts after the upload on the older table plays them too. Without the upload the note keeps the first bytes.
+void test_sfx_live_ram() {
+  auto first = std::make_shared<audio::InstrumentTable>();
+  first->overlay(audio::parse_bank(tiny_bank_at(0, 0x1100, 0x79)));
+  auto second = std::make_shared<audio::InstrumentTable>(*first);
+  second->overlay(audio::parse_bank(tiny_bank_at(1, 0x1100, 0x35)));
+  auto reference = std::make_shared<audio::InstrumentTable>();
+  reference->overlay(audio::parse_bank(tiny_bank_at(0, 0x1100, 0x35)));
+  auto code = std::make_shared<audio::AkaoCode>();
+  code->data = {0xA1, 0x00, 0xA5, 0x06, 0xA8, 0x7F, 0xF0, 0xC0, 0xA0};
+  constexpr u32 kFrames = 4096;
+  auto run = [&](const std::shared_ptr<const audio::InstrumentTable>& table, bool upload_midway, bool upload_first) {
+    audio::AkaoPlayer player(44100, true);
+    if (upload_first) player.upload_ram(second->ram());
+    player.start_program(code, 0, table);
+    std::vector<float> out(size_t(kFrames) * 2);
+    player.render(out.data(), kFrames);
+    if (upload_midway) player.upload_ram(second->ram());
+    player.render(out.data(), kFrames);
+    return out;
+  };
+  auto max_diff = [](const std::vector<float>& lhs, const std::vector<float>& rhs) {
+    float diff = 0;
+    for (size_t i = 200; i < lhs.size(); ++i) diff = std::max(diff, std::fabs(lhs[i] - rhs[i]));
+    return diff;
+  };
+  const std::vector<float> live = run(first, true, false), kept = run(first, false, false), after = run(first, false, true);
+  const std::vector<float> expected = run(reference, false, false);
+  CHECK(max_diff(live, expected) < 1e-4f);
+  CHECK(max_diff(after, expected) < 1e-4f);
+  CHECK(max_diff(kept, expected) > 1e-2f);
+}
+
 // Pitch is a property of the SPU model, not of the output rate: a 14-sample square (+7 x7, -7 x7 nibbles, low nibble first; the decoded
 // sample is 28 frames + the loop block again) played one octave above the base note (C6 = note 72 = base + 12, 192 ticks) sounds at
 // 2 * 44100 / 14 = 6300 Hz whether the player renders at 44.1 kHz or 48 kHz, measured by zero crossings over 0.1 .. 0.5 s.
@@ -581,6 +673,8 @@ int main() {
   test_sequence();
   test_akao_mixer();
   test_sfx_channels();
+  test_sfx_room_banks();
+  test_sfx_live_ram();
   test_battle_render();
   test_pitch_rate();
   test_sab();

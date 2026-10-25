@@ -69,6 +69,8 @@ class MainMenu {
   // A file was written since open(); the script reads it as variable 0x4C (SAVE_RESULT) for the ending's save prompt.
   bool saved() const;
   MenuScreen screen() const;
+  // The Status model's pad camera is on: L2 / R2 (F1 / F2, the triggers) belong to it, not to the slow / fast toggles.
+  bool camera_takes_triggers() const;
 
   // Save/Load > Load: the menu closes and this reports the chosen slot once (card block + decoded data); the host starts it like Continue
   // (GameFlow::load_slot). Load is always available, Save only when `can_save` of open() is set.
@@ -87,7 +89,8 @@ class MainMenu {
   void draw(const render::Frame& frame, float vw, float vh, bool resume = false);
 
   // Test / screenshot hook: jumps straight to a screen (member 0, cursors at the start). `variant` 1 = a sub-state
-  // (member pick on Main, element carried over the grid, equip candidate list, equipment view on Status), 2 = the grid options popup.
+  // (member pick on Main, element picked over the grid, equip candidate list, equipment view on Status); grid: 2 = the Auto Allocate
+  // question, 3 = the Remove All question, 4 = Reorder.
   // Main: 2 = the roster (Status pick), 3 = the roster's remove-all prompt (Equip pick). Save: 0 = Save/Load choice,
   // 1 = save grid, 2 = load grid, 3 = load confirm, 4 = choice with saving blocked.
   void debug_show(MenuScreen screen, int variant = 0);

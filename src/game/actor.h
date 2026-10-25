@@ -156,6 +156,10 @@ class Actor {
   // Cheats "No clip": tick() moves by the full step whatever the walk mesh says (the triangle follows when one is under the actor).
   bool noclip = false;
   void tick(const WalkMesh& walk, int heading, bool run);
+  // The pad velocity of the last tick() before the walk-mesh probe, wall slide and slope rebuild (0 when standing): what a pushed
+  // actor takes over.
+  float pad_step_x() const { return pad_step_[0]; }
+  float pad_step_z() const { return pad_step_[1]; }
 
   // ---- script-driven use -----------------------------------------------------------------------------------------
   // Call before anything moves the actor this tick.
@@ -163,6 +167,8 @@ class Actor {
   // The off-screen cull: the animation sequence, the clip playback and the head callback do not run.
   void set_culled(bool culled) { culled_ = culled; }
   bool culled() const { return culled_; }
+  // An inactive entity (SET_VISIBLE 0): no turn and no new clip; the clip it already plays keeps running.
+  void set_inactive(bool inactive) { inactive_ = inactive; }
   // Call once after everything moved the actor this tick (FieldWorld::sim_tick). Display smoothing: a script that steps an actor
   // (or turns its model) only every 2nd-4th tick (the circling child: 9-instruction UPDATE, one step per 2 ticks; the yaw chases
   // every 2nd tick) would otherwise be drawn as move-one-tick / stand-one-tick at a render rate above the tick rate. Position and
@@ -296,6 +302,9 @@ class Actor {
   u16 hidden_parts() const { return hidden_parts_; }
   u16 near_parts() const { return near_parts_; }
   void set_anim_slot(int slot, int script_anim) { if (slot >= 0 && slot < kSlotCount) slot_anim_[slot] = script_anim; }
+  // SETUP_NPC / D1 of a model without an animation-sequence table: the stand slot and the current id become 0, and clip 0 is
+  // started at once (looping, no blend). It stays until the entity walks or a script asks for another clip.
+  void stand_on_clip_zero();
   int anim_slot(int slot) const { return slot_anim_[slot]; }
 
   // Interpolated pose.
@@ -352,8 +361,8 @@ class Actor {
   bool tilt_world = false;
   // World-y added to the model translation only (ops B0 / B1); the shadow keeps the floor y.
   float y_offset = 0;
-  // Extra model rotation about X / Z (script ops 27 / 29 / AA), 4096/turn.
-  float pitch = 0, roll = 0;
+  // Extra model rotation about X / Y / Z (script ops 27 / 28 / 29 / AA), 4096/turn.
+  float pitch = 0, local_yaw = 0, roll = 0;
   // ENTITY_RGB colour multiplier (value / 128).
   float tint[3] = {1, 1, 1};
 
@@ -391,6 +400,8 @@ class Actor {
   render::Mat4 engine_matrix() const;
   float clip_length(int clip) const;
   void turn_step();
+  // The turn and the clip choice of step_visual: moving / requested / stand (idle) / stair slot, submitted when it changes.
+  void pick_clip(bool moving, bool run);
   void advance_anim(bool loop_current);
   // OC_POSE_TRACE=1: logs joints whose rotation turns > 60 deg between two ticks.
   void pose_trace();
@@ -432,6 +443,12 @@ class Actor {
   int fade_len_ = kCrossFadeTicks;
   // See set_culled.
   bool culled_ = false;
+  // See set_inactive.
+  bool inactive_ = false;
+  // See pad_step_x.
+  float pad_step_[2] = {0.0f, 0.0f};
+  // The playing clip loops (picked with it by pick_clip).
+  bool clip_loops_ = true;
   // Blend word bits 0x6000: 1 = exponential weight, else linear.
   int fade_curve_ = 0;
 

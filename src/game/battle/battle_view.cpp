@@ -505,6 +505,7 @@ void BattleView::bind_unit_model(int unit_id) {
   const int mon = unit.form >= 0 ? unit.form : unit.src_id;
   const std::string stem = unit_model_stem(unit);
   visual.weapon = nullptr, visual.weapon_attach = -1, visual.weapon_prism = false;
+  visual.attrib = unit.innate;
   visual.spawn_joints = 0;
   visual.tech_clips.clear();
   visual.pose.set_ext_clips(nullptr);

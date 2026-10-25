@@ -122,8 +122,8 @@ class BattleAudio {
   bool ducked_ = false;
   // The song this battle started (for the live BgmSource switch).
   int song_ = -1;
-  // base_: the instrument table before any battle bank (wave0000).
-  // live_tbl_: the one live table; every opened file's banks overlay it, nothing is restored.
+  // base_: wave0000 alone, the start table when no field published one (tools, the battle harness).
+  // live_tbl_: the one live table, from the field's; every opened file's banks overlay it, nothing is restored.
   std::shared_ptr<const audio::InstrumentTable> base_;
   std::shared_ptr<audio::InstrumentTable> live_tbl_;
   bool make_program(const std::string& tag, audio::SfxProgram& program, std::vector<audio::SfxProgram>* extra = nullptr) const;

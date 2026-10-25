@@ -94,10 +94,12 @@ struct SkinVertex {
 };
 
 // A renderable corner: a pool vertex plus the texture coordinate of the face that uses it. pool indexes Mesh::pool; uv is 0..1,
-// origin top-left, v down.
+// origin top-left, v down. rgb = the corner's packet colour (0x80 neutral): the textured Gouraud faces of the weapon meshes carry one per
+// corner and the GPU multiplies the texel by it.
 struct MeshVertex {
   u32 pool = 0;
   std::array<float, 2> uv{};
+  std::array<u8, 3> rgb{128, 128, 128};
 };
 
 // texture indexes ModelAsset::textures (-1 = flat colour); color is for flat-shaded faces.

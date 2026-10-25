@@ -68,6 +68,23 @@ int pitch_register(int note, const Instrument& in) {
   return int((pitch >> 8) & 0xFFFF);
 }
 
+// The bytes of the sample at `from` (through the later of its two end blocks) differ between the two sound RAM images.
+bool sample_changed(const std::vector<u8>& before, const std::vector<u8>& after, u32 from) {
+  const size_t end = std::min({size_t(std::max(sample_end(before, from), sample_end(after, from))), before.size(), after.size()});
+  return from < end && !std::equal(before.begin() + from, before.begin() + ptrdiff_t(end), after.begin() + from);
+}
+
+// The play position `next` of `old` in `live`, the same sample decoded from changed RAM: the decoded run of blocks (start through
+// the end block) lines up block for block; the loop body's copy after the end block counts as those blocks again. Past the live
+// sample's run the position goes to its loop copy, or its end.
+size_t remap_position(const AdpcmSample& old, const AdpcmSample& live, size_t next) {
+  size_t index = next;
+  if (old.loops && next >= size_t(old.loop_start)) index = size_t(old.loop_start) - (old.pcm.size() - size_t(old.loop_start)) + (next - size_t(old.loop_start));
+  const size_t run = live.loops ? size_t(live.loop_start) : live.pcm.size();
+  if (index < run) return index;
+  return live.loops ? size_t(live.loop_start) : live.pcm.size();
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------------- envelope
@@ -187,6 +204,22 @@ void AkaoPlayer::evict_sfx(u32 mask, bool untagged) {
     if (channel.protect) channel.stop_at_loop = true;
     else end_channel(channel);
   }
+}
+
+void AkaoPlayer::upload_ram(std::shared_ptr<const std::vector<u8>> ram) {
+  if (!ram) return;
+  for (Voice& voice : voice_) {
+    if (!voice.active || !voice.ram || voice.ram == ram) continue;
+    if (sample_changed(*voice.ram, *ram, voice.spu_start)) {
+      auto live = std::make_shared<AdpcmSample>(adpcm_decode_sample(*ram, voice.spu_start, voice.spu_loop));
+      if (!live->pcm.empty()) {
+        voice.next = remap_position(*voice.smp, *live, voice.next);
+        voice.smp = std::move(live);
+      }
+    }
+    voice.ram = ram;
+  }
+  ram_ = std::move(ram);
 }
 
 void AkaoPlayer::stop() {
@@ -591,6 +624,18 @@ void AkaoPlayer::note_on(Channel& channel, int key) {
   voice.chan = int(&channel - ch_.data());
   voice.serial = serial_++;
   voice.smp = in->sample;
+  if (sfx_mode_ && !channel.music && channel.table && channel.table->ram()) {
+    voice.spu_start = in->spu + in->start;
+    voice.spu_loop = in->spu + in->loop;
+    voice.ram = channel.table->ram();
+    if (ram_ && ram_ != voice.ram) {
+      if (sample_changed(*voice.ram, *ram_, voice.spu_start)) {
+        auto live = std::make_shared<AdpcmSample>(adpcm_decode_sample(*ram_, voice.spu_start, voice.spu_loop));
+        if (!live->pcm.empty()) voice.smp = std::move(live);
+      }
+      voice.ram = ram_;
+    }
+  }
   voice.env.key_on(a1, a2);
   voice.counter = 0;
   // Key on: the filter history before the first block is silence.

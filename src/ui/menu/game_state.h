@@ -140,7 +140,10 @@ class GameState {
   int cell_count(int character, int row, int col) const;
   bool row_has_open_cell(int character, int row) const;
   int first_open_row(int character) const;
+  // Copies of `id` in the member's unlocked cells.
   int copies_placed(int character, int id) const;
+  // The member may hold the element: its eligibility bit, and the innate colour for innate-only elements.
+  bool eligible(int character, int id) const;
 
   Why can_place(int character, int row, int col, int id) const;
   Why can_remove(int character, int row, int col) const;
@@ -149,7 +152,8 @@ class GameState {
   Why swap(int character, int row_a, int col_a, int row_b, int col_b);
   // Returns the number of cells emptied.
   int clear_all(int character);
-  // reset = recommended layout, else fill empty cells; returns cells placed.
+  // reset = recommended layout (the grid is cleared first), else fill the empty cells; returns cells placed. The party version clears
+  // every member first and fills row by row across the members, so they share the stock in that order.
   int auto_fill(int character, bool reset);
   int auto_fill_party(bool reset);
   // Re-packs the element stock.
@@ -179,8 +183,14 @@ class GameState {
  private:
   bool add_to(save::ItemStack* stacks, size_t count, int id);
   bool take_from(save::ItemStack* stacks, size_t count, int id);
+  // Auto-fill candidates: per element level (bucket level - 1), the stock slots holding an element of that level, in stock order.
+  using LevelBuckets = std::array<std::vector<int>, kRows>;
+  LevelBuckets level_buckets() const;
   int score(int character, int id) const;
-  int fill_cells(int character, bool fallback);
+  void sort_bucket(int character, std::vector<int>& bucket) const;
+  int pick_for_cell(int character, int row, bool fallback, const LevelBuckets& buckets) const;
+  int fill_row(int character, int row, bool fallback, LevelBuckets& buckets);
+  int auto_fill_members(const std::vector<int>& members, bool reset);
   const data::StatRec* rec(int character) const;
   int accessory_conflict(int character, int eslot, int item) const;
 };

@@ -216,10 +216,11 @@ void FieldWorld::step_visuals() {
     for (int k = 0; k < 3; ++k) ent_state.actor.axis_scale[k] = static_cast<float>(static_cast<s16>(script_ent.scale[k])) / 4096.0f;
     ent_state.actor.radius = ent_radius(i);
     ent_state.actor.height = ent_height(i);
-    // Op AD: the flag selects the single RotMatrix({pitch, yaw, roll}) path. Op B0 / B1: a model y offset. Ops 27 / 29 / AA: pitch / roll.
+    // Op AD: the flag selects the single RotMatrix({pitch, yaw, roll}) path. Op B0 / B1: a model y offset. Ops 27 / 28 / 29 / AA: pitch / model yaw / roll.
     ent_state.actor.tilt_world = (script_ent.flags270 & (1u << 5)) != 0;
     ent_state.actor.y_offset = static_cast<float>(static_cast<s16>(script_ent.v110));
     ent_state.actor.pitch = static_cast<float>(script_ent.axis[0]);
+    ent_state.actor.local_yaw = static_cast<float>(script_ent.axis[1]);
     ent_state.actor.roll = static_cast<float>(script_ent.axis[2]);
     ent_state.actor.anim_rate = script_ent.v10e ? static_cast<float>(static_cast<s16>(script_ent.v10e)) / 4096.0f : 1.0f;
     if (ent_state.attach_to >= 0 && ent_state.attach_to < static_cast<int>(ents_.size())) {
@@ -417,6 +418,9 @@ void FieldWorld::sim_tick() {
   step_cull();
   vm_.tick();
   step_watchdog();
+  // An entity the scripts left inactive (SET_VISIBLE 0) neither turns nor picks a clip this tick.
+  for (size_t i = 0; i < ents_.size(); ++i)
+    ents_[i].actor.set_inactive((vm_.entity(static_cast<int>(i)).flags38 & script::flag38::kInactive) != 0);
   step_motions();
   step_player();
   // step_status: poison / flu / damage-floor block (after the pad move of the tick).
@@ -628,7 +632,7 @@ std::string FieldWorld::describe_ent(int i) const {
     render::FieldCamera::Projected pr;
     const ActorPose& pose = ent_state.actor.current();
     if (view_.camera().project({pose.x, pose.y, pose.z}, pr))
-      text += std::format("face {:03X} yaw {:.0f} pitch {:.0f} roll {:.0f} scale {:.3f}/{:.3f}/{:.3f} proj {:.0f},{:.0f} cam-z {:.0f} (depth {:.0f}) (scroll {},{}) ", ent_state.actor.facing(), static_cast<double>(ent_state.actor.current().yaw), static_cast<double>(ent_state.actor.pitch), static_cast<double>(ent_state.actor.roll), static_cast<double>(ent_state.actor.scale * ent_state.actor.axis_scale[0]), static_cast<double>(ent_state.actor.scale * ent_state.actor.axis_scale[1]), static_cast<double>(ent_state.actor.scale * ent_state.actor.axis_scale[2]), static_cast<double>(pr.sx), static_cast<double>(pr.sy), static_cast<double>(pr.z), static_cast<double>(pr.z / 16.0f), view_.scroll_x(), view_.scroll_y());
+      text += std::format("face {:03X} yaw {:.0f} pitch {:.0f} local-yaw {:.0f} roll {:.0f} scale {:.3f}/{:.3f}/{:.3f} proj {:.0f},{:.0f} cam-z {:.0f} (depth {:.0f}) (scroll {},{}) ", ent_state.actor.facing(), static_cast<double>(ent_state.actor.current().yaw), static_cast<double>(ent_state.actor.pitch), static_cast<double>(ent_state.actor.local_yaw), static_cast<double>(ent_state.actor.roll), static_cast<double>(ent_state.actor.scale * ent_state.actor.axis_scale[0]), static_cast<double>(ent_state.actor.scale * ent_state.actor.axis_scale[1]), static_cast<double>(ent_state.actor.scale * ent_state.actor.axis_scale[2]), static_cast<double>(pr.sx), static_cast<double>(pr.sy), static_cast<double>(pr.z), static_cast<double>(pr.z / 16.0f), view_.scroll_x(), view_.scroll_y());
     else
       text += "proj behind-camera ";
   }

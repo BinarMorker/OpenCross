@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "platform/keymap.h"
 #include "ui/menu/menu_common.h"
 #include "ui/menu/ps1_art.h"
 #include "ui/ps1_font.h"
@@ -120,12 +121,54 @@ void MainMenu::Impl::update_roster(const Nav& nav) {
   }
 }
 
-// Confirm switches between the profile and the equipment; changing member starts again on the profile.
+// Confirm switches between the profile and the equipment; changing member starts again on the profile with the model's camera reset.
 void MainMenu::Impl::update_status(const Nav& nav) {
-  if (nav.l1) cycle_member(-1), profile = true;
-  if (nav.r1) cycle_member(1), profile = true;
+  if (nav.l1) cycle_member(-1), profile = true, restart_model();
+  if (nav.r1) cycle_member(1), profile = true, restart_model();
   if (nav.ok) profile = !profile;
   if (nav.cancel) back_to_main(0), sfx(6);
+}
+
+// The menu model of a character: its record byte 0x2D (the current model) up to `last`, else the character's own.
+int MainMenu::Impl::model_number(int character, int last) const {
+  const int model = gs->slot.chars[static_cast<size_t>(character)].model_id;
+  return model <= last ? model : character;
+}
+
+void MainMenu::Impl::restart_model() {
+  model_cam = MenuCamera{};
+  model_cam_manual = false;
+  model_pose = 0;
+  ++model_session;
+}
+
+// Once per menu-model tick (every second 60 Hz frame): the model turns by itself (+8), or with the pad camera the held directions move it - with L2 Left / Right / Up /
+// Down pan by 8 (at most 0xAA either way), with R2 Up / Down tilt by 16 (-0x200..0), otherwise Left / Right turn by 16 and Up / Down move the
+// camera in / out by 32. The distance stays between the model's own nearest distance and 0x960. Square (pad camera only) steps the pose
+// 0 -> 1 -> 2 -> 0, Triangle switches between the turning model and the pad camera.
+void MainMenu::Impl::step_model_camera(const Nav& nav, int ticks) {
+  constexpr int kAutoTurn = 8, kTurn = 16, kZoom = 32, kTilt = 16, kPan = 8, kPanLimit = 0xAA, kTiltLimit = -0x200, kFarthest = 0x960;
+  const int nearest = model_view->min_distance(model_number(cur_char(), kLastMenuModel));
+  auto axis = [](bool minus, bool plus, int step) { return (plus ? step : 0) - (minus ? step : 0); };
+  model_cam.distance = std::min(std::max(model_cam.distance, nearest), kFarthest);
+  const int steps = (model_frames + ticks) / 2 - model_frames / 2;
+  model_frames += ticks;
+  for (int tick = 0; tick < steps; ++tick) {
+    if (!model_cam_manual) {
+      model_cam.yaw += kAutoTurn;
+    } else if (nav.l2) {
+      model_cam.pan_x = std::clamp(model_cam.pan_x + axis(nav.held_left, nav.held_right, kPan), -kPanLimit, kPanLimit);
+      model_cam.pan_y = std::clamp(model_cam.pan_y + axis(nav.held_up, nav.held_down, kPan), -kPanLimit, kPanLimit);
+    } else if (nav.r2) {
+      model_cam.pitch = std::clamp(model_cam.pitch + axis(nav.held_up, nav.held_down, kTilt), kTiltLimit, 0);
+    } else {
+      model_cam.yaw += axis(nav.held_left, nav.held_right, kTurn);
+      model_cam.distance += axis(nav.held_up, nav.held_down, kZoom);
+    }
+    model_cam.distance = std::min(std::max(model_cam.distance, nearest), kFarthest);
+  }
+  if (nav.sq && model_cam_manual) model_pose = (model_pose + 1) % 3;
+  if (nav.tri) model_cam_manual = !model_cam_manual;
 }
 
 void MainMenu::Impl::update_choice(const Nav& nav) {
@@ -375,7 +418,7 @@ void MainMenu::Impl::status_panel(int character, float panel_x, float panel_y) {
 }
 
 // ---- status: panel (40, 42), equipment frames below it, title + bottom bar, member-switch glyphs. The PS1 draws a live 3D model on
-// the right standing on the parchment with no panel and no ground shadow (the host's MenuModelView draws it after the sprite pass);
+// the right standing on the parchment with no panel, casting a flat floor shadow (the host's MenuModelView draws it after the sprite pass);
 // without one the member portrait stands in for it. This screen sits 2 PS1 px left of the other screens' coordinates.
 // Profile of a character (ome.txt): up to 7 lines, keyed by the menu model the character wears (form byte up to 0x31, e.g. Serge's
 // cat form or Pip's forms), else by the character id.
@@ -425,8 +468,10 @@ void MainMenu::Impl::build_status() {
       if (id > 0) HL(80.0f, y, item_name(id), kName, 0.39f);
     }
   }
-  if (model_view) model_wanted = true;
-  else {
+  if (model_view) {
+    model_wanted = true;
+    if (model_cam_manual) camera_legend();
+  } else {
     group(Right);
     portrait_strip(character, 388.0f, kWhite);
     group(Left);
@@ -437,6 +482,125 @@ void MainMenu::Impl::build_status() {
   btn(0x1C9 - 2, 0x172, 5);
   group(Left);
   bar_and_title(0, true, -1.7f);
+}
+
+// The pad camera's legend (sheet frame 1 at (0x1D6, 0x32) and the L2 / R2 sprites 0xB8 / 0xB9 at (0x1BE, 0x4A) / (0x1BE, 0x53)). PS1 screens
+// draw those disc frames. Otherwise the HD legend: menutim camera.png on the frame's camera part (-120, -28, 24 x 24) and four text lines
+// from cmnmes, {Button..} = a square pad glyph or key cap: "{Up}{Down}: Zoom In/Out" and "{Left}{Right}: Rotate" from the frame's part
+// x - 42, the L2 / R2 combinations right-aligned against ": Shift" / ": Tilt" at part x - 20 (French 29 px further left), one glyph height
+// per line.
+void MainMenu::Impl::camera_legend() {
+  constexpr float kFrameX = 0x1D6, kFrameY = 0x32, kComboX = 0x1BE;
+  group(Right);
+  if (ps1_screen()) {
+    const struct {
+      int frame;
+      float x, y;
+    } kSprites[3] = {{1, kFrameX, kFrameY}, {0xB8, kComboX, 0x4A}, {0xB9, kComboX, 0x53}};
+    for (const auto& sprite : kSprites)
+      if (Tex* tex = texs.ps1("ps1:sheet" + std::to_string(sprite.frame), [&] { return ps1::sheet_frame(*vfs, sprite.frame); }))
+        Img(tex, PX(sprite.x - ps1::kSheetFrameOriginX), PY(sprite.y - ps1::kSheetFrameOriginY), PX(ps1::kSheetFrameW), PY(ps1::kSheetFrameH));
+    group(Left);
+    return;
+  }
+  // A glyph is a square of 12 PS1 columns (14 rows); the lines are one glyph apart.
+  constexpr float kGlyph = 12.0f, kGlyphH = 14.0f, kGlyphToText = 3.2f, kTextToGlyph = -1.4f, kLineTop = 46.6f, kCapDrop = 4.2f;
+  constexpr float kGlyphLead = 2.4f, kLabelInk = 1.3f, kTextScale = 0.23f;
+  // A key cap is drawn smaller than the cell and lower than a pad glyph.
+  constexpr float kKeyCapDx = 1.2f, kKeyCapDy = 1.4f, kKeyCapW = 10.4f, kKeyCapH = 11.7f;
+  const float shift_x = lang == import::Lang::Fr ? -29.0f : 0.0f;
+  if (Tex* camera = texs.load("hd/menu/menutim/camera.png")) Img(camera, PX(kFrameX - 120 + shift_x), PY(kFrameY - 28), PX(24), PY(24));
+  using platform::Action;
+  struct Piece {
+    bool glyph = false;
+    Action action = Action::Up;
+    std::u32string text;
+  };
+  const render::FaceId face = slot_face(mt_style(3, lang_index()).slot);
+  auto pieces = [&](const std::string& row) {
+    static const struct {
+      std::string_view name;
+      Action action;
+    } kTokens[6] = {{"ButtonUp", Action::Up},       {"ButtonDown", Action::Down},     {"ButtonLeft", Action::Left},
+                    {"ButtonRight", Action::Right}, {"ButtonL2", Action::SlowSpeed}, {"ButtonR2", Action::FastSpeed}};
+    std::vector<Piece> out;
+    std::string text_run;
+    auto flush = [&] {
+      if (text_run.find_first_not_of(' ') != std::string::npos) out.push_back({false, Action::Up, utf32(text_run)});
+      text_run.clear();
+    };
+    for (size_t i = 0; i < row.size(); ++i) {
+      const size_t close = row[i] == '{' ? row.find('}', i) : std::string::npos;
+      if (close == std::string::npos) {
+        text_run += row[i];
+        continue;
+      }
+      flush();
+      const std::string_view name(row.data() + i + 1, close - i - 1);
+      for (const auto& token : kTokens)
+        if (token.name == name) out.push_back({true, token.action, {}});
+      i = close;
+    }
+    flush();
+    for (Piece& piece : out) {
+      if (piece.glyph) continue;
+      const size_t first = piece.text.find_first_not_of(U' ');
+      piece.text = piece.text.substr(first);
+    }
+    return out;
+  };
+  auto text_width = [&](const std::u32string& str) {
+    text->prepare(face, str);
+    return text->measure(face, str, kTextScale) / xscale;
+  };
+  auto width = [&](const std::vector<Piece>& line) {
+    float total = 0;
+    for (size_t i = 0; i < line.size(); ++i)
+      total += line[i].glyph ? kGlyph : kGlyphToText + text_width(line[i].text) + (i + 1 < line.size() ? kTextToGlyph : 0.0f);
+    return total;
+  };
+  auto glyph = [&](Action action, float x, float y) {
+    if (kb_mode) {
+      if (Tex* keys = texs.load(std::string("ui/keyboard_") + "efigsj"[std::clamp(lang_index(), 0, 5)] + ".png")) {
+        const int cell = platform::keyboard_cell(platform::action_vk(action));
+        Img(keys, PX(x + kKeyCapDx), PY(y + kKeyCapDy), PX(kKeyCapW), PY(kKeyCapH), static_cast<float>(cell & 15) / 16.0f, static_cast<float>(cell >> 4) / 7.0f,
+            static_cast<float>((cell & 15) + 1) / 16.0f, static_cast<float>((cell >> 4) + 1) / 7.0f);
+      }
+      return;
+    }
+    // ui/gamepad.png cells (13 x 4, the plain rows): d-pad up 0, left 1, right 2, down 3; LT 21, RT 22.
+    const int index = action == Action::Up ? 0 : action == Action::Left ? 1 : action == Action::Right ? 2 : action == Action::Down ? 3
+                      : action == Action::SlowSpeed ? 21 : 22;
+    if (Tex* pad = texs.load("ui/gamepad.png")) {
+      const int col = index % 13, row = (index / 13) * 2 + 1;
+      Img(pad, PX(x), PY(y), PX(kGlyph), PY(kGlyphH), static_cast<float>(col) / 13.0f, static_cast<float>(row) / 4.0f,
+          static_cast<float>(col + 1) / 13.0f, static_cast<float>(row + 1) / 4.0f);
+    }
+  };
+  auto draw_line = [&](const std::vector<Piece>& line, float pen, int index) {
+    const float top = kLineTop + kGlyphH * static_cast<float>(index);
+    for (size_t i = 0; i < line.size(); ++i) {
+      if (line[i].glyph) {
+        glyph(line[i].action, pen, top);
+        pen += kGlyph;
+        continue;
+      }
+      HT(face, pen + kGlyphToText, top + kCapDrop, line[i].text, kText, kTextScale);
+      pen += kGlyphToText + text_width(line[i].text) + kTextToGlyph;
+    }
+  };
+  const float left = kFrameX - 42 - kGlyphLead + shift_x, label = kFrameX - 20 + kLabelInk - kGlyphToText + shift_x;
+  const float combo_end = kComboX + kGlyphLead + shift_x;
+  draw_line(pieces(cm("上下：Ｚｏｏｍ")), left, 0);
+  draw_line(pieces(cm("左右：回転")), left, 1);
+  const char* const kCombo[2] = {"＋Ｌ２ボタン", "＋Ｒ２ボタン"};
+  const char* const kLabel[2] = {"：Ｓｈｉｆｔ", "：Ｔｉｌｔ"};
+  for (int k = 0; k < 2; ++k) {
+    const std::vector<Piece> combo = pieces(cm(kCombo[k]));
+    draw_line(combo, combo_end - width(combo), 2 + k);
+    draw_line(pieces(cm(kLabel[k])), label, 2 + k);
+  }
+  group(Left);
 }
 
 }  // namespace oc::ui

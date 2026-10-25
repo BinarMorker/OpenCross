@@ -275,6 +275,9 @@ class BattleView {
     int weapon_attach = -1;
     // A prism weapon (tier byte 5) loaded at battle start: drawn under three turning coloured lights. A later model swap draws it plain.
     bool weapon_prism = false;
+    // The colour byte of the unit's control block (anmseq op 0x58): the innate as of the last model build, rewritten by Vary Innate only. A
+    // script's own innate write (Time Devourer's phases) and Pip's new form colour before its model swap leave it as it was.
+    u8 attrib = 0;
     // The clips of an effect pack's type-0x19 entry ('tech' / 'tec1'..: a tech's own caster animation) hung on this unit as its external
     // clip set (SetAnim 0x80 + k) while the pack runs; dropped at the pack end (fx_drop_clip_packs).
     std::vector<assets::AnimationClip> tech_clips;
@@ -722,6 +725,11 @@ class BattleView {
   void build_message_window(const std::vector<std::pair<std::u32string, u32>>& lines);
   void load_hud_art(const vfs::Vfs& vfs);
   void rebuild_ring();
+  // The field ring of the presented action (the rules run ahead of the replay) and the cell shift that walks the drawn ring toward it.
+  std::array<int, 3> presented_ring() const;
+  void step_ring();
+  // The drawn ring has reached the presented ring: the next action group waits for the shift.
+  bool ring_settled() const;
   void build_party_panels();
   void build_field_ring();
   void replay(const render::Frame& frame, const render::Letterbox& lb, float alpha);
@@ -942,7 +950,15 @@ class BattleView {
   std::array<Tex, kHCount> hud_;
   // 12 cell masks, 208x112 each (elementfield/a01..a12.bmp).
   std::vector<u8> ring_masks_;
-  std::array<int, 3> ring_key_{-2, -2, -2};
+  // The drawn ring: 12 cells, 4 per slot (oldest slot first); ring_feed_ holds the cells still to shift in at the newest end, ring_tick_ the
+  // tick of the last shift.
+  std::array<int, 12> ring_cells_{};
+  std::array<int, 12> ring_feed_{};
+  int ring_feed_count_ = 0, ring_tick_ = 0;
+  bool ring_cells_set_ = false;
+  // An action presented since the last shift repainted the whole ring: the next shift feeds all 12 cells.
+  bool ring_repaint_seen_ = false;
+  std::array<int, 12> ring_key_{-2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2};
   // Damage digit ink ranges in battle_33.tim (HD px) + the "miss!" word as entry 10.
   std::vector<std::pair<int, int>> digit_x_;
   // battle_08_93: the item-like (record type 5) cast-header plate (120 x 16).
@@ -1119,12 +1135,15 @@ class BattleView {
     bool ramping = false;
     // [Enhancements] Lighting: the same ramp as a stage multiplier (/ 128). Neutral (128) until a pack's op 0x65 first runs: the PS1 back
     // colour starts at 0 = "no pack lighting", which must not black the stage out, so the first ramp starts from 128 instead of 0. Only op
-    // 0x65 moves it (not the anmseq 0x5E flash).
+    // 0x65 moves it (not the anmseq 0x5E flash). Packs that end on a dark back colour (Fire Pillar, Magma Burst) never ramp it back: once
+    // no effect run is live the multiplier eases to neutral, and every battle starts neutral.
     bool touched = false;
     float scur[3]{128, 128, 128}, sfrom[3]{128, 128, 128}, sto[3]{128, 128, 128};
   } fx_ambient_;
   void fx_ambient_set(int r, int g, int b, int ticks);
   void fx_ambient_tick();
+  void fx_ambient_release();
+  void fx_ambient_stage_reset();
   void fx_spell_run_begin();
   // [Enhancements] SpellLights (battle_view_fx_lights.cpp).
   void fx_spell_light_tick();

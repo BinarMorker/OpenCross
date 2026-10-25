@@ -151,9 +151,7 @@ DamageOut element_damage(Rng& rng, const ElementIn& in) {
       if (in.shield_colour == kOpp[static_cast<size_t>(elem_colour)]) effect = effect * 120 / 100;
       else if (in.shield_colour == elem_colour) effect = effect * 80 / 100;
     }
-    if (in.target_absorbs_own && in.target_colour >= 0 && elem_colour >= 0 && elem_colour < 6 &&
-        kOpp[static_cast<size_t>(in.target_colour)] == elem_colour)
-      effect = effect * 150 / 100;
+    if (in.armour_boost_colour >= 0 && elem_colour == in.armour_boost_colour) effect = effect * 150 / 100;
   }
   int dmg = std::max(0, effect * (100 + variance_roll) / 100);
   if (in.opposite_colour) dmg = dmg * 300 / 200;

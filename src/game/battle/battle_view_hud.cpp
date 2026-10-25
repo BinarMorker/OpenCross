@@ -224,11 +224,64 @@ void BattleView::load_hud_art(const vfs::Vfs& vfs) {
   }
 }
 
-// The field ring: 12 cells (3 slots x 4) filled with the slot's colour at alpha 0x80 like RDE's 52x28 composite (PS1 rect (7,10)).
+// The ring the HUD walks toward: the one before the action being presented (or the next queued one), else the rules' ring once the replay has
+// caught up.
+std::array<int, 3> BattleView::presented_ring() const {
+  if (act_.phase != Act::Phase::None && !act_.ev.empty()) return act_.ev[std::min(act_.hit, act_.ev.size() - 1)].ring;
+  if (!queue_.empty() && !queue_.front().empty()) return queue_.front().front().ring;
+  return battle_->ring();
+}
+
+// The drawn ring is a 12-cell queue, 4 cells per slot. When the presented ring changes, new cells enter at the newest end one per 2 ticks
+// while the oldest leave: all 12 after a repaint, else the fewest whole slots that reach the new ring (4 for a cast's colour). The intro and a
+// new battle set the cells at once.
+void BattleView::step_ring() {
+  const std::array<int, 3> target = presented_ring();
+  std::array<int, 12> want{};
+  for (int cell = 0; cell < 12; ++cell) want[static_cast<size_t>(cell)] = target[static_cast<size_t>(cell / 4)];
+  if (!ring_cells_set_ || ui_ == Ui::Intro) {
+    ring_cells_ = want;
+    ring_cells_set_ = true;
+    ring_feed_count_ = 0;
+    ring_tick_ = tick_count_;
+    ring_repaint_seen_ = false;
+    return;
+  }
+  if (act_.phase != Act::Phase::None)
+    for (const battle::ActionEvent& event : act_.ev) ring_repaint_seen_ = ring_repaint_seen_ || event.ring_repaint;
+  if (ring_feed_count_ == 0 && ring_cells_ != want) {
+    int shift = 4;
+    if (ring_repaint_seen_) shift = 12;
+    for (; shift < 12; shift += 4)
+      if (std::equal(ring_cells_.begin() + shift, ring_cells_.end(), want.begin())) break;
+    ring_feed_count_ = shift;
+    std::copy(want.end() - shift, want.end(), ring_feed_.begin());
+    ring_tick_ = tick_count_ - 2;
+    ring_repaint_seen_ = false;  } else if (ring_feed_count_ == 0 && act_.phase == Act::Phase::None) {
+    ring_repaint_seen_ = false;
+  }
+  while (ring_feed_count_ > 0 && tick_count_ - ring_tick_ >= 2) {
+    std::copy(ring_cells_.begin() + 1, ring_cells_.end(), ring_cells_.begin());
+    ring_cells_[11] = ring_feed_[0];
+    std::copy(ring_feed_.begin() + 1, ring_feed_.end(), ring_feed_.begin());
+    --ring_feed_count_;
+    ring_tick_ += 2;
+  }
+}
+
+bool BattleView::ring_settled() const {
+  if (!ring_cells_set_) return true;
+  if (ring_feed_count_ > 0) return false;
+  const std::array<int, 3> target = presented_ring();
+  for (int cell = 0; cell < 12; ++cell)
+    if (ring_cells_[static_cast<size_t>(cell)] != target[static_cast<size_t>(cell / 4)]) return false;
+  return true;
+}
+
+// The field ring: 12 cells filled with their colour at alpha 0x80 like RDE's 52x28 composite (PS1 rect (7,10)).
 void BattleView::rebuild_ring() {
-  const std::array<int, 3>& ring = battle_->ring();
-  if (ring == ring_key_) return;
-  ring_key_ = ring;
+  if (ring_cells_ == ring_key_) return;
+  ring_key_ = ring_cells_;
   Tex& ring_tex = hud_[kHRing];
   ring_tex.set = {};
   ring_tex.tex.destroy();
@@ -240,7 +293,7 @@ void BattleView::rebuild_ring() {
   std::vector<u8> px(208 * 112 * 4, 0);
   bool any = false;
   for (int cell = 0; cell < 12; ++cell) {
-    const int colour = ring[static_cast<size_t>(cell / 4)];
+    const int colour = ring_cells_[static_cast<size_t>(cell)];
     const u8* mask = &ring_masks_[static_cast<size_t>(cell) * 208 * 112];
     if (colour < 0 || colour >= 6) {
       if (!any) continue;
@@ -438,6 +491,7 @@ void BattleView::build_message_window(const std::vector<std::pair<std::u32string
 void BattleView::build_hud() {
   ops_.clear();
   const bool intro = ui_ == Ui::Intro;
+  step_ring();
 
   // The whole HUD disappears the moment the party runs away and stays off through the settle frames after the run act.
   const bool running = act_.phase == Act::Phase::Run || finish_ == Finish::Fled || battle_->outcome() == battle::Outcome::Fled;

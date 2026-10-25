@@ -197,6 +197,34 @@ void test_autofill() {
   CHECK(game_state.auto_fill(0, true) == 5);
 }
 
+void test_autofill_order() {
+  Fixture fixture;
+  GameState& game_state = fixture.gs;
+  // Three level-1 elements in stock order 1, 0x10, 0x11; only 0x11 has a bonus. The exchange sort moves 0x11 to the front by swapping
+  // it with 1, so after it is placed 0x10 comes before 1.
+  fixture.el(0x10, 1, 0x80, 0x77);
+  fixture.el(0x11, 1, 0x80, 0x77);
+  for (int id : {1, 0x10, 0x11}) fixture.rules.pg[static_cast<size_t>(id)].raw[0xC] = fixture.rules.pg[static_cast<size_t>(id)].raw[0xD] = 0;
+  fixture.rules.pg[0x11].raw[0xC] = 5;
+  fixture.stock(1, 1);
+  fixture.stock(0x10, 1);
+  fixture.stock(0x11, 1);
+  CHECK(game_state.auto_fill(0, true) == 3);
+  CHECK(game_state.cell_element(0, 0, 2) == 0x11 && game_state.cell_element(0, 0, 3) == 0x10 && game_state.cell_element(0, 0, 4) == 1);
+
+  // Party: member 0 has only a level-2 cell, member 1 only a level-1 cell, one level-1 element. The exact-level pass runs for every
+  // member before the fallback pass, so member 1's own row wins it; member 0 alone takes it into its level-2 cell by the fallback.
+  Fixture party_fixture;
+  GameState& party_state = party_fixture.gs;
+  party_state.slot.chars[0].unlocked = {0, 0x04, 0, 0, 0, 0, 0, 0};
+  party_state.slot.chars[1].unlocked = {0x04, 0, 0, 0, 0, 0, 0, 0};
+  party_fixture.stock(1, 1);
+  CHECK(party_state.auto_fill_party(true) == 1);
+  CHECK(party_state.cell_element(1, 0, 2) == 1 && party_state.cell_element(0, 1, 2) == 0);
+  party_state.clear_all(1);
+  CHECK(party_state.auto_fill(0, false) == 1 && party_state.cell_element(0, 1, 2) == 1);
+}
+
 void test_sort() {
   Fixture fixture;
   GameState& game_state = fixture.gs;
@@ -348,6 +376,8 @@ void test_ps1_art() {
     CHECK(std::abs(toward - angle) <= 1 || std::abs(std::abs(toward - angle) - 4096) <= 1);
   }
   // Caption notch table (the main menu / shop draw the disc's wind pieces in classic art, with the same gaps as the RDE shapes).
+  // The element list frame's bottom edge is open for the Reorder prompt.
+  CHECK(ps1::bottom_gap(53).start == 130 && ps1::bottom_gap(53).end == 228 && ps1::bottom_gap(56).end == 0);
   CHECK(ps1::caption_gap_end(49) == 79 && ps1::caption_gap_end(64) == 61 && ps1::caption_gap_end(82) == 48 && ps1::caption_gap_end(7) == 0);
   CHECK(std::string(ps1::face_name(0)) == "seljyu" && std::string(ps1::face_name(1)) == "kid" && ps1::face_name(50) == nullptr);
 }
@@ -357,6 +387,7 @@ int main() {
   test_ps1_art();
   test_grid();
   test_autofill();
+  test_autofill_order();
   test_sort();
   test_equip();
   test_use_and_options();

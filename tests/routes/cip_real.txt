@@ -7,7 +7,7 @@
 - load alu_a03i 0
 - wait 90
 - assert anim 5 2
-- walk -21 404 20 900
+- walk -60 404 20 900
 - key down up
 - wait 30
 - key up up

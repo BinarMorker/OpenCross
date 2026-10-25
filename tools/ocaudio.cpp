@@ -4,7 +4,7 @@
 //   ocaudio [-g <game dir>] render-seq <music NNN> <out.wav> [seconds] [rate]   original AKAO music through our sequencer
 //   ocaudio [-g <game dir>] play-seq <music NNN> [seconds]
 //   ocaudio [-g <game dir>] render-sfx <sfx id> <out.wav> [seconds] [rate] [room]   (rate default 44100 = the SPU rate; 48000 = the mixer;
-//     room = the room whose yos0 bank overlays instruments 208..223)
+//     room = the room whose yos0 bank overlays instruments 208..223; battle:<room> = that room entered again after a battle)
 //   ocaudio [-g <game dir>] sfx-pitch | sfx-bytes <id> | room-sfx <room> | banks   pitch-register audit against the retail formula
 //   ocaudio [-g <game dir>] play-sfx <sfx id> [seconds]
 // The game dir defaults to $OPENCROSS_GAMEDIR.
@@ -29,6 +29,7 @@
 #include "audio/hca_stream.h"
 #include "audio/mixer.h"
 #include "audio/sfx.h"
+#include "import/container.h"
 #include "import/room.h"
 #include "vfs/vfs.h"
 
@@ -199,17 +200,30 @@ int cmd_render_sfx(const vfs::Vfs& fs, int id, const std::string& out, double se
     std::fprintf(stderr, "cannot load effect00.dat / wave0000.dat\n");
     return 1;
   }
-  // The room's yos0 bank overlays instruments 208..223 for the global effects too.
+  // The room's yos0 bank overlays instruments 208..223 for the global effects too. "battle:<room>" = the room entered again after a
+  // battle: battle.prd's bank (176..207, sound RAM 0x1100) was uploaded before the room's banks.
   if (!room.empty()) {
-    auto bin = fs.read("cdrom/map/mapbin/" + room + ".bin");
-    auto ctd = fs.read("cdrom/map/mapbin/" + room + ".ctd");
+    const bool after_battle = room.rfind("battle:", 0) == 0;
+    const std::string name = after_battle ? room.substr(7) : room;
+    auto bin = fs.read("cdrom/map/mapbin/" + name + ".bin");
+    auto ctd = fs.read("cdrom/map/mapbin/" + name + ".ctd");
     std::string err;
-    auto scene = bin && ctd ? import::load_room(room, *bin, *ctd, {}, &err) : std::nullopt;
+    auto scene = bin && ctd ? import::load_room(name, *bin, *ctd, {}, &err) : std::nullopt;
     if (!scene) {
-      std::fprintf(stderr, "room %s not loadable\n", room.c_str());
+      std::fprintf(stderr, "room %s not loadable\n", name.c_str());
       return 1;
     }
-    bank.set_room(scene->yos0_bytes, scene->yos1_bytes);
+    std::shared_ptr<const audio::InstrumentTable> current;
+    if (after_battle) {
+      auto battle_prd = fs.read("cdrom/battle/battle.prd");
+      auto parsed = battle_prd ? import::parse_drp(*battle_prd) : std::nullopt;
+      if (!parsed) return 1;
+      auto table = std::make_shared<audio::InstrumentTable>(*bank.table());
+      for (const import::DrpEntry& entry : parsed->entries)
+        if (entry.type == 5) table->overlay(audio::parse_bank(entry.data));
+      current = table;
+    }
+    bank.set_room(scene->yos0_bytes, scene->yos1_bytes, current);
   }
   audio::SfxProgram program;
   std::vector<audio::SfxProgram> extra;

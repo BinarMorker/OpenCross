@@ -94,6 +94,7 @@ void Actor::set_model(std::shared_ptr<ModelHandle> model) {
 void Actor::reset_playback() {
   // Model init (loop flag 1, vars 0, no sequence) plus room start (nothing submitted yet, then the stand clip submitted).
   clip_ = from_clip_ = -1;
+  clip_loops_ = true;
   requested_ = -1;
   busy_ = false;
   fade_prev_ = fade_cur_ = fade_len_ = kCrossFadeTicks;
@@ -116,6 +117,16 @@ void Actor::reset_playback() {
     submit(slot_anim_[kSlotStand]);
     run_seq();
   }
+}
+
+void Actor::stand_on_clip_zero() {
+  slot_anim_[kSlotStand] = 0;
+  requested_ = 0;
+  requested_loops_ = true;
+  busy_ = false;
+  if (submitted_ == 0) return;
+  clip_ = from_clip_ = -1;
+  submit(0);
 }
 
 bool Actor::swap_model_art(std::shared_ptr<ModelHandle> model) {
@@ -853,9 +864,21 @@ void Actor::head_step() {
 
 void Actor::step_visual(bool moving, bool run) {
   moving_ = moving;
+  if (!inactive_) pick_clip(moving, run);
+  // An off-screen entity neither runs its sequence, nor advances its clip, nor builds the head turn (see set_culled).
+  if (culled_) return;
+  // The sequence runs once per frame, before the playback step; its var 0 bit 0 ORs into the anim-done bit.
+  run_seq();
+  if (seq_mode_ && (vars_[kVarAnimDone] & 1)) busy_ = false;
+  advance_anim(seq_mode_ ? clip_loop_ : clip_loops_);
+  // The head joint's callback runs inside the pose build, after the clip time moved.
+  head_step();
+}
+
+void Actor::pick_clip(bool moving, bool run) {
   turn_step();
   int want;
-  bool loop = true;
+  clip_loops_ = true;
   if (moving) {
     idle_timer_ = rand_(0x3FF) + 0x200;
     requested_ = -1;
@@ -863,7 +886,7 @@ void Actor::step_visual(bool moving, bool run) {
     want = slot_anim_[run ? kSlotRun : kSlotWalk];
   } else if (requested_ >= 0) {
     want = requested_;
-    loop = requested_loops_;
+    clip_loops_ = requested_loops_;
   } else {
     int slot = kSlotStand;
     if (auto_idle) {
@@ -880,6 +903,12 @@ void Actor::step_visual(bool moving, bool run) {
       }
     }
     want = slot_anim_[slot];
+    // The stand id becomes the current id: a later SET_WALK_ANIMATION of the stand slot does not change the clip of a standing entity
+    // until it walks, is shown again or a script asks for a clip.
+    if (!auto_idle && !(tile_flags_ & 0xC000u)) {
+      requested_ = want;
+      requested_loops_ = true;
+    }
   }
   // A stair / ladder tile (0xC000) forces the stairs-down slot (flag 0x8000 set) or the stairs-up slot, moving or standing.
   if ((tile_flags_ & 0xC000u) && requested_ < 0) want = slot_anim_[(tile_flags_ & 0x8000u) ? kSlotStairsDown : kSlotStairsUp];
@@ -889,18 +918,11 @@ void Actor::step_visual(bool moving, bool run) {
   const bool fading = from_clip_ >= 0 && fade_cur_ < fade_len_;
   const bool defer_stand = want != submitted_ && clip_ >= 0 && fading && want == slot_anim_[kSlotStand];
   if (want >= 0 && want != submitted_ && !defer_stand) submit(want);
-  // An off-screen entity neither runs its sequence, nor advances its clip, nor builds the head turn (see set_culled).
-  if (culled_) return;
-  // The sequence runs once per frame, before the playback step; its var 0 bit 0 ORs into the anim-done bit.
-  run_seq();
-  if (seq_mode_ && (vars_[kVarAnimDone] & 1)) busy_ = false;
-  advance_anim(seq_mode_ ? clip_loop_ : loop);
-  // The head joint's callback runs inside the pose build, after the clip time moved.
-  head_step();
 }
 
 void Actor::tick(const WalkMesh& walk, int heading, bool run) {
   prev_ = cur_;
+  pad_step_[0] = pad_step_[1] = 0.0f;
   const bool moving = heading != kNoHeading;
   // No running on stairs / ladders / slide tiles.
   if (tile_flags_ & 0xC800u) run = false;
@@ -910,6 +932,8 @@ void Actor::tick(const WalkMesh& walk, int heading, bool run) {
     const float step = static_cast<float>(run ? speed * 2 + (speed >> 1) : speed) / 16.0f;
     // Screen-correct with the script yaw.
     const float dx = -std::cos(heading_rad) * step, dz = std::sin(heading_rad) * step;
+    pad_step_[0] = dx;
+    pad_step_[1] = dz;
     if (noclip) {
       // Cheats: no wall, no edge; y follows the mesh while a triangle is under the actor.
       set_position(walk, cur_.x + dx, cur_.z + dz, false);
@@ -1001,23 +1025,28 @@ render::Mat4 Actor::model_matrix(float alpha) const {
   // model's forward is -Z, which gives the angle yaw + 0x800.
   const float angle = (actor_pose.yaw + static_cast<float>(kModelYawBias) * 2.0f) * kUnitsToRad;
   render::Mat4 rotation = render::mat4_rotation_y(angle);
-  if (pitch != 0.0f || roll != 0.0f) {
+  if (pitch != 0.0f || roll != 0.0f || (local_yaw != 0.0f && !tilt_world)) {
     // The model matrix is RotMatrix({pitch, yaw, roll}) = pitch about X, yaw about Y, roll about Z
     // (a sword stuck in the ground is pitch 1100 = ~97 deg).
-    const float pitch_rad = pitch * kUnitsToRad, roll_rad = roll * kUnitsToRad;
-    render::Mat4 rx, rz;
+    const float pitch_rad = pitch * kUnitsToRad, local_yaw_rad = local_yaw * kUnitsToRad, roll_rad = roll * kUnitsToRad;
+    render::Mat4 rx, ry, rz;
     rx.at(1, 1) = std::cos(pitch_rad);
     rx.at(1, 2) = -std::sin(pitch_rad);
     rx.at(2, 1) = std::sin(pitch_rad);
     rx.at(2, 2) = std::cos(pitch_rad);
+    ry.at(0, 0) = std::cos(local_yaw_rad);
+    ry.at(0, 2) = std::sin(local_yaw_rad);
+    ry.at(2, 0) = -std::sin(local_yaw_rad);
+    ry.at(2, 2) = std::cos(local_yaw_rad);
     rz.at(0, 0) = std::cos(roll_rad);
     rz.at(0, 1) = -std::sin(roll_rad);
     rz.at(1, 0) = std::sin(roll_rad);
     rz.at(1, 1) = std::cos(roll_rad);
     // With tilt_world set (op AD 1: the world-map party) the matrix is one RotMatrix({pitch, yaw, roll}) = Rx*Ry*Rz, i.e. the
-    // pitch acts in the WORLD frame after the yaw and tilts the model toward the camera whatever it faces. With it clear (the
-    // stuck sword) the matrix is Ry(yaw) and pitch / roll are the model's own rotation inside it (model frame: the sword stands up for any yaw).
-    rotation = tilt_world ? rx * rotation * rz : rotation * rx * rz;
+    // pitch acts in the WORLD frame after the yaw and tilts the model toward the camera whatever it faces; the model's own yaw is
+    // not used. With it clear (the stuck sword, a swinging gate) the matrix is Ry(yaw) and RotMatrix({pitch, local yaw, roll}) is
+    // the model's own rotation inside it (model frame: the sword stands up for any yaw).
+    rotation = tilt_world ? rx * rotation * rz : rotation * rx * ry * rz;
   }
   // Ground-aligned basis path: matrix = tilt * RotY(yaw).
   if (gt_on_) {

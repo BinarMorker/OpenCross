@@ -159,6 +159,9 @@ struct Ctx {
   u32 flags = 0;
   // Merged status words (GetBtStatus0..3).
   u32 status_lo = 0, status_hi = 0;
+  // GetAttrib (op 0x58): the colour byte of the running unit's control block, an innate byte (bits 2..7 the colour, bit 1 absorbs its own
+  // colour). The hit reactions pick their flash colour and the attack programs their weapon trail colours from it.
+  int attrib = 0;
   // GetModelNum.
   int model_num = 0;
   // GetMonBit.

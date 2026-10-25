@@ -39,6 +39,8 @@ MtStyle mt_style(u32 flags, int lang_index);
 struct Nav {
   bool up = false, down = false, left = false, right = false, ok = false, cancel = false, tri = false, sq = false, l1 = false,
        r1 = false;
+  // Held this update (no repeat): the four directions and L2 / R2 (keyboard SlowSpeed / FastSpeed, pad triggers past half way).
+  bool held_up = false, held_down = false, held_left = false, held_right = false, l2 = false, r2 = false;
 };
 
 struct Cmd {
@@ -66,7 +68,7 @@ struct SavePrev {
   u8 flags = 0;
 };
 
-enum class Popup { None, Menu, Scope, Confirm, Sort };
+enum class GridPrompt { None, RemoveAll, AutoAllocate, FillBlanks, Sort };
 
 }  // namespace mainmenu
 
@@ -129,11 +131,18 @@ struct MainMenu::Impl {
   // elements: use
   int use_cur = 0, use_scroll = 0, target_cur = 0;
   bool use_target = false;
-  // elements: grid
-  int focus = 0, list_cur = 0, list_scroll = 0, cell_row = 0, cell_col = 2, carry = -1, swap_row = -1, swap_col = -1;
-  Popup popup = Popup::None;
-  int pop_cur = 0, pop_act = 0;
-  bool pop_party = false;
+  // elements: grid. focus 0 = the stock list, 1 = the grid row of `cell_row`. List rows 0 / 1 are Remove All / Remove, or with
+  // `arrow_side` (Right on the list) Auto Allocate / Fill Blanks. An element (or Remove) picked in the list first waits for a cell
+  // (`pick_element`); a cell picked first waits for an element or Remove from the list (`pick_cell`), or, taken back onto the grid, for a
+  // cell to swap with (`swapping`, from swap_row / swap_col). `prompt` is the question in the description panel, `prompt_cur` its
+  // choice. list_dim / grid_dim: that half has lost its highlight.
+  int focus = 0, list_cur = 0, list_scroll = 0, cell_row = 0, cell_col = 0, swap_row = -1, swap_col = -1, prompt_cur = 0;
+  bool arrow_side = false, pick_element = false, pick_cell = false, swapping = false, list_dim = false, grid_dim = false;
+  GridPrompt prompt = GridPrompt::None;
+  // Grid timing in menu frames (`frames`): input waits until grid_unlock; the cell names of the shown row reappear one per frame from
+  // labels_from; a row change slides the old row out and the new one in from slide_from (slide_dir +1 = out to the left, slide_row =
+  // the row sliding out).
+  int grid_unlock = 0, labels_from = -100, slide_from = -100, slide_dir = 0, slide_row = 0;
   // equip
   int eslot = 0, eq_cur = 0, eq_scroll = 0;
   bool eq_list = false;
@@ -175,6 +184,8 @@ struct MainMenu::Impl {
   // T / TP text scale at rel 1 (bn_70).
   static constexpr float base = 0.36f;
   std::vector<Cmd> cmds;
+  // Button glyphs / key caps of the screen being built: drawn after everything else, over the frame borders.
+  std::vector<Cmd> key_caps;
   // Frames / dots handed to the text layout audit (render::TextBatch::audit_obstacle), canvas units.
   struct AuditBox {
     float x, y, w, h;
@@ -207,12 +218,19 @@ struct MainMenu::Impl {
     }
     return members;
   }
-  // Status-screen model: the PS1 turns it by +8 / 4096 of a turn per frame at 30 fps.
+  // Status-screen model and its camera: turning by itself until Triangle hands the camera to the pad (model_cam_manual), then square cycles
+  // the poses 0..2. Entering the screen and L1 / R1 start it again.
   MenuModelView* model_view = nullptr;
   bool model_wanted = false;
-  // In turns.
-  float model_yaw = 0;
+  MenuCamera model_cam;
+  bool model_cam_manual = false;
   int model_pose = 0;
+  u32 model_session = 0;
+  // cmds index where the parchment ends: the Status model (shadow, body, weapons, effects) is drawn there, under the frames, text, compass
+  // swirls, key caps and legend (retail: the PS1 frame holds only the parchment and the 3D model; RDE draws the UI over it).
+  size_t model_layer = 0;
+  // 60 Hz menu frames spent on the Status screen; the model logic (camera, pose, blink, effects) ticks on every second one.
+  int model_frames = 0;
   std::chrono::steady_clock::time_point model_clock{};
 
   // Defined in main_menu.cpp.
@@ -224,7 +242,6 @@ struct MainMenu::Impl {
   void open(GameState& state, bool allow_save);
   void enter(MenuScreen target);
   void back_to_main(int cursor);
-  int first_col(int row) const;
 
   // Defined in main_menu_save.cpp.
   void load_previews();
@@ -249,17 +266,32 @@ struct MainMenu::Impl {
   void update_main(const Nav& nav);
   void update_roster(const Nav& nav);
   void update_status(const Nav& nav);
+  // Menu models run to 0x32 (the weapon packs to 0x31).
+  static constexpr int kLastMenuModel = 0x32, kLastWeaponModel = 0x31;
+  int model_number(int character, int last) const;
+  void restart_model();
+  void step_model_camera(const Nav& nav, int ticks);
   void update_choice(const Nav& nav);
 
   // Defined in main_menu_elements.cpp.
   void update_use(const Nav& nav);
   std::vector<int> grid_list() const;
-  bool element_dim(int character, int id, int row) const;
+  int list_element(int index) const;
+  int held_element() const;
+  int deepest_open_row(int character) const;
+  bool element_dim(int character, int id) const;
+  void grid_reset();
+  void lock_grid(int ticks);
+  int slide_offset(int& shown_row) const;
+  void to_grid(int row, int lock_ticks, bool rebuild_labels);
+  void to_list();
   void move_cell_row(int step);
   void move_cell_col(int step);
-  void grid_member(int step);
-  void run_popup_action();
-  void update_popup(const Nav& nav);
+  void list_changed();
+  void apply_to_cell();
+  void update_grid_prompt(const Nav& nav);
+  void update_grid_list(const Nav& nav);
+  void update_grid_cells(const Nav& nav);
   void update_grid(const Nav& nav);
 
   // Defined in main_menu_equip.cpp.
@@ -283,6 +315,8 @@ struct MainMenu::Impl {
   // none); wide_s ([Video] WideHud) is at most canvas_s, both are 0 at 4:3.
   enum Group { Left = -1, Right = 1, Centre = 2 };
   float wide_s = 0.0f, canvas_s = 0.0f, gdx = 0.0f;
+  // Horizontal clip of sprites and rectangles (canvas x, before the group shift); text is not clipped.
+  float sprite_clip_left = -1e9f, sprite_clip_right = 1e9f;
   // Set by set_wide_columns.
   float wide_cols = 0.0f, canvas_cols = 0.0f;
   void group(Group which) { gdx = which == Left ? -wide_s : which == Right ? wide_s : 0.0f; }
@@ -393,24 +427,25 @@ struct MainMenu::Impl {
   void status_panel(int character, float panel_x, float panel_y);
   std::vector<std::u32string> profile_lines(int character);
   void build_status();
+  void camera_legend();
 
   // Defined in main_menu_elements.cpp.
   void build_use();
   void element_row_tint(int id, float x, float y);
   Tex* plate_tex(int tile);
-  void element_info(int id, float y0, float y1, float pitch = 16);
+  void element_info(int id, float x, float y0, float y1, float pitch);
   int colour_index(int character, int id) const;
   void plate(int character, int id, float x, float y);
   void empty_box(float x, float y);
   void grid_minimap(int character, float px, float py, int sel_row, int hold_id);
   void build_grid();
-  void build_popup(int character);
+  void grid_help(int character);
 
   // Defined in main_menu_draw.cpp.
   void tri(float x, float y, bool active);
   void scroll_arrow(float x, float y, bool up);
   void pointer(float x, float y, bool left);
-  void btn(float x, float y, int slot_index);
+  void btn(float x, float y, int slot_index, u32 colour = kWhite);
   void portrait_strip(int character, float x, u32 col);
   float fit_rel(const std::u32string& str, float maxw, float rel);
   void TPfit(float x, float y, const std::u32string& str, float maxw, u32 colour = kText, float rel = 0.9f);

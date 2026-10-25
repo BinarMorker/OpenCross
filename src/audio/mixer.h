@@ -81,6 +81,11 @@ class Mixer {
   bool sfx_active(u32 mask) const {
     return ((sfx_active_.load(std::memory_order_acquire) | sfx_pending_.load(std::memory_order_acquire)) & mask) != 0;
   }
+  // The one instrument table / sound RAM the effect banks share: each loader (field room, battle) uploads over what the last one left
+  // and publishes the result here (null until the first room). Main thread.
+  const std::shared_ptr<const InstrumentTable>& sfx_instruments() const { return sfx_instruments_; }
+  // A new sound RAM image reaches the SFX voices that are sounding (AkaoPlayer::upload_ram).
+  void set_sfx_instruments(std::shared_ptr<const InstrumentTable> table);
 
   // Movie PCM stream (own bus): the movie player pushes interleaved stereo float at kRate from its decoder thread
   // (single producer); the audio thread drains it. movie_frames_played() is the audio clock for A/V sync.
@@ -140,7 +145,7 @@ class Mixer {
 
  private:
   struct Cmd {
-    enum Type { Play, PlayAkao, Stop, Fade, Pause, Resume, Sfx, StopSfx, EvictSfx, SfxMods, SfxFade, Switch, VoicePlay, VoiceStop } type;
+    enum Type { Play, PlayAkao, Stop, Fade, Pause, Resume, Sfx, StopSfx, EvictSfx, SfxMods, SfxFade, SpuUpload, Switch, VoicePlay, VoiceStop } type;
     std::shared_ptr<HcaStream> stream;
     int song = -1;
     int volume = 0;
@@ -148,6 +153,7 @@ class Mixer {
     std::shared_ptr<AkaoPlayer> akao;
     std::shared_ptr<const std::vector<float>> voice;  // VoicePlay
     SfxProgram sfx;
+    std::shared_ptr<const std::vector<u8>> ram;  // SpuUpload
     u32 mask = 0;  // EvictSfx: 0 = every SFX channel, else the channel mask; SfxMods: the channels to change
     bool untagged = false;  // EvictSfx with a mask: also the untagged channels
     int pan = -1;           // SfxMods (volume in `volume`); SfxFade: the frames
@@ -169,6 +175,7 @@ class Mixer {
   size_t voice_pos_ = 0;                             // frames played
   std::atomic<bool> voice_on_{false};
 
+  std::shared_ptr<const InstrumentTable> sfx_instruments_;
   std::atomic<float> bus_[size_t(Bus::Count)];
   std::mutex mu_;
   std::vector<Cmd> queue_;

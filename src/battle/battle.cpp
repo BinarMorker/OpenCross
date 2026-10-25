@@ -11,6 +11,17 @@ namespace oc::battle {
 namespace {
 
 constexpr int kMaxChain = 4;
+constexpr int kVaryInnateElement = 336;
+
+// The armour colour byte's x150/100 step looks its colour MASK up in the six-entry opposite-colour table that is indexed by colour index
+// everywhere else: the green, white and black masks (1, 2, 4) land inside it and raise black, white and green elements; red and yellow (8, 16)
+// read the multiplier table's low bytes (0x99, 0x65: never a colour); blue (32) reads a flag that is 0 whenever damage is computed: green.
+int armour_boost_colour(u8 armour_colour) {
+  if (!(armour_colour & 2)) return -1;
+  const int mask = armour_colour >> 2;
+  if (mask == 0x20) return 0;
+  return mask < 6 ? kOpp[static_cast<size_t>(mask)] : -1;
+}
 
 int stat_hp_cap(int value) { return std::min(value, 999); }
 
@@ -65,6 +76,7 @@ Equip make_equip(const data::GameTables& tables, int weapon, int armour, const s
     equip.arm = armour_rec->power(), equip.arm_var = armour_rec->var(), equip.mdef_gear = armour_rec->mag(), equip.evd_gear = armour_rec->acc();
     equip.resist_lo |= armour_rec->mask_lo(), equip.resist_hi |= armour_rec->mask_hi();
     equip.guard_hi |= armour_rec->mask_hi();
+    equip.armour_colour = armour_rec->colour();
     equip.status_lo |= armour_rec->status_lo(), equip.status_hi |= armour_rec->status_hi();
     add_flags(*armour_rec);
   }
@@ -235,6 +247,7 @@ bool Battle::start(std::vector<PartyMember> party, int scene, const BattleOption
   field_state_ = 0;
   trap_ = {};
   ring_repainted_ = fizzled_ = false;
+  vary_innate_colour_ = 0;
   rewards_ = {};
   log_.clear();
   actions_ = 0;
@@ -472,7 +485,14 @@ void Battle::evolve(int unit_index, int form) {
 u8 Battle::element_colour(int id) const {
   if (id < 0 || id >= static_cast<int>(tables_.elements.size())) return 0;
   const u8 colour_bit = tables_.elements[static_cast<size_t>(id)].colour_bit();
+  if (id == kVaryInnateElement && vary_innate_colour_) return static_cast<u8>((colour_bit & 3) | vary_innate_colour_);
   return pip_tech_colour_ && pip_tech(id) ? static_cast<u8>((colour_bit & 3) | (pip_tech_colour_ & 0xFC)) : colour_bit;
+}
+
+void Battle::finish_ring(const data::ElemRec& element, int colour) {
+  if (ring_repainted_) ring_ = ring_repaint_;
+  else if (!(element.b(0) & 0x80) && element.mode() != 5) ring_push(ring_, colour);
+  ring_repainted_ = false;
 }
 
 // ------------------------------------------------------------------------------------------------ damage plumbing
@@ -509,6 +529,11 @@ void Battle::god_filter(int target, DamageOut& dmg) const {
 // Code 3 heals, code 2 and negative values do nothing; a self-inflicted KO leaves the actor at 1 HP.
 void Battle::damage_unit(int actor, int target, int value, int code) {
   Unit& target_unit = units_[static_cast<size_t>(target)];
+  // A KO'd unit takes neither damage nor healing: its HP stays 0 (only a revive clears the KO).
+  if (target_unit.lo & st::kKO) {
+    target_unit.hp = 0;
+    return;
+  }
   if (code == 3) {
     target_unit.hp = std::min(target_unit.max_hp, target_unit.hp + value);
     return;
@@ -687,6 +712,12 @@ void Battle::do_weapon_attack(int actor, int target, int strength) {
   input.opposite_colour = ct >= 0 && ci < 6 && kOpp[static_cast<size_t>(ct)] == ci;
   input.guarding = target_unit.pc && target_unit.guard;
   DamageOut damage = weapon_damage(rng_, input);
+  if (target_unit.hi & st::kHiWeaponImmune) {
+    damage.value = 0;
+    damage.code = 2;
+  } else if ((target_unit.hi & st::kHiWeaponAbsorb) && damage.value > 0) {
+    damage.code = 3;
+  }
   god_filter(target, damage);
   say(std::format("{} {} attack on {}: {}{} ({}%, x{})", attacker.name, kStrName[strength], target_unit.name, damage.value, damage.crit ? " CRIT" : "",
                   chance, input.colour_mille));
@@ -698,7 +729,7 @@ void Battle::do_weapon_attack(int actor, int target, int strength) {
   const bool alive0 = target_unit.alive();
   damage_unit(actor, target, damage.value, damage.code);
   ev.value = damage.value;
-  ev.code = damage.code == 3 ? 3 : (damage.value == 0 ? 1 : 0);
+  ev.code = damage.code == 3 || damage.code == 2 ? damage.code : (damage.value == 0 ? 1 : 0);
   ev.crit = damage.crit;
   ev.ko = alive0 && !target_unit.alive();
   ev.ko_owed = ev.ko && death_pending_[static_cast<size_t>(target)];
@@ -759,7 +790,11 @@ void Battle::do_element(int actor, int element_id, int row, int target, bool pus
       if (target_unit.hi >> colour & 1u) in.shield_colour = colour;
     in.target_colour = ct;
     in.opposite_colour = ct >= 0 && ce >= 0 && kOpp[static_cast<size_t>(ct)] == ce;
-    in.target_absorb = (target_unit.hi & st::kHiAbsorb) != 0;
+    in.armour_boost_colour = armour_boost_colour(target_unit.eq.armour_colour);
+    // Absorbed: the element absorb status, or bit 1 of the innate byte / the armour colour byte with the element's colour in its mask.
+    u8 absorb_mask = (target_unit.innate & 2) ? static_cast<u8>(target_unit.innate & 0xFC) : 0;
+    if (target_unit.eq.armour_colour & 2) absorb_mask |= static_cast<u8>(target_unit.eq.armour_colour & 0xFC);
+    in.target_absorb = (target_unit.hi & st::kHiAbsorb) != 0 || (absorb_mask & element_colour(element_id)) != 0;
     in.target_immune = (target_unit.hi & st::kHiImmune) != 0;
     // Exploit: the element hi status mask meets the target hi word.
     in.exploit = (element.status_hi() & target_unit.hi & 0xE007FFFFu) != 0;
@@ -832,11 +867,12 @@ void Battle::do_element(int actor, int element_id, int row, int target, bool pus
       apply_status(target, element);
       break;
     }
-    case 37: {  // mode 0 damage (no status), then the ring is repainted with the colour masks at element record +0xA / +0xC / +0xE
+    case 37: {  // mode 0 damage (no status), then the ring is repainted with element record +0xA / +0xC / +0xE, colour masks in the ring's
+               // own form (bit 0 green .. bit 5 blue)
       deal(elem_in(0));
       for (int k = 0; k < 3; ++k) {
-        const int colour = data::colour_index_of_bit(element.b(static_cast<size_t>(0xA + 2 * k)));
-        ring_[static_cast<size_t>(k)] = colour >= 0 && colour < 6 ? colour : -1;
+        const int colour = data::colour_index_of_bit(static_cast<u8>(element.b(static_cast<size_t>(0xA + 2 * k)) << 2));
+        ring_repaint_[static_cast<size_t>(k)] = colour >= 0 && colour < 6 ? colour : -1;
       }
       ring_done = true;
       break;
@@ -927,7 +963,7 @@ void Battle::do_element(int actor, int element_id, int row, int target, bool pus
       const int field_word = element.rd16(0xE);
       if (field_word & 0xFC) {
         const int colour = data::colour_index_of_bit(static_cast<u8>(field_word & 0xFC));
-        ring_.fill(colour >= 0 && colour < 6 ? colour : -1);
+        ring_repaint_.fill(colour >= 0 && colour < 6 ? colour : -1);
         ring_done = true;
       } else if ((field_state_ & 3) == 0) {
         // The state's timer (20 PC actions) never clears it in retail.
@@ -985,7 +1021,7 @@ void Battle::do_element(int actor, int element_id, int row, int target, bool pus
           if (!((units_[static_cast<size_t>(pc)].innate >> 2) & (1u << colour))) lacking = true;
         if (lacking) break;
       }
-      ring_.fill(colour);
+      ring_repaint_.fill(colour);
       ring_done = true;
       say(std::format("{} uses {}: field colour {}", caster.name, nm, colour));
       code_override = 0;
@@ -1107,7 +1143,8 @@ void Battle::do_element(int actor, int element_id, int row, int target, bool pus
     case 3:
     case 43: {
       const int amount = heal_amount(rng_, caster.mag, element.status_pct(), slot, cmul);
-      say(std::format("{} casts {} on {}: heals {}", caster.name, nm, target_unit.name, amount));
+      if (target_unit.lo & st::kKO) say(std::format("{} casts {} on {}: {} is down, no effect", caster.name, nm, target_unit.name, target_unit.name));
+      else say(std::format("{} casts {} on {}: heals {}", caster.name, nm, target_unit.name, amount));
       if (target_unit.lo & 0x2000000) damage_unit(actor, target, amount, 0);
       else damage_unit(actor, target, amount, 3);
       if (mode == 3 || mode == 14) {
@@ -1216,6 +1253,7 @@ void Battle::do_element(int actor, int element_id, int row, int target, bool pus
   if (mode == 39) ev.creature = creature_model_;
   ev.steal_msg = steal_msg;
   ev.steal_word = steal_word;
+  ev.ring_repaint = ring_done;
   // After the target loop: Frozen (lo 0x20000000, `kDefeated` here: Ice Blast's status) newly set and the
   // target's HP != 0 -> row 6 'Frozen -- can't move!'; else element record +0x13 != 0 and
   // the mode landed on any target -> that row (opened at the action end for 120 ticks)
@@ -1224,7 +1262,7 @@ void Battle::do_element(int actor, int element_id, int row, int target, bool pus
   if (log_.size() > log0) ev.text = log_[log0];
   note_event(ev);
   if (ring_done) ring_repainted_ = true;
-  else if (push_ring) ring_push(ring_, ce);
+  if (push_ring) finish_ring(element, ce);
 }
 
 void Battle::cast_element(int actor, int element_id, int row, int target) {
@@ -1232,6 +1270,7 @@ void Battle::cast_element(int actor, int element_id, int row, int target) {
   const data::ElemRec& element = tables_.elements[static_cast<size_t>(element_id)];
   ring_repainted_ = false;
   fizzled_ = false;
+  if (element_id == kVaryInnateElement) vary_innate_colour_ = static_cast<u8>(units_[static_cast<size_t>(actor)].innate & 0xFC);
   // The creature state is cleared for each cast.
   creature_state_ = 0, creature_model_ = 0, creature_slot_ = 0;
   {  // Before every cast: an element the other side has trapped (mode 5) fizzles and clears the trap
@@ -1284,8 +1323,7 @@ void Battle::cast_element(int actor, int element_id, int row, int target) {
     do_element(actor, element_id, row, target, true);
     return;
   }
-  const int ce = data::colour_index_of_bit(element.colour_bit());
-  if (!ring_repainted_) ring_push(ring_, ce);
+  finish_ring(element, data::colour_index_of_bit(element_colour(element_id)));
 }
 
 // ------------------------------------------------------------------------------------------------ per-action upkeep

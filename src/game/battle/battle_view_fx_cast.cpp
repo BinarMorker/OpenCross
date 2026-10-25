@@ -43,6 +43,7 @@ void BattleView::fx_reset_scene() {
   fx_screen_ = {};
   fx_warp_ = {};
   fx_unit_ = {};
+  fx_ambient_stage_reset();
   // Shadows start on at the model init; the saved flags are zero until the first start hook.
   shadow_off_.fill(false);
   shadow_saved_off_.fill(true);

@@ -12,7 +12,8 @@ namespace st {
 constexpr u32 kPoison = 0x1, kFlu = 0x20, kKO = 0x80, kAfraid = 0x100, kFatigued = 0x2000, kAsleep = 0x4000,
               kDark = 0x20000, kStaminaDrain = 0x40000, kConfused = 0x100000, kDizzy = 0x2000000,
               kDefeated = 0x20000000, kInstantDeath = 0x80000000;
-constexpr u32 kHiAlwaysHit = 0x1000, kHiAbsorb = 0x2000, kHiImmune = 0x10000, kHiRegen = 0x80000;
+// Absorb / immune come in a weapon pair (0x2000 / 0x8000: Negate Physical) and an element pair (0x4000 / 0x10000: Negate Magic).
+constexpr u32 kHiAlwaysHit = 0x1000, kHiWeaponAbsorb = 0x2000, kHiAbsorb = 0x4000, kHiWeaponImmune = 0x8000, kHiImmune = 0x10000, kHiRegen = 0x80000;
 // Lo bits kept after a battle.
 constexpr u32 kPersist = 0x39;
 // Bits whose infliction starts a timer.
@@ -127,8 +128,8 @@ struct ElementIn {
   // Target hi & 0x3F shield colour (-1 none).
   int shield_colour = -1;
   int target_colour = -1;
-  // Innate absorb with a matching colour.
-  bool target_absorbs_own = false;
+  // The element colour the target's armour colour byte raises x150/100 (-1 none).
+  int armour_boost_colour = -1;
   // Weakness mask hit: the variance roll becomes 50.
   bool exploit = false;
   bool opposite_colour = false;

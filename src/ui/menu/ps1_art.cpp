@@ -77,6 +77,71 @@ Rgba menutim(const vfs::Vfs& fs, std::string_view entry) {
   return {};
 }
 
+namespace {
+// The first entry named `name` of type `type` in a drp, searching nested drps too.
+std::optional<ByteSpan> drp_entry(ByteSpan data, std::string_view name, u8 type) {
+  auto drp = import::parse_drp(data);
+  if (!drp) return std::nullopt;
+  for (const auto& entry : drp->entries) {
+    if (entry.name == name && entry.type == type) return entry.data;
+    if (import::is_drp(entry.data))
+      if (auto inner = drp_entry(entry.data, name, type)) return inner;
+  }
+  return std::nullopt;
+}
+}  // namespace
+
+Rgba sheet_frame(const vfs::Vfs& fs, int frame) {
+  auto test = fs.read_disc("cdrom/menu/menutest.prd");
+  auto tims = fs.read_disc("cdrom/menu/menutim.prd");
+  if (!test || !tims) return {};
+  const auto sheet = drp_entry(ByteSpan(test->data(), test->size()), "main", 3);
+  const auto tim_drp = import::parse_drp(ByteSpan(tims->data(), tims->size()));
+  if (!sheet || !tim_drp || sheet->size() < 0xC) return {};
+  auto u16_at = [&](size_t offset) { return static_cast<u16>((*sheet)[offset] | (*sheet)[offset + 1] << 8); };
+  if (frame < 1 || frame > u16_at(2) || 0xC + 2 * static_cast<size_t>(frame) > sheet->size()) return {};
+  const size_t base = u16_at(0xC + 2 * static_cast<size_t>(frame - 1));
+  if (base + 4 > sheet->size()) return {};
+  const int count = u16_at(base);
+  struct Source {
+    import::Tim tim;
+    Rgba rgba;
+  };
+  std::vector<Source> sources;
+  for (const auto& entry : tim_drp->entries)
+    if (auto tim = import::parse_tim(entry.data); tim && tim->has_clut && tim->bpp == 4) sources.push_back({*tim, decode(*tim)});
+  Rgba out;
+  out.w = kSheetFrameW, out.h = kSheetFrameH;
+  out.px.assign(static_cast<size_t>(out.w) * out.h * 4, 0);
+  for (int part = count - 1; part >= 0; --part) {
+    const size_t at = base + 4 + 12 * static_cast<size_t>(part);
+    if (at + 12 > sheet->size()) break;
+    const int x = static_cast<s16>(u16_at(at)), y = static_cast<s16>(u16_at(at + 2));
+    const int u = (*sheet)[at + 4], v = (*sheet)[at + 5], clut = u16_at(at + 6), w = (*sheet)[at + 8], h = (*sheet)[at + 9];
+    const int flags = u16_at(at + 10);
+    // Texture page: 64-halfword columns, 256-row halves; 4 texels per halfword.
+    const int texel_x = (flags & 0xF) * 64 * 4 + u, texel_y = ((flags >> 4) & 1) * 256 + v;
+    const int clut_x = (clut & 0x3F) * 16, clut_y = clut >> 6;
+    for (const Source& source : sources) {
+      const import::TimBlock& image = source.tim.image;
+      if (source.tim.clut.x != clut_x || source.tim.clut.y != clut_y) continue;
+      const int sx = texel_x - image.x * 4, sy = texel_y - image.y;
+      if (sx < 0 || sy < 0 || sx + w > image.w * 4 || sy + h > image.h) continue;
+      for (int row = 0; row < h; ++row)
+        for (int col = 0; col < w; ++col) {
+          const int tx = sx + ((flags & 0x200) ? w - 1 - col : col), ty = sy + ((flags & 0x400) ? h - 1 - row : row);
+          const int dx = kSheetFrameOriginX + x + col, dy = kSheetFrameOriginY + y + row;
+          if (dx < 0 || dy < 0 || dx >= kSheetFrameW || dy >= kSheetFrameH) continue;
+          const u8* texel = source.rgba.at(static_cast<u32>(tx), static_cast<u32>(ty));
+          if (texel[3] == 0) continue;
+          std::memcpy(&out.px[(static_cast<size_t>(dy) * out.w + static_cast<size_t>(dx)) * 4], texel, 4);
+        }
+      break;
+    }
+  }
+  return out;
+}
+
 Rgba face(const vfs::Vfs& fs, int char_id) {
   const char* stem = face_name(char_id);
   if (!stem) return {};

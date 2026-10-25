@@ -145,6 +145,9 @@ Nav MainMenu::Impl::poll(const platform::Input& in) {
   bool fire[4]{};
   repeat.poll(dir, fire);
   nav.up = fire[0], nav.down = fire[1], nav.left = fire[2], nav.right = fire[3];
+  nav.held_up = dir[0], nav.held_down = dir[1], nav.held_left = dir[2], nav.held_right = dir[3];
+  nav.l2 = key_down(Action::SlowSpeed) || in.pad_axis[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] >= 0.5f;
+  nav.r2 = key_down(Action::FastSpeed) || in.pad_axis[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] >= 0.5f;
   nav.ok = key_pressed(Action::Ok) || pad_pressed(SDL_GAMEPAD_BUTTON_SOUTH);
   nav.cancel = key_pressed(Action::Cancel) || pad_pressed(SDL_GAMEPAD_BUTTON_EAST);
   nav.tri = key_pressed(Action::Menu) || pad_pressed(SDL_GAMEPAD_BUTTON_NORTH);
@@ -169,7 +172,7 @@ void MainMenu::Impl::open(GameState& state, bool allow_save) {
   roster_ask = false;
   stand_in = -1;
   focus = 0;
-  popup = Popup::None;
+  prompt = GridPrompt::None;
   msg.clear();
   frames = 0;
   hand_list = -1, hand_settled = 0, hand_step = 0, hand_angle = table_angle(0, 0);
@@ -181,14 +184,10 @@ void MainMenu::Impl::enter(MenuScreen target) {
   screen = target;
   msg.clear();
   switch (target) {
-    case MenuScreen::Status: profile = true; break;
+    case MenuScreen::Status: profile = true, restart_model(); break;
     case MenuScreen::ElementChoice: choice_cur = 0; break;
     case MenuScreen::ElementUse: use_cur = use_scroll = target_cur = 0; use_target = false; break;
-    case MenuScreen::ElementGrid:
-      focus = 0, list_cur = list_scroll = 0, carry = -1, popup = Popup::None, swap_row = -1;
-      cell_row = gs->first_open_row(cur_char());
-      cell_col = first_col(cell_row);
-      break;
+    case MenuScreen::ElementGrid: grid_reset(); break;
     case MenuScreen::Equip: eslot = 0, eq_cur = eq_scroll = 0, eq_list = false; break;
     case MenuScreen::KeyItems: ki_cur = ki_scroll = 0; break;
     case MenuScreen::Settings: set_cur = 0, skin_pick = false; break;
@@ -207,16 +206,6 @@ void MainMenu::Impl::back_to_main(int cursor) {
   msg.clear();
 }
 
-// First unlocked cell of a grid row of the current member, else its first existing cell.
-int MainMenu::Impl::first_col(int row) const {
-  const int character = cur_char();
-  for (int col = 0; col < GameState::kCols; ++col)
-    if (gs->cell_available(character, row, col)) return col;
-  for (int col = 0; col < GameState::kCols; ++col)
-    if (gs->cell_exists(character, row, col)) return col;
-  return 0;
-}
-
 // ===================================================== update
 // The menu loop runs once per 60 Hz vsync: the animations (pointer roll, cursor pulse, needle) count sim ticks, not frames.
 // The first 4 ticks after opening ignore input. Pad input selects the pad button glyphs, any key event the keyboard key caps.
@@ -233,6 +222,7 @@ void MainMenu::Impl::update(const platform::Input& in, int ticks) {
   if (msg_frames > 0 && --msg_frames == 0) msg.clear();
   roster_anim = std::max(0, roster_anim - std::max(ticks, 0));
   const Nav nav = poll(in);
+  if (screen == MenuScreen::Status && model_view) step_model_camera(nav, std::max(ticks, 0));
   if (frames < 4) return;
   switch (screen) {
     case MenuScreen::Main: update_main(nav); break;
@@ -315,6 +305,9 @@ void MainMenu::close() { impl_->closed = true; }
 bool MainMenu::closed() const { return impl_->closed; }
 bool MainMenu::saved() const { return impl_->saved; }
 MenuScreen MainMenu::screen() const { return impl_->screen; }
+bool MainMenu::camera_takes_triggers() const {
+  return !impl_->closed && impl_->screen == MenuScreen::Status && impl_->model_view && impl_->model_cam_manual;
+}
 std::optional<MainMenu::LoadRequest> MainMenu::take_load_request() {
   Impl& impl = *impl_;
   if (!impl.load_pending) return std::nullopt;
@@ -359,23 +352,17 @@ void MainMenu::debug_show(MenuScreen screen, int variant) {
   impl.msg.clear();
   impl.enter(screen);
   impl.frames = 10;
-  // For screenshots: a fixed turn (the two hands of the weapon grip side by side).
-  impl.model_yaw = 0.9f;
   impl.model_clock = {};
   if (screen == MenuScreen::ElementGrid) {
-    impl.list_cur = 2;
-    impl.focus = 0;
+    impl.list_cur = std::min(2, static_cast<int>(impl.grid_list().size()) - 1);
+    // Variant 1: the listed element picked, waiting for a cell; 2: the Auto Allocate question (list rows switched by Right); 3: the
+    // Remove All question; 4: Reorder.
+    if (variant == 1) impl.pick_element = true, impl.to_grid(impl.cell_row, 0, false);
+    if (variant == 2) impl.list_cur = 0, impl.arrow_side = true, impl.prompt = GridPrompt::AutoAllocate;
+    if (variant == 3) impl.list_cur = 0, impl.prompt = GridPrompt::RemoveAll, impl.prompt_cur = 1;
+    if (variant == 4) impl.list_cur = 0, impl.prompt = GridPrompt::Sort;
+    impl.grid_unlock = 0;
   }
-  // Variant 1 of the grid: carrying an element over the grid.
-  if (screen == MenuScreen::ElementGrid && variant == 1) {
-    const auto list = impl.grid_list();
-    impl.list_cur = std::min(2, static_cast<int>(list.size()) - 1);
-    impl.carry = list.size() > 1 && list[static_cast<size_t>(impl.list_cur)] >= 0
-                     ? impl.gs->slot.elements[static_cast<size_t>(list[static_cast<size_t>(impl.list_cur)])].id
-                     : 0;
-    impl.focus = 1;
-  }
-  if (screen == MenuScreen::ElementGrid && variant == 2) impl.popup = Popup::Menu, impl.pop_cur = 1;
   if (screen == MenuScreen::Equip && variant == 1) impl.eq_list = true, impl.eq_cur = 1;
   if (screen == MenuScreen::Main && variant == 1) impl.sub = 1;
   // Variants 2 / 3 of Main: the roster from the Status pick, and from the Equip pick with the remove-all prompt.

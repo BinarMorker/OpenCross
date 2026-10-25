@@ -670,6 +670,75 @@ void test_status_message() {
   }
 }
 
+void test_field_ring_writes() {
+  const auto elem = [](Fixture& fixture, u8 flags, u8 mode, u8 colour) {
+    fixture.tables.elements.resize(5);
+    data::ElemRec& element = fixture.tables.elements[4];
+    element = data::ElemRec{};
+    element.raw[0] = flags, element.raw[5] = colour, element.raw[6] = 1, element.raw[7] = mode, element.raw[8] = 12, element.raw[0xC] = 20;
+    return &element;
+  };
+  {
+    // record byte 0 bit 0x80 (death casts, form changes) and element traps (mode 5) leave the ring; any other cast pushes its colour
+    Fixture fixture;
+    const std::array<int, 3> ring0 = fixture.battle.ring();
+    elem(fixture, 0x81, 50, 0x20);
+    fixture.battle.do_element(3, 4, 0, 0);
+    CHECK(fixture.battle.ring() == ring0);
+    elem(fixture, 0x01, 5, 0x20)->raw[0xE] = 7;
+    fixture.battle.do_element(3, 4, 0, 0);
+    CHECK(fixture.battle.ring() == ring0);
+    elem(fixture, 0x01, 0, 0x20);
+    fixture.battle.do_element(3, 4, 0, 0);
+    CHECK_EQ(fixture.battle.ring()[2], 3);
+  }
+  {
+    // a colour field (mode 6, +0xE & 0xFC) repaints all three slots when the cast ends: every target of the cast still sees the old ring
+    Fixture fixture;
+    const std::array<int, 3> ring0 = fixture.battle.ring();
+    elem(fixture, 0x08, 6, 0x80)->raw[0xE] = 0x80;
+    fixture.battle.do_element(3, 4, 0, 0, false);
+    fixture.battle.do_element(3, 4, 0, 1, false);
+    CHECK(fixture.battle.ring() == ring0);
+    fixture.battle.do_element(3, 4, 0, 2, true);
+    CHECK(fixture.battle.ring() == (std::array<int, 3>{5, 5, 5}));
+    for (const ActionEvent& event : fixture.battle.events()) CHECK(event.ring == ring0);
+  }
+  {
+    // innate byte bit 1: the colour mask is bits 2..7 and an element of that colour is absorbed
+    Fixture fixture;
+    elem(fixture, 0x01, 0, 0x20);
+    fixture.battle.unit_mut(3).innate = 0x22;
+    fixture.battle.unit_mut(3).hp = 100;
+    fixture.battle.do_element(0, 4, 0, 3);
+    if (!fixture.battle.events().empty()) CHECK_EQ(fixture.battle.events().back().code, 3);
+    fixture.battle.unit_mut(3).innate = 0x20;
+    fixture.battle.do_element(0, 4, 0, 3);
+    if (!fixture.battle.events().empty()) CHECK_EQ(fixture.battle.events().back().code, 0);
+    // the armour colour byte with bit 1 (the colour plates) absorbs the same way
+    fixture.battle.unit_mut(3).eq.armour_colour = 0x22;
+    fixture.battle.do_element(0, 4, 0, 3);
+    if (!fixture.battle.events().empty()) CHECK_EQ(fixture.battle.events().back().code, 3);
+  }
+  {
+    // absorb / immune: hi 0x4000 / 0x10000 for elements, 0x2000 / 0x8000 for weapons
+    Fixture fixture;
+    elem(fixture, 0x01, 0, 0x20);
+    fixture.battle.unit_mut(3).hp = 100;
+    fixture.battle.unit_mut(3).hi |= 0x2000;
+    fixture.battle.do_element(0, 4, 0, 3);
+    if (!fixture.battle.events().empty()) CHECK_EQ(fixture.battle.events().back().code, 0);
+    fixture.battle.unit_mut(3).hi = (fixture.battle.unit(3).hi & ~0x2000u) | 0x4000u;
+    fixture.battle.do_element(0, 4, 0, 3);
+    if (!fixture.battle.events().empty()) CHECK_EQ(fixture.battle.events().back().code, 3);
+    fixture.battle.unit_mut(3).hi = (fixture.battle.unit(3).hi & ~0x4000u) | 0x8000u;
+    const int hp0 = fixture.battle.unit(3).hp;
+    fixture.battle.do_weapon_attack(0, 3, 0);
+    CHECK_EQ(fixture.battle.unit(3).hp, hp0);
+    if (!fixture.battle.events().empty()) CHECK_EQ(fixture.battle.events().back().code, 2);
+  }
+}
+
 void test_pilfer() {
   // Mode 30: the chance byte = the heavy attack's HIT% of the command box (72 for Kid and
   // Serge whatever their growth byte), doubled (byte arithmetic) for the opposite gender (PC 0 vs the male enemy); rnd(0,100) >= chance fails (code 2);
@@ -957,8 +1026,9 @@ void test_gear() {
 
 // ------------------------------------------------------------------------------------------------ battle script VM
 // A hand-assembled .pac: 5 entities (0 global, 1-3 PCs, 4 = monster unit 3). Entity 4: slot 0 binds unit 3, slot 2 =
-//   set v406=3; sub v406,3; dialogue 7; 66; 87; 67 type 0 (weapon) strength v406 target mask 1 (PC1); A4; halt.
-Bytes assemble_pac() {
+//   set v406=3+value; sub v406,3; [2B v408 = target code `select`]; dialogue 7; 66; 87; 67 type (0 = weapon) strength / element v406 target
+//   mask 1 (PC1); A4; halt.
+Bytes assemble_pac(int type = 0, int value = 0, int select = -1) {
   Bytes code;
   auto emit = [&](std::initializer_list<int> bytes) {
     for (int byte : bytes) code.push_back(static_cast<u8>(byte));
@@ -969,13 +1039,14 @@ Bytes assemble_pac() {
   emit({0x00});
   emit({0x0E, 0xE3, 0x80, 0x00});
   const int slot2 = static_cast<int>(code.size());
-  // set 0x406 = 3; sub 0x406 -= 3; dialogue 7; begin action, clear queue;
-  // queue: type imm 0, strength var 0x406, mask imm 1; end turn, halt.
-  emit({0x10, 0x06, 0x04, 0x03, 0x00, 0x40});
+  // set 0x406 = 3 + value; sub 0x406 -= 3; dialogue 7; begin action, clear queue;
+  // queue: type imm, strength / element var 0x406, mask imm 1; end turn, halt.
+  emit({0x10, 0x06, 0x04, 3 + value, 0x00, 0x40});
   emit({0x14, 0x06, 0x04, 0x03, 0x00, 0x40});
+  if (select >= 0) emit({0x2B, 0x08, 0x04, select, 0x00, 0x40});
   emit({0xE0, 0x07, 0x00, 0x00});
   emit({0x66, 0x87});
-  emit({0x67, 0x00, 0x00, 0x06, 0x04, 0x01, 0x00, 0xA0});
+  emit({0x67, type, 0x00, 0x06, 0x04, 0x01, 0x00, 0xA0});
   emit({0xA4, 0x00});
   const size_t ec = 5, base = 0x94 + ec * 0x40;
   Bytes image(base, 0);
@@ -996,13 +1067,20 @@ Bytes assemble_pac() {
   return image;
 }
 
-// alive covers PCs 0-2 and enemy unit 3; libc_rand() gives op 1F: 7 % (B + 1).
+// alive covers PCs 0-2 and enemy unit 3 (roster: also the KO'd PCs; ko: the units whose status word reads KO); rnd() returns the queued
+// rolls, then lo; libc_rand() gives op 1F: 7 % (B + 1).
 struct FakeHost final : pac::Host {
-  u32 alive = 0xF;
+  u32 alive = 0xF, roster = 0xF, ko = 0;
+  std::vector<int> rolls;
+  int rnd_calls = 0;
   u32 alive_mask() const override { return alive; }
-  int read_field(int, u16) override { return 0; }
+  u32 roster_mask() const override { return roster; }
+  int read_field(int unit, u16 code) override { return code == 0xB0 && (ko >> unit & 1u) ? static_cast<int>(st::kKO) : 0; }
   void write_field(int, u16, int) override {}
-  int rnd(int lo, int) override { return lo; }
+  int rnd(int lo, int) override {
+    const size_t next = static_cast<size_t>(rnd_calls++);
+    return next < rolls.size() ? rolls[next] : lo;
+  }
   int libc_rand() override { return 7; }
 };
 
@@ -1052,6 +1130,64 @@ void test_pac_vm() {
   queued.clear();
   CHECK(vm.run_slot(3, 2, queued));
   CHECK_EQ(queued[0].mask, 1u);
+
+  // An element (type 1) keeps a KO'd PC that is still in the roster (Revive on the fallen PC); only a mask with no roster unit falls
+  // back to the caster.
+  pac::Module element_module;
+  CHECK(element_module.parse(assemble_pac(1), &err));
+  FakeHost element_host;
+  pac::Vm element_vm(element_module, element_host);
+  element_vm.tick();
+  element_vm.tick();
+  element_host.alive = 0xE;
+  queued.clear();
+  CHECK(element_vm.run_slot(3, 2, queued));
+  CHECK_EQ(queued.size(), 1u);
+  CHECK_EQ(queued[0].type, 1);
+  CHECK_EQ(queued[0].mask, 1u);
+  element_host.roster = 0xE;
+  queued.clear();
+  CHECK(element_vm.run_slot(3, 2, queued));
+  CHECK_EQ(queued[0].mask, 1u << 3);
+
+  // Target code 0x1B: the first PC present at battle start that is KO'd, else 0.
+  pac::Module select_module;
+  CHECK(select_module.parse(assemble_pac(0, 0, 0x1B), &err));
+  FakeHost select_host;
+  pac::Vm select_vm(select_module, select_host);
+  select_vm.tick();
+  select_vm.tick();
+  queued.clear();
+  CHECK(select_vm.run_slot(3, 2, queued));
+  CHECK_EQ(select_vm.var(0x408), 0);
+  select_host.ko = 0x6;
+  select_host.alive = 0x9;
+  queued.clear();
+  CHECK(select_vm.run_slot(3, 2, queued));
+  CHECK_EQ(select_vm.var(0x408), 2);
+
+  // Target code 0x00 redraws rnd(0, 2) until it hits a targetable PC: rolls 1, 2, 1, 0 with only PC 0 alive = 4 draws, PC 0. With no PC
+  // alive the draws go on until every PC was drawn once and the pick gives PC 0's bit.
+  pac::Module random_module;
+  CHECK(random_module.parse(assemble_pac(0, 0, 0x00), &err));
+  FakeHost random_host;
+  pac::Vm random_vm(random_module, random_host);
+  random_vm.tick();
+  random_vm.tick();
+  random_host.alive = 0x9;
+  random_host.rolls = {1, 2, 1, 0};
+  random_host.rnd_calls = 0;
+  queued.clear();
+  CHECK(random_vm.run_slot(3, 2, queued));
+  CHECK_EQ(random_vm.var(0x408), 1);
+  CHECK_EQ(random_host.rnd_calls, 4);
+  random_host.alive = 0x8;
+  random_host.rolls = {2, 2, 1, 0};
+  random_host.rnd_calls = 0;
+  queued.clear();
+  CHECK(random_vm.run_slot(3, 2, queued));
+  CHECK_EQ(random_vm.var(0x408), 1);
+  CHECK_EQ(random_host.rnd_calls, 4);
 }
 
 void test_scripted_brain() {
@@ -1082,6 +1218,32 @@ void test_scripted_brain() {
   bool dlg = false;
   for (const auto& event : brain.drain_events()) dlg = dlg || (event.kind == pac::Event::Kind::Dialogue && event.a == 7);
   CHECK(dlg);
+}
+
+// A scripted heal queued on a KO'd PC still aims at that PC (the roster mask keeps it) and has no effect: HP stays 0, the KO stays.
+void test_scripted_heal_on_ko_pc() {
+  data::GameTables tables = make_tables();
+  ScriptedRng rng{Lo::Fallback::Lo};
+  pac::ScriptedBrain brain;
+  brain.set_module(0, assemble_pac(1, 3));
+  Battle battle{tables, rng, brain};
+  rng.push(0);
+  rng.push(100);
+  CHECK(battle.start({make_member(0, "A"), make_member(1, "B"), make_member(2, "C")}, 0));
+  battle.unit_mut(0).hp = 0;
+  battle.unit_mut(0).lo |= st::kKO;
+  const int enemy_hp = battle.unit(3).hp;
+  battle.drain_log();
+  battle.unit_mut(3).countdown = 0;
+  battle.settle();
+  bool aimed = false;
+  for (const auto& line : battle.drain_log())
+    if (line.find("on A: A is down") != std::string::npos) aimed = true;
+  CHECK(aimed);
+  CHECK_EQ(battle.unit(0).hp, 0);
+  CHECK((battle.unit(0).lo & st::kKO) != 0);
+  CHECK_EQ(battle.unit(3).hp, enemy_hp);
+  CHECK(battle.outcome() == Outcome::Ongoing);
 }
 
 // The script stream. Entity 4 (unit 3) slot 2 = `1F v408 = rand % 2; E0 1; E2; 66; 87; queue weapon -> PC1; 2D 30 (60 ticks); E0 2; E2; A4;
@@ -1841,12 +2003,14 @@ int main() {
   test_action_events();
   test_status_and_poison();
   test_status_message();
+  test_field_ring_writes();
   test_pilfer();
   test_forced_victory_pays_defeated_only();
   test_victory_and_growth();
   test_determinism();
   test_pac_vm();
   test_scripted_brain();
+  test_scripted_heal_on_ko_pc();
   test_pac_script_stream();
   test_scripted_battle_reentry();
   test_hp_known_status_applies();

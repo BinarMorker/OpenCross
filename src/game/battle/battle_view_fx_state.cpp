@@ -53,6 +53,26 @@ void BattleView::fx_ambient_tick() {
   }
 }
 
+// The stage / unit multiplier walks back to neutral (128) at a fixed rate, then forgets the last ramp; the unit back colour is untouched.
+void BattleView::fx_ambient_release() {
+  constexpr float kReleaseStep = 128.0f / 30.0f;
+  FxAmbient& ambient = fx_ambient_;
+  if (!ambient.touched || ambient.ramping) return;
+  bool neutral = true;
+  for (size_t k = 0; k < 3; ++k) {
+    const float delta = 128.0f - ambient.scur[k];
+    ambient.scur[k] += std::clamp(delta, -kReleaseStep, kReleaseStep);
+    neutral = neutral && ambient.scur[k] == 128.0f;
+  }
+  if (neutral) fx_ambient_stage_reset();
+}
+
+void BattleView::fx_ambient_stage_reset() {
+  FxAmbient& ambient = fx_ambient_;
+  ambient.touched = false;
+  for (size_t k = 0; k < 3; ++k) ambient.scur[k] = ambient.sfrom[k] = ambient.sto[k] = 128.0f;
+}
+
 // Before a unit's draw the light / colour matrices are rebuilt from the light table for the unit's attach
 // point 9 (waist), and the lit packer (world-space normals) runs when the unit's lit flag is set.
 // The table is in PS1 world units (y down) and this world is its mirror (model = T * yaw * flip), so the waist is

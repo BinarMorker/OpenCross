@@ -65,7 +65,6 @@ bool SlotList::any(const save::SaveDat* dat, const save::OcSaves* page) {
 void SlotList::begin(const save::SaveDat* dat, const save::OcSaves* page, import::Lang lang, ArtMode mode, bool plus) {
   for (int card = 0; card < 2; ++card) cards_[static_cast<size_t>(card)] = dat ? collect(*dat, card + 1) : std::vector<SlotEntry>{};
   rows_ = page ? collect(*page) : std::vector<std::optional<SlotEntry>>(save::kOcFiles + 1);
-  newest_ = page ? page->newest() : 0;
   entries_.clear();
   phase_ = Phase::Card;
   card_ = page && !page->empty() ? 0 : 1;
@@ -90,9 +89,10 @@ void SlotList::update(const Nav& nav, float dt) {
       phase_time_ = 0;
       sel_ = top_ = 0;
       if (card_ == 0) {
-        const bool any_file = std::any_of(rows_.begin(), rows_.end(), [](const auto& row) { return row.has_value(); });
-        // The cursor starts on the newest file (the auto-save when there is no other).
-        sel_ = newest_ ? newest_ : 0;
+        const auto first = std::find_if(rows_.begin(), rows_.end(), [](const auto& row) { return row.has_value(); });
+        const bool any_file = first != rows_.end();
+        // The cursor starts on the first file, which is the auto-save when it exists (as the card grid's first box).
+        sel_ = any_file ? static_cast<int>(first - rows_.begin()) : 0;
         top_ = std::clamp(sel_ - save_layout::kPageRows / 2, 0, save::kOcFiles + 1 - save_layout::kPageRows);
         phase_ = any_file ? Phase::Files : Phase::NoData;
       } else {

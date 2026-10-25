@@ -324,9 +324,9 @@ void FieldWorld::build_effects() {
     const Ent& entity = ents_[static_cast<size_t>(ent)];
     effects::Basis basis;
     const int pitch = static_cast<int>(std::lround(entity.actor.pitch)), roll = static_cast<int>(std::lround(entity.actor.roll));
-    const int yaw = static_cast<int>(std::lround(pose.yaw));
+    const int yaw = static_cast<int>(std::lround(pose.yaw)), local_yaw = static_cast<int>(std::lround(entity.actor.local_yaw));
     effects::Mat3 rotation = entity.actor.tilt_world ? effects::Mat3::from_angles(pitch, yaw, roll)
-                                                     : effects::Mat3::from_angles(0, yaw, 0) * effects::Mat3::from_angles(pitch, 0, roll);
+                                                     : effects::Mat3::from_angles(0, yaw, 0) * effects::Mat3::from_angles(pitch, local_yaw, roll);
     basis.m = rotation.scaled_columns(entity.actor.scale * entity.actor.axis_scale[0], entity.actor.scale * entity.actor.axis_scale[1],
                                       entity.actor.scale * entity.actor.axis_scale[2]);
     basis.t = {pose.x, pose.y, pose.z};

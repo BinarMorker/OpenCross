@@ -7,6 +7,8 @@ layout(location = 10) in vec4 in_weight01;
 layout(location = 11) in vec4 in_weight23;
 layout(location = 12) in vec4 in_uvq;       // uv, quad half (0 triangle, 1 first, 2 second), this vertex's corner index k in its triangle
 layout(location = 13) in vec4 in_normal;    // VDDM normal / 128 of corner 0, w = the joint that rotates it
+layout(location = 14) in vec4 in_rgb;       // the corner's packet colour / 128 (1 = neutral)
+layout(location = 15) in vec4 in_smooth;    // rigid meshes: the corner's smoothed model-space normal, w = 1 when present
 struct FrameSlot {
   mat4 view_proj;
   mat4 view;
@@ -34,6 +36,7 @@ layout(location = 8) flat out vec2 slab_v;     // smooth water line: the pass's 
 layout(location = 5) out vec4 v_light;      // lit path: the corner's colour multiplier (Gouraud, GT3), w = 1 when lit
 layout(location = 9) out vec3 v_extra;      // [Enhancements] additive colour multiplier (key light shading + spell lights), 0 = off
 layout(location = 10) flat out vec3 v_amb;  // [Enhancements] scene ambient multiplier (1 = off; not on the PS1 lit path, which carries the back colour itself)
+layout(location = 11) out vec3 v_corner;    // the corner's packet colour multiplier (Gouraud), applied on the flat path
 vec4 skin(vec3 p0, vec3 p1, uvec2 j, vec2 w) {
   return u.palette[j.x] * vec4(p0, 1.0) * w.x + u.palette[j.y] * vec4(p1, 1.0) * w.y;
 }
@@ -75,7 +78,8 @@ void main() {
     uv = vec3(e * aff, aff);
   }
   local_y = sk0.y;
-  v_light = vec4(pc.tint.rgb, 0.0);
+  v_corner = in_rgb.rgb;
+  v_light = vec4(pc.tint.rgb * v_corner, 0.0);
   if (u.lit[0].w > 0.5) {
     // PS1 lit path: the skinner rotates the VDDM normal (n << 5) by the joint's world matrix and clamps it to
     // +-0xFFF; the face builder runs NCCT on it: I_i = max(0, LLM_i . N) (lm), c = max(0, BK + LCM . I), corner colour =
@@ -86,7 +90,7 @@ void main() {
     vec3 c = u.lit[0].xyz;
     for (int i = 0; i < 3; ++i) c += u.lit[4 + i].xyz * clamp(dot(u.lit[1 + i].xyz, n), 0.0, 32767.0 / 4096.0);
     c = clamp(c, 0.0, 32767.0 / 4096.0);
-    v_light = vec4(min(pc.tint.rgb * c, vec3(255.0 / 128.0) * pc.tint.a), 1.0);
+    v_light = vec4(min(pc.tint.rgb * v_corner * c, vec3(255.0 / 128.0) * pc.tint.a), 1.0);
   }
   v_extra = vec3(0.0);
   v_amb = (u.el[17].w > 0.5 && u.lit[0].w < 0.5) ? u.el[17].xyz : vec3(1.0);
@@ -126,15 +130,23 @@ void main() {
   vec4 g0 = wl[(3 - k) % 3], g1 = wl[(4 - k) % 3], g2 = wl[(5 - k) % 3];
   if (u.lit[7].w > 0.5) {
     // Weapon specular: n = the face normal (the loader's per-face normal table, rotated by the model matrix; here
-    // from the triangle, facing the eye since only front faces are drawn), l = the unit vector toward the stage light, v = the
-    // unit vector from this corner to the eye. r = 2 (n . l) n - l (VectorNormalSS), s = r . v; term = min(255, 256 s^9)
+    // from the triangle, facing the camera since only front faces are drawn), l = the unit vector toward the stage light, v = the
+    // unit vector from this corner to the eye point (the camera in battle; the menu's (d sin yaw, d cos yaw, 0), which is not the camera, so
+    // the normal is not turned toward it). r = 2 (n . l) n - l (VectorNormalSS), s = r . v; term = min(255, 256 s^9)
     // (`s*s >> 12` twice, `(s*s >> 12) * s >> 16`), added to the packet colour byte (clamped 255) -> here to the colour multiplier (x / 128).
     vec3 fn = cross(g1.xyz - g0.xyz, g2.xyz - g0.xyz);
     vec3 eye = u.lit[8].xyz;
-    if (dot(fn, eye - g0.xyz) < 0.0) fn = -fn;
+    if (dot(fn, inverse(u.view)[3].xyz - g0.xyz) < 0.0) fn = -fn;
     float fl = length(fn);
     if (fl > 0.0) {
+      // [Enhancements] Lighting: the same term at each corner on the smoothed normal (turned to this face's side), interpolated across the
+      // face, so the glint blends over neighbouring faces instead of lighting them one by one.
       vec3 n = fn / fl, l = u.lit[7].xyz;
+      if (u.el[0].x > 0.5 && in_smooth.w > 0.5) {
+        mat3 nm = transpose(inverse(mat3(u.model) * mat3(u.palette[in_joint01.x])));
+        vec3 ns = normalize(nm * in_smooth.xyz);
+        n = dot(ns, n) < 0.0 ? -ns : ns;
+      }
       float nl = dot(n, l), term = 0.0;
       if (nl > 0.0) {
         vec3 r = normalize(2.0 * nl * n - l);

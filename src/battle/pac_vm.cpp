@@ -123,7 +123,7 @@ int Vm::emit(Event::Kind kind, int unit, int arg_a, int arg_b) {
 u32 Vm::targetable() const {
   u32 mask = host_.alive_mask();
   for (int unit = 0; unit < kUnits; ++unit)
-    if (ghost_[static_cast<size_t>(unit)]) mask &= ~(1u << unit);
+    if (untarget_[static_cast<size_t>(unit)]) mask &= ~(1u << unit);
   return mask;
 }
 
@@ -316,62 +316,69 @@ int Vm::target_mask(int entity, int code) {
   const u32 alive = host_.alive_mask(), tg = targetable();
   const u32 pcs = 0x7, enemies = 0x1F8;
   const int self = self_unit(entity);
-  const u32 self_bit = self < kUnits ? 1u << self : 0u;
-  auto pick = [&](u32 mask) -> int {
-    const int count = std::popcount(mask);
-    if (count == 0) return 0;
-    int skip = host_.rnd(0, count - 1);
-    for (int unit = 0; unit < kUnits; ++unit)
-      if (mask >> unit & 1u) {
-        if (skip-- == 0) return 1 << unit;
-      }
-    return 0;
+  // A random pick draws rnd(first, last) until the unit is targetable and not `exclude`; once every unit of the range was drawn without
+  // success it gives unit 0's bit.
+  auto pick = [&](int first, int last, int exclude) -> int {
+    u32 range = 0, tried = 0;
+    for (int unit = first; unit <= last; ++unit) range |= 1u << unit;
+    while ((tried & range) != range) {
+      const int unit = host_.rnd(first, last);
+      if ((tg >> unit & 1u) && unit != exclude) return 1 << unit;
+      tried |= 1u << unit;
+    }
+    return 1;
   };
   auto group_of = [&](int unit) {
     for (int k = 1; k < mod_.entities; ++k)
       if (ctx_[static_cast<size_t>(k)].unit == unit && !ctx_[static_cast<size_t>(k)].dropped) return ctx_[static_cast<size_t>(k)].group;
     return 0xFF;
   };
+  // The group picks draw rnd(0, 9) until the unit was present at battle start, is alive (the untargetable flag is not tested) and passes
+  // the group test; with no such unit retail never returns, here the pick gives 0 without drawing.
+  auto group_pick = [&](auto&& accept) -> int {
+    const u32 present = host_.present_mask();
+    u32 valid = 0;
+    for (int unit = 0; unit < kUnits; ++unit)
+      if ((present >> unit & 1u) && (alive >> unit & 1u) && accept(unit)) valid |= 1u << unit;
+    if (!valid) return 0;
+    for (;;) {
+      const int unit = host_.rnd(0, 9);
+      if (unit < kUnits && (valid >> unit & 1u)) return 1 << unit;
+    }
+  };
+  // The first unit of one side present at battle start that is KO'd now (0x17 enemies, 0x1B PCs), else 0.
+  auto first_down = [&](u32 side) -> int {
+    const u32 present = host_.present_mask();
+    for (int unit = 0; unit < kUnits; ++unit)
+      if ((side >> unit & 1u) && (present >> unit & 1u) && (host_.read_field(unit, 0xB0) & st::kKO)) return 1 << unit;
+    return 0;
+  };
   const int lo = code & 0xFF;
   if (lo == 0x1A || lo >= 0x50) {
     const int id = (code + 0x80) & 0xFF;
     for (int i = 0; i < kPcSlots; ++i)
-      if ((alive >> i & 1u) && host_.pc_char_id(i) == id) return 1 << i;
+      if ((tg >> i & 1u) && host_.pc_char_id(i) == id) return 1 << i;
     return 1;
   }
   switch (lo) {
-    case 0x00: return pick(tg & pcs);
-    case 0x10: return pick(tg & enemies);
+    case 0x00: return pick(0, kPcSlots - 1, -1);
+    case 0x10: return pick(kPcSlots, kUnits - 1, -1);
     case 0x01: return static_cast<int>(alive & pcs);
     case 0x24: return static_cast<int>(alive & enemies);
-    case 0x18: return pick(tg & ~self_bit);
-    case 0x19: return pick(tg & enemies & ~self_bit);
+    case 0x18: return pick(0, kUnits - 1, self);
+    case 0x19: return pick(kPcSlots, kUnits - 1, self);
     case 0x25: {
       const bool charmed = self < kUnits && (host_.read_field(self, 0x40B2) & 0x10) != 0;
-      return charmed ? pick(tg & ~self_bit) : pick(tg & pcs);
+      return charmed ? pick(0, kUnits - 1, self) : pick(0, kPcSlots - 1, -1);
     }
-    case 0x17: {  // first alive enemy of the last-attacker set [?]: approximated by the first alive enemy
-      const u32 mask = alive & enemies;
-      return mask ? static_cast<int>(mask & (~mask + 1)) : 0;
-    }
-    case 0x1B: {  // first alive PC of the last-attacker set [?]
-      const u32 mask = alive & pcs;
-      return mask ? static_cast<int>(mask & (~mask + 1)) : 0;
-    }
+    case 0x17: return first_down(enemies);
+    case 0x1B: return first_down(pcs);
     case 0x1C: {
-      u32 mask = 0;
       const int mine = self < kUnits ? group_of(self) : 0xFF;
-      for (int unit = 0; unit < kUnits; ++unit)
-        if ((tg >> unit & 1u) && group_of(unit) != mine) mask |= 1u << unit;
-      return pick(mask);
+      return group_pick([&](int unit) { return group_of(unit) != mine; });
     }
     default:
-      if (lo >= 0x1D && lo <= 0x23) {
-        u32 mask = 0;
-        for (int unit = 0; unit < kUnits; ++unit)
-          if ((tg >> unit & 1u) && group_of(unit) == lo - 0x1D) mask |= 1u << unit;
-        return pick(mask);
-      }
+      if (lo >= 0x1D && lo <= 0x23) return group_pick([&](int unit) { return group_of(unit) == lo - 0x1D; });
       return 0;
   }
 }
@@ -658,7 +665,7 @@ Vm::Step Vm::exec(int entity, Frame& frame, u8 op, int& adv) {
       QueuedAttack qa;
       qa.type = operand_s(0) & 0xFF;
       qa.value = operand_s(1);
-      u32 mask = static_cast<u32>(operand_s(2)) & 0xFFFFu & host_.alive_mask();
+      u32 mask = static_cast<u32>(operand_s(2)) & 0xFFFFu & host_.roster_mask();
       if (qa.type == 0 || qa.type == 5) {
         if (qa.value < 0 || qa.value > 2) qa.value = 0;
         if (!mask) mask = 1;
@@ -851,6 +858,20 @@ class ScriptedBrain::BattleHost final : public Host {
       if (battle->unit(i).alive()) mask |= 1u << i;
     return mask;
   }
+  u32 roster_mask() const override {
+    u32 mask = 0;
+    for (int i = 0; i < kUnits; ++i) {
+      const Unit& state = battle->unit(i);
+      if (state.present && (state.pc || state.alive() || battle->death_pending(i))) mask |= 1u << i;
+    }
+    return mask;
+  }
+  u32 present_mask() const override {
+    u32 mask = 0;
+    for (int i = 0; i < kUnits; ++i)
+      if (battle->unit(i).present) mask |= 1u << i;
+    return mask;
+  }
   int rnd(int lo, int hi) override { return rng->rnd(lo, hi); }
   int libc_rand() override { return rng->libc_rand(); }
   int action_serial() const override { return battle->action_id(); }
@@ -1031,39 +1052,58 @@ class ScriptedBrain::BattleHost final : public Host {
     PickResult result;
     if (unit < 0 || unit >= kUnits) return result;
     Unit& state = battle->unit_mut(unit);
-    const int lim = limit < 0 ? state.gauge : limit;
-    std::vector<size_t> cand;
-    for (size_t cell_index = 0; cell_index < data::kGridCells; ++cell_index) {
-      if (static_cast<int>(cell_index) / data::kGridCols > lim) break;
-      if (!state.usable[cell_index] || state.used[cell_index] || (state.cells[cell_index] & 0xC000)) continue;
-      // Ops 0x55 / 0x8F: a cell is accepted only when its element id is < 0x7E and its element record has byte 0x14 == 0xFF,
-      // (byte 0 & 0x44) == 0 and (byte 4 & 0x41) == 0; a rejected cell is dropped and the draw repeats, so the pick is uniform over the accepted cells.
-      // Techs from id 126 up (Big Catch 192, Dopplegang 238, the enemy-only techs ...) are only ever cast by an explicit queue_attack.
-      const int id = state.cells[cell_index] & 0x3FFF;
-      if (id >= 0x7E || id >= static_cast<int>(battle->tables().elements.size())) continue;
-      const auto& pr = battle->tables().elements[static_cast<size_t>(id)];
-      if (pr.raw[0x14] != 0xFF || (pr.raw[0] & 0x44) != 0 || (pr.raw[4] & 0x41) != 0) continue;
-      cand.push_back(cell_index);
+    // Ops 0x55 / 0x8F draw a cell of rows 0..gauge (0x8F: rows 0..limit) with rnd(0, cells - 1) until one is free (usable, unused, no
+    // tech flag) and holds an element id < 0x7E whose record has byte 0x14 == 0xFF, (byte 0 & 0x44) == 0 and (byte 4 & 0x41) == 0, and a
+    // target is found for it; a free cell that fails is closed and the draw goes on. Techs from id 126 up (Big Catch 192, Dopplegang 238,
+    // the enemy-only techs ...) are only ever cast by an explicit queue_attack.
+    const int rows = std::clamp((limit < 0 ? state.gauge : limit) + 1, 0, data::kGridRows);
+    const int cells = rows * data::kGridCols;
+    std::array<bool, data::kGridCells> open{};
+    int left = 0;
+    for (int cell = 0; cell < cells; ++cell) {
+      const auto index = static_cast<size_t>(cell);
+      open[index] = state.usable[index] && !state.used[index] && !(state.cells[index] & 0xC000);
+      left += open[index];
     }
-    if (cand.empty()) return result;
-    const size_t cell = cand[static_cast<size_t>(rng->rnd(0, static_cast<int>(cand.size()) - 1))];
-    state.used[cell] = true;
-    if (limit < 0) state.gauge = std::max(-1, state.gauge - (static_cast<int>(cell) / data::kGridCols + 1));
-    result.element = state.cells[cell] & 0x3FFF;
-    const auto& rec = battle->tables().elements[static_cast<size_t>(result.element)];
-    const bool heal = rec.mode() == 3 || rec.mode() == 43 || rec.mode() == 4;
-    const u32 mine = state.pc ? 0x7u : 0x1F8u, theirs = state.pc ? 0x1F8u : 0x7u;
-    const u32 side = (heal ? mine : theirs) & alive_mask();
-    if (!side) return result;
-    if (rec.raw[0] & 0x10) {
-      result.mask = side;
-    } else {
-      int skip = rng->rnd(0, std::popcount(side) - 1);
-      result.mask = 0;
-      for (int i = 0; i < kUnits && !result.mask; ++i)
-        if ((side >> i & 1u) && skip-- == 0) result.mask = 1u << i;
+    const auto& elements = battle->tables().elements;
+    while (left > 0) {
+      const auto cell = static_cast<size_t>(rng->rnd(0, cells - 1));
+      if (!open[cell]) continue;
+      const int id = state.cells[cell] & 0x3FFF;
+      if (id < 0x7E && id < static_cast<int>(elements.size())) {
+        const auto& rec = elements[static_cast<size_t>(id)];
+        if (rec.raw[0x14] == 0xFF && (rec.raw[0] & 0x44) == 0 && (rec.raw[4] & 0x41) == 0) {
+          const u32 mask = element_target(rec.raw[4], limit >= 0, unit);
+          if (mask != 0xFFFF) {
+            state.used[cell] = true;
+            if (limit < 0) state.gauge = std::max(-1, state.gauge - (static_cast<int>(cell) / data::kGridCols + 1));
+            result.element = id;
+            result.mask = mask;
+            return result;
+          }
+        }
+      }
+      open[cell] = false;
+      --left;
     }
     return result;
+  }
+
+  // The target of a picked element (record byte 4): bit 0x10 = every alive unit of the far side (op 0x8F: the PCs, op 0x55: the enemy
+  // slots); else rnd(0, 2) (0x8F) / rnd(0, 8) (0x55) until an alive, targetable unit other than the caster comes up; 0xFFFF once every
+  // unit was drawn without success.
+  u32 element_target(u8 spec, bool pcs_only, int caster) {
+    const u32 alive = alive_mask();
+    if (spec & 0x10) return alive & (pcs_only ? 0x7u : 0x1F8u);
+    const int last = pcs_only ? kPcSlots - 1 : kUnits - 1;
+    u32 range = 0, tried = 0;
+    for (int i = 0; i <= last; ++i) range |= 1u << i;
+    while ((tried & range) != range) {
+      const int target = rng->rnd(0, last);
+      if ((alive >> target & 1u) && target != caster && !battle->untargetable(target)) return 1u << target;
+      tried |= 1u << target;
+    }
+    return 0xFFFF;
   }
 };
 

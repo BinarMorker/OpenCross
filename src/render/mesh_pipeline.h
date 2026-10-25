@@ -56,6 +56,11 @@ struct SkinnedVertex {
   // PS1 lit path: the VDDM normal of corner 0 as n / 128 (the skinner uses n << 5 in 4.12 = the same value) and,
   // in w, the index of the joint whose matrix rotates it (the vertex's own joint, or J2 = joint[1] for a 16-byte vertex). Zero for rigid meshes.
   float normal[4] = {0, 0, 0, 0};
+  // The corner's packet colour / 128 (assets::MeshVertex::rgb; 1 = neutral), w unused.
+  float rgb[4] = {1, 1, 1, 0};
+  // Rigid meshes ([Enhancements] Lighting's per-pixel weapon glint): this corner's smoothed model-space normal = the area-weighted face normals
+  // at its position whose faces lie within kHardEdgeDegrees of this face (sharp rims stay sharp); w = 1 when present.
+  float smooth[4] = {0, 0, 0, 0};
 };
 
 // GPU copy of one assets::ModelAsset (all meshes, textures). Created by MeshPipeline::create_model; must be destroyed
@@ -194,6 +199,9 @@ class MeshPipeline {
     Light light;
     // [Enhancements] SpellLights: point lights (render world) added to this model's colour multiplier; null / empty = none (the PS1 look).
     const LightSet* lights = nullptr;
+    // Every visible face as an opaque, untextured, unlit polygon of `solid_rgb` (a flat shadow of the model).
+    bool solid = false;
+    float solid_rgb[3] = {0, 0, 0};
   };
   void draw(const MeshModel& model, const DrawParams& params);
   void end();

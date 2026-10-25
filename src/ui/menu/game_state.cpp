@@ -215,8 +215,12 @@ int GameState::copies_placed(int character, int id) const {
   int total = 0;
   for (int row = 0; row < kRows; ++row)
     for (int col = 0; col < kCols; ++col)
-      if (cell_element(character, row, col) == id) ++total;
+      if (cell_available(character, row, col) && cell_element(character, row, col) == id) ++total;
   return total;
+}
+bool GameState::eligible(int character, int id) const {
+  if (const PgRow* pg_entry = rules->pg_row(id); pg_entry && !pg_entry->eligible(character)) return false;
+  return !rules->el_innate_only(id) || rules->el_colour(id) == innate(character);
 }
 
 Why GameState::can_place(int character, int row, int col, int id) const {
@@ -224,9 +228,7 @@ Why GameState::can_place(int character, int row, int col, int id) const {
   if (!cell_available(character, row, col)) return Why::Locked;
   const int occ = cell_element(character, row, col);
   if (occ && rules->el_fixed(occ)) return Why::Fixed;
-  if (!rules->is_element(id)) return Why::NotEligible;
-  if (const PgRow* pg_entry = rules->pg_row(id); pg_entry && !pg_entry->eligible(character)) return Why::NotEligible;
-  if (rules->el_innate_only(id) && rules->el_colour(id) != innate(character)) return Why::NotEligible;
+  if (!rules->is_element(id) || !eligible(character, id)) return Why::NotEligible;
   if (!rules->window_ok(id, row)) return Why::Window;
   int have = element_count(id);
   if (occ == id) have += rules->el_stack(id) ? std::max(1, cell_count(character, row, col)) : 1;
@@ -299,70 +301,92 @@ int GameState::clear_all(int character) {
   return cleared;
 }
 
+// The grid editor's list holds two label rows ahead of the occupied stock slots and ends at 192 entries, so only the first 190
+// occupied slots are candidates. The buckets are built once per run and keep their order from cell to cell.
+GameState::LevelBuckets GameState::level_buckets() const {
+  constexpr int kListedStock = 190;
+  LevelBuckets buckets;
+  int listed = 0;
+  for (size_t stock_slot = 0; stock_slot < slot.elements.size() && listed < kListedStock; ++stock_slot) {
+    const save::ItemStack& stack = slot.elements[stock_slot];
+    if (stack.id == 0 || stack.qty == 0) continue;
+    ++listed;
+    const int level = rules->el_level(stack.id);
+    if (stack.id < 0x80 && level >= 1 && level <= kRows) buckets[static_cast<size_t>(level - 1)].push_back(static_cast<int>(stock_slot));
+  }
+  return buckets;
+}
+
+// menu_pg's bonus for no / one copy placed, +10 when the element has the member's innate colour and -10 when it has the opposite one
+// (members with no single innate colour get neither); an empty slot -200, an element already placed twice -100.
 int GameState::score(int character, int id) const {
-  if (element_count(id) <= 0) return -200;
+  if (id == 0) return -200;
   const int placed = copies_placed(character, id);
   if (placed >= 2) return -100;
   int total = 0;
   if (const PgRow* pg_entry = rules->pg_row(id)) total = placed == 0 ? pg_entry->bonus_none() : pg_entry->bonus_one();
-  const int innate_colours = innate(character) & 0xFC, element_colour = rules->el_colour(id);
-  if (innate_colours & element_colour) total += 10;
-  if (opposite_mask(innate_colours) & element_colour) total -= 10;
+  const int innate_colour = innate(character) & 0xFC, opposite = opposite_bit(innate_colour), element_colour = rules->el_colour(id);
+  if (opposite != 0) {
+    if (element_colour & opposite) total -= 10;
+    else if (element_colour & innate_colour) total += 10;
+  }
   return total;
 }
 
-int GameState::fill_cells(int character, bool fallback) {
-  // Distinct stocked element ids of level >= 1 (the per-level buckets of the original).
-  std::vector<int> ids;
-  for (const auto& entry : slot.elements)
-    if (entry.qty > 0 && rules->is_element(entry.id) && rules->el_level(entry.id) >= 1 && std::find(ids.begin(), ids.end(), entry.id) == ids.end())
-      ids.push_back(entry.id);
-  int placed = 0;
-  for (int row = kRows - 1; row >= 0; --row)
-    for (int col = 0; col < kCols; ++col) {
-      if (!cell_available(character, row, col) || cell_element(character, row, col) != 0) continue;
-      std::vector<int> levels{row + 1};
-      if (fallback)
-        for (int distance = 1; distance <= 8; ++distance) {
-          levels.push_back(row + 1 + distance);
-          levels.push_back(row + 1 - distance);
-        }
-      bool done = false;
-      for (int level : levels) {
-        // (-score, id) so a stable sort gives descending score.
-        std::vector<std::pair<int, int>> cand;
-        for (int id : ids)
-          if (rules->el_level(id) == level) cand.emplace_back(-score(character, id), id);
-        std::stable_sort(cand.begin(), cand.end(), [](auto& lhs, auto& rhs) { return lhs.first < rhs.first; });
-        for (auto& [neg, id] : cand) {
-          const int need = rules->el_stack(id) ? kStackMax : 1;
-          if (element_count(id) < need || copies_placed(character, id) >= 2) continue;
-          if (place(character, row, col, id) == Why::Ok) {
-            ++placed;
-            done = true;
-            break;
-          }
-        }
-        if (done) break;
+// Exchange sort to descending score; a candidate is swapped forward only by a strictly higher one.
+void GameState::sort_bucket(int character, std::vector<int>& bucket) const {
+  auto slot_score = [&](int stock_slot) { return score(character, slot.elements[static_cast<size_t>(stock_slot)].id); };
+  for (size_t i = 0; i + 1 < bucket.size(); ++i)
+    for (size_t j = i; j < bucket.size(); ++j)
+      if (slot_score(bucket[i]) < slot_score(bucket[j])) std::swap(bucket[i], bucket[j]);
+}
+
+// First candidate the member may hold, legal in `row`, with enough copies in its own stock slot (5 for a stack) and fewer than two
+// placed. The fallback pass also searches the buckets of rows +1, -1, +2, -2 ... around it.
+int GameState::pick_for_cell(int character, int row, bool fallback, const LevelBuckets& buckets) const {
+  const int reach = fallback ? kRows : 0;
+  for (int distance = 0; distance <= reach; ++distance)
+    for (int side = 1; side >= -1; side -= 2) {
+      const int level_row = row + side * distance;
+      if ((distance == 0 && side < 0) || level_row < 0 || level_row >= kRows) continue;
+      for (int stock_slot : buckets[static_cast<size_t>(level_row)]) {
+        const save::ItemStack& stack = slot.elements[static_cast<size_t>(stock_slot)];
+        if (stack.id == 0 || !eligible(character, stack.id) || !rules->window_ok(stack.id, row)) continue;
+        const int need = rules->el_stack(stack.id) ? kStackMax : 1;
+        if (stack.qty >= need && copies_placed(character, stack.id) < 2) return stack.id;
       }
     }
+  return 0;
+}
+
+int GameState::fill_row(int character, int row, bool fallback, LevelBuckets& buckets) {
+  int placed = 0;
+  for (int col = 0; col < kCols; ++col) {
+    if (!cell_available(character, row, col) || cell_element(character, row, col) != 0) continue;
+    sort_bucket(character, buckets[static_cast<size_t>(row)]);
+    if (const int id = pick_for_cell(character, row, fallback, buckets); id != 0 && place(character, row, col, id) == Why::Ok) ++placed;
+  }
+  return placed;
+}
+
+// Rows from the top level down, each row for every member in turn; the exact-level pass over all rows comes before the fallback pass.
+int GameState::auto_fill_members(const std::vector<int>& members, bool reset) {
+  if (reset)
+    for (int character : members) clear_all(character);
+  LevelBuckets buckets = level_buckets();
+  int placed = 0;
+  for (bool fallback : {false, true})
+    for (int row = kRows - 1; row >= 0; --row)
+      for (int character : members) placed += fill_row(character, row, fallback, buckets);
   return placed;
 }
 
 int GameState::auto_fill(int character, bool reset) {
   if (character < 0 || character >= save::kNumChars) return 0;
-  if (reset) clear_all(character);
-  // Pass 1 fills exact levels only, pass 2 the nearest levels.
-  int placed = fill_cells(character, false);
-  placed += fill_cells(character, true);
-  return placed;
+  return auto_fill_members({character}, reset);
 }
 
-int GameState::auto_fill_party(bool reset) {
-  int placed = 0;
-  for (int character : party()) placed += auto_fill(character, reset);
-  return placed;
-}
+int GameState::auto_fill_party(bool reset) { return auto_fill_members(party(), reset); }
 
 void GameState::sort_elements(SortMode mode, int character) {
   struct SortEntry {
