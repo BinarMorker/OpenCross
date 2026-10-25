@@ -12,6 +12,8 @@
 - tap confirm
 - wait flow slots 300
 - wait 20
+- tap confirm                         # Slot 1 (memory-card choice)
+- wait 20
 - tap right
 - tap right                           # slot 2 = the cleared save (left / right step through the files)
 - wait 10

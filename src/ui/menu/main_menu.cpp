@@ -192,7 +192,7 @@ void MainMenu::Impl::enter(MenuScreen target) {
     case MenuScreen::Equip: eslot = 0, eq_cur = eq_scroll = 0, eq_list = false; break;
     case MenuScreen::KeyItems: ki_cur = ki_scroll = 0; break;
     case MenuScreen::Settings: set_cur = 0, skin_pick = false; break;
-    case MenuScreen::Save: save_cur = 0, load_cur = 1, top_cur = can_save ? 0 : 1, save_phase = 0, load_mode = false, save_confirm = false, load_previews(); break;
+    case MenuScreen::Save: save_cur = 0, load_cur = 1, top_cur = can_save ? 0 : 1, save_phase = 0, save_card = 0, load_mode = false, save_confirm = false, load_previews(); break;
     default: break;
   }
 }
@@ -318,10 +318,11 @@ std::optional<MainMenu::LoadRequest> MainMenu::take_load_request() {
   Impl& impl = *impl_;
   if (!impl.load_pending) return std::nullopt;
   impl.load_pending = false;
-  const save::MemCard* card = impl.save_dat ? impl.save_dat->card(1) : nullptr;
+  const save::MemCard* card = impl.save_dat ? impl.save_dat->card(impl.load_card) : nullptr;
   if (!card) return std::nullopt;
   try {
     LoadRequest request;
+    request.card = impl.load_card;
     request.slot = impl.load_slot;
     request.block = impl.load_block;
     request.data = save::read_slot(*card, impl.load_block);

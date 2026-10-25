@@ -379,6 +379,7 @@ void App::advance(const platform::Input& in, double dt, int ticks) {
       // Save/Load > Load: start the slot like Continue.
       if (auto lr = menu.take_load_request()) {
         ui::SlotEntry entry;
+        entry.card = lr->card;
         entry.slot = lr->slot;
         entry.block = lr->block;
         entry.data = std::move(lr->data);

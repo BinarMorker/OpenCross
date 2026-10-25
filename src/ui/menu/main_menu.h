@@ -71,7 +71,8 @@ class MainMenu {
   // Save/Load > Load: the menu closes and this reports the chosen slot once (card block + decoded data); the host starts it like Continue
   // (GameFlow::load_slot). Load is always available, Save only when `can_save` of open() is set.
   struct LoadRequest {
-    // slot: CHRONOnn (0 = auto-save); block: memory-card block.
+    // card: memory card 1 / 2; slot: CHRONOnn (0 = auto-save on card 1); block: memory-card block.
+    int card = 1;
     int slot = 0;
     int block = 0;
     save::SaveSlot data;

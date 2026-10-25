@@ -12,6 +12,8 @@
 - screenshot ne_01_save_list.png
 - tap confirm                         # Save a File -> the file list (cursor on file 1)
 - wait 20
+- tap confirm                         # Slot 1 (memory-card choice)
+- wait 20
 - tap confirm                         # empty file 1: saved at once
 - wait 60
 - tap cancel

@@ -24,13 +24,14 @@ std::u32string format_playtime(u32 frames) {
   return std::u32string(text.begin(), text.end());
 }
 
-std::vector<SlotEntry> SlotList::collect(const save::SaveDat& dat) {
+std::vector<SlotEntry> SlotList::collect(const save::SaveDat& dat, int card_no) {
   std::vector<SlotEntry> out;
-  const save::MemCard* card = dat.card(1);
+  const save::MemCard* card = dat.card(card_no);
   if (!card) return out;
   for (const save::SlotRef& ref : save::list_slots(*card)) {
     try {
       SlotEntry entry;
+      entry.card = card_no;
       entry.slot = ref.slot;
       entry.block = ref.block;
       entry.data = save::read_slot(*card, ref.block);
@@ -44,8 +45,14 @@ std::vector<SlotEntry> SlotList::collect(const save::SaveDat& dat) {
   return out;
 }
 
-void SlotList::begin(std::vector<SlotEntry> entries, import::Lang lang, ArtMode mode, bool plus) {
-  entries_ = std::move(entries);
+bool SlotList::any(const save::SaveDat* dat) { return dat && (!collect(*dat, 1).empty() || !collect(*dat, 2).empty()); }
+
+void SlotList::begin(const save::SaveDat* dat, import::Lang lang, ArtMode mode, bool plus) {
+  for (int card = 0; card < 2; ++card) cards_[static_cast<size_t>(card)] = dat ? collect(*dat, card + 1) : std::vector<SlotEntry>{};
+  entries_.clear();
+  phase_ = Phase::Card;
+  card_ = 0;
+  phase_time_ = 0;
   plus_ = plus;
   lang_ = lang;
   mode_ = mode;
@@ -53,8 +60,29 @@ void SlotList::begin(std::vector<SlotEntry> entries, import::Lang lang, ArtMode 
   picked_ = cancelled_ = false;
 }
 
-void SlotList::update(const Nav& nav, float) {
+void SlotList::update(const Nav& nav, float dt) {
   if (picked_ || cancelled_) return;
+  clock_ += dt;
+  phase_time_ += dt;
+  // Card choice: up / down toggle Slot 1 / 2; confirm scans the card (an empty one shows "No save data in Slot N.").
+  if (phase_ == Phase::Card) {
+    if (nav.up || nav.down) card_ = 1 - card_, play(1);
+    if (nav.confirm) {
+      play(8);
+      entries_ = cards_[static_cast<size_t>(card_)];
+      sel_ = top_ = 0;
+      phase_ = entries_.empty() ? Phase::NoData : Phase::Files;
+      phase_time_ = 0;
+    } else if (nav.cancel) {
+      cancelled_ = true, play(6);
+    }
+    return;
+  }
+  // The message closes on confirm or after 120 frames.
+  if (phase_ == Phase::NoData) {
+    if (nav.confirm || phase_time_ > 120.0f / 60.0f) phase_ = Phase::Card, phase_time_ = 0;
+    return;
+  }
   const int cnt = static_cast<int>(entries_.size());
   if (cnt > 0) {
     // Left / right step through the files; up / down jump between the two rows of the 8 + 7 strip (box i = entry i).
@@ -72,7 +100,7 @@ void SlotList::update(const Nav& nav, float) {
   } else if (nav.confirm) {
     play(0x18);
   }
-  if (nav.cancel) cancelled_ = true, play(6);
+  if (nav.cancel) phase_ = Phase::Card, phase_time_ = 0, play(6);
 }
 
 // Continue file select: the same screen as the in-game Load grid (layout: menu/save_layout.h). It draws no parchment; its backdrop
@@ -236,16 +264,50 @@ void SlotList::draw(DrawList& dl, UiKit& kit) const {
     return import::utf8_to_u32(fb);
   };
 
+  // Card choice (no grid): message frame 86 with "Please choose a slot." and the two card lines at PS1 (298, 360 + 24 card), the
+  // pointer at (266, 361 + 24 card); an empty card's "No save data in Slot N." replaces them until it closes.
+  if (phase_ != Phase::Files) {
+    frame(86, sl::kMsgX, sl::kMsgY);
+    auto line = [&](float x, float y, const std::u32string& str) {
+      if (ink) label(x + 1.5f, y + 2.5f, str, sl::kMsgScale, sl::kMsgWidth);
+      else txt(x, y, str, white, 1.0f);
+    };
+    if (phase_ == Phase::NoData) {
+      line(146, 336, menu_str(card_ == 0 ? 0x801F3181 : 0x801F3182, card_ == 0 ? "No save data in Slot 1." : "No save data in Slot 2."));
+      return;
+    }
+    line(146, 336, menu_str(0x801F2CA4, "Please choose a slot."));
+    line(298, 360, menu_str(0x801F2CDC, "Slot 1"));
+    line(298, 384, menu_str(0x801F2CF8, "Slot 2"));
+    // Pointer: menutest_cur.png (23 x 11) pulsing like the menu's; the PS1 red triangle when the sprite is missing.
+    const float cx = 266.0f, cy = 361.0f + 24.0f * static_cast<float>(card_);
+    const int ph = static_cast<int>(clock_ * 60.0f) % 96;
+    const int pulse = 0x90 + (ph < 48 ? ph * 2 : (95 - ph) * 2);
+    const NamePic cursor = ps1_art ? NamePic{} : pic("hd/menu/menutest_cur.png");
+    if (cursor.set) {
+      const int red = std::min(255, (pulse >> 1) * 255 / 128), rest = std::min(255, ((pulse - 0x80) >> 1) * 255 / 128);
+      dl.image(cursor.set, canvas_x(cx), canvas_y(cy), canvas_x(23), canvas_y(11), pack_rgba(static_cast<u8>(red), static_cast<u8>(rest), static_cast<u8>(rest)));
+    } else {
+      const int green = std::min(255, (pulse - 0x80) * 2);
+      for (int i = 0; i < 12; ++i) {
+        const float width_factor = 1.0f - std::fabs(static_cast<float>(i) + 0.5f - 6.0f) / 6.0f;
+        dl.rect(white_set, canvas_x(cx), canvas_y(cy + static_cast<float>(i)), canvas_x(23.0f * width_factor), canvas_y(1) + 0.6f,
+                pack_rgba(255, static_cast<u8>(green), static_cast<u8>(green)));
+      }
+    }
+    return;
+  }
+
   // Indexed by BOX: the k-th file in directory order.
   std::array<const SlotEntry*, 15> by_slot{};
   for (size_t i = 0; i < entries_.size() && i < by_slot.size(); ++i) by_slot[i] = &entries_[i];
   const SlotEntry* cur = entries_.empty() ? nullptr : &entries_[static_cast<size_t>(sel_)];
 
   // ---- slot grid
-  frame(82, sl::kGridX, sl::kGridY, 8, 40);
+  frame(82 + card_, sl::kGridX, sl::kGridY, 8, 40);
   {
     // Caption tab (memory-card slot), bn font in every language.
-    const std::u32string caption = cmn("slot", "Slot") + U" 1";
+    const std::u32string caption = cmn("slot", "Slot") + (card_ == 0 ? U" 1" : U" 2");
     if (ink) ink_text(kit.face_bn(), sl::kSlotCapX, sl::kSlotCapY, caption, text_c, sl::kSlotCapScale);
     else txt(sl::kSlotCapX, sl::kGridY - 4.0f, caption, white, 0.55f);
   }
@@ -318,7 +380,9 @@ void SlotList::draw(DrawList& dl, UiKit& kit) const {
     else txt(fx + 2.0f, 262, name_of_ ? name_of_(party[i]) : std::u32string(), white, 0.6f);
   }
   const std::u32string leader = !party.empty() && party[0] < save::kNumChars && name_of_ ? name_of_(party[0]) : std::u32string();
-  const std::u32string name = cur->slot == 0 ? import::utf8_to_u32(sl::auto_save_caption(li)) : leader;
+  // Card 1's CHRONO00 is the auto-save.
+  const bool auto_file = cur->slot == 0 && cur->card == 1;
+  const std::u32string name = auto_file ? import::utf8_to_u32(sl::auto_save_caption(li)) : leader;
   const std::string stars = std::to_string(std::min<int>(save_data.stars_total(), 99)), tb = sl::playtime(save_data.playtime_frames());
   std::string gold;
   {
@@ -352,7 +416,7 @@ void SlotList::draw(DrawList& dl, UiKit& kit) const {
   if (ink) {
     {
       // Name / auto-save caption (save_layout.h name_fit): shrink to 97, two lines for the auto-save outside EN / JP.
-      const sl::NameFit nf = sl::name_fit(dl.measure(bnf, name, 0.35f), cur->slot == 0, li);
+      const sl::NameFit nf = sl::name_fit(dl.measure(bnf, name, 0.35f), auto_file, li);
       size_t line_start = 0;
       for (int line = 0;; ++line) {
         const size_t line_end = name.find(U'\n', line_start);

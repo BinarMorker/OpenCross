@@ -13,11 +13,11 @@
 
 namespace oc::ui {
 
-// Fills the save-grid boxes from card 1 in the card's directory (block) order.
+// Fills the save-grid boxes from the chosen card in the card's directory (block) order.
 void MainMenu::Impl::load_previews() {
   prev.fill({});
   if (!save_dat) return;
-  const save::MemCard* card = save_dat->card(1);
+  const save::MemCard* card = save_dat->card(save_card + 1);
   if (!card) return;
   std::vector<save::SlotRef> refs = save::list_slots(*card);
   std::sort(refs.begin(), refs.end(), [](const save::SlotRef& lhs, const save::SlotRef& rhs) { return lhs.block < rhs.block; });
@@ -51,9 +51,11 @@ int MainMenu::Impl::save_list_angle(int sel) {
   return hand_angle_toward((end_x - sl::kPivotX) * 2.0f, (end_y - sl::kPivotY) * (960.0f / 448.0f), 2.5f, 960.0f / 448.0f);
 }
 
-// Save / Load: phase 0 = the Save a File / Load a File choice (Save is greyed and unselectable when saving is blocked); phase 1 = the
-// 2 x 8 box grid (box 0 is the auto-save, never a manual save target; up / down swap rows, boxes 7 and 8 stay), with the overwrite /
-// load confirmation on a used box.
+// Save / Load: phase 0 = the Save a File / Load a File choice (Save is greyed and unselectable when saving is blocked); phase 2 = the
+// memory-card choice (Slot 1 / Slot 2); phase 3 = "No save data in Slot N." (Load on a card without files; confirm or 120 frames
+// back to phase 0); phase 1 = the card's 2 x 8 box grid (card 1's box 0 is the auto-save, never a manual save target; up / down swap
+// rows, boxes 7 and 8 stay), with the overwrite / load confirmation on a used box. Cancel on the card choice or the grid returns to
+// phase 0.
 void MainMenu::Impl::update_save(const Nav& nav) {
   if (save_phase == 0) {
     if ((nav.up || nav.down) && can_save) top_cur = 1 - top_cur, sfx(1);
@@ -66,9 +68,29 @@ void MainMenu::Impl::update_save(const Nav& nav) {
         return;
       }
       load_mode = top_cur == 1;
-      save_phase = 1;
+      save_phase = 2;
       save_confirm = false;
       msg.clear();
+      sfx(8);
+    }
+    return;
+  }
+  if (save_phase == 2) {
+    if (nav.up || nav.down) save_card = 1 - save_card, sfx(1);
+    if (nav.cancel) {
+      save_phase = 0;
+      sfx(6);
+    } else if (nav.ok) {
+      sfx(8);
+      load_previews();
+      const bool any = std::any_of(prev.begin(), prev.end(), [](const SavePrev& box) { return box.used; });
+      if (load_mode && !any) {
+        save_phase = 3;
+        card_msg_start = frames;
+        return;
+      }
+      save_phase = 1;
+      save_cur = save_card == 0 ? 0 : -1;
       if (load_mode) {
         load_cur = 0;
         for (int box = 0; box < 15; ++box)
@@ -77,8 +99,11 @@ void MainMenu::Impl::update_save(const Nav& nav) {
             break;
           }
       }
-      sfx(8);
     }
+    return;
+  }
+  if (save_phase == 3) {
+    if (nav.ok || frames - card_msg_start > 120) save_phase = 0;
     return;
   }
   if (save_confirm) {
@@ -95,7 +120,7 @@ void MainMenu::Impl::update_save(const Nav& nav) {
     }
     return;
   }
-  const int first_box = load_mode ? 0 : 1;
+  const int first_box = load_mode || save_card == 1 ? 0 : 1;
   int box = load_mode ? load_cur : save_cur + 1;
   if (nav.left) box = box - 1 >= first_box ? box - 1 : 14, sfx(1);
   if (nav.right) box = box + 1 <= 14 ? box + 1 : first_box, sfx(1);
@@ -138,6 +163,7 @@ void MainMenu::Impl::do_load() {
     sfx(0x18);
     return;
   }
+  load_card = save_card + 1;
   load_slot = box.slot;
   load_block = box.block;
   load_pending = true;
@@ -145,45 +171,47 @@ void MainMenu::Impl::do_load() {
   sfx(8);
 }
 
-// A used box overwrites its own file; an empty box makes a new file with the lowest unused number, 0 being the auto-save's.
+// A used box overwrites its own file; an empty box makes a new file with the lowest unused number, 0 being card 1's auto-save.
 // ext_save.dat (language, battle counter, custom names of the slot) is written with it; a no-op without a host.
 void MainMenu::Impl::do_save() {
   const SavePrev& box = prev[static_cast<size_t>(std::clamp(save_cur + 1, 0, 14))];
+  const bool auto_card = save_card == 0;
+  const u32 failed = auto_card ? 0x801F3115 : 0x801F3116;
   int slot_no = box.used ? box.slot : -1;
   if (slot_no < 0) {
     std::array<bool, 15> taken{};
-    taken[0] = true;
+    taken[0] = auto_card;
     for (const SavePrev& other : prev)
       if (other.used && other.slot >= 0 && other.slot < 15) taken[static_cast<size_t>(other.slot)] = true;
-    for (int number = 1; number < 15 && slot_no < 0; ++number)
+    for (int number = 0; number < 15 && slot_no < 0; ++number)
       if (!taken[static_cast<size_t>(number)]) slot_no = number;
   }
-  if (slot_no < 0 || slot_no == 0) {
+  if (slot_no < 0 || (slot_no == 0 && auto_card)) {
     sfx(0x18);
     return;
   }
-  save::MemCard* card = save_dat ? save_dat->card(1) : nullptr;
+  save::MemCard* card = save_dat ? save_dat->card(save_card + 1) : nullptr;
   if (!card) {
     sfx(0x18);
-    say(menu_str(0x801F3115, ""));
+    say(menu_str(failed, ""));
     return;
   }
   try {
     const int block = save::write_slot(*card, slot_no, gs->slot);
     if (!block) {
       sfx(0x18);
-      say(menu_str(0x801F3115, ""));
+      say(menu_str(failed, ""));
       return;
     }
-    save_dat->write_ext(1, slot_no);
+    save_dat->write_ext(save_card + 1, slot_no);
     if (!save_out.empty()) save_dat->save(save_out);
     saved = true;
     load_previews();
     sfx(5);
-    say(menu_str(0x801F2ECD, ""), 240);
+    say(menu_str(auto_card ? 0x801F2ECD : 0x801F2ECE, ""), 240);
   } catch (const std::exception&) {
     sfx(0x18);
-    say(menu_str(0x801F3115, ""));
+    say(menu_str(failed, ""));
   }
 }
 
@@ -270,17 +298,30 @@ void MainMenu::Impl::build_save() {
   group(Right);
   save_dial();
   group(Centre);
-  // State 0: only the list + dial and frame 0x55 with the description of the highlighted choice.
-  if (save_phase == 0) {
+  // State 0: only the list + dial and frame 0x55 with the description of the highlighted choice. The card choice (state 1) and its
+  // "No save data" message keep them and add frame 0x56: "Please choose a slot." and the two card lines at (298, 360 + 24 card)
+  // with the pointer at (266, 361 + 24 card).
+  if (save_phase != 1) {
     Frame(85, sl::kTopMsgX, sl::kTopMsgY);
     const std::u32string description = utf32(menu_str(top_cur == 0 ? 0x801F2BE0 : 0x801F2C18, top_cur == 0 ? "Save a File" : "Load a File"));
     HL(sl::kTopMsgInkX, sl::kTopMsgInkY, description, kText, sl::kMsgScale);
+    if (save_phase == 0) return;
+    Frame(86, sl::kMsgX, sl::kMsgY);
+    auto line = [&](float x, float y, const std::string& str) { HLfit(x + 1.5f, y + 2.5f, utf32(str), sl::kMsgWidth, sl::kMsgScale); };
+    if (save_phase == 3) {
+      line(146, 336, menu_str(save_card == 0 ? 0x801F3181 : 0x801F3182, save_card == 0 ? "No save data in Slot 1." : "No save data in Slot 2."));
+      return;
+    }
+    line(146, 336, menu_str(0x801F2CA4, "Please choose a slot."));
+    line(298, 360, menu_str(0x801F2CDC, "Slot 1"));
+    line(298, 384, menu_str(0x801F2CF8, "Slot 2"));
+    tri(266, 361.0f + 24.0f * static_cast<float>(save_card), true);
     return;
   }
   group(Left);
-  Frame(82, sl::kGridX, sl::kGridY);
+  Frame(82 + save_card, sl::kGridX, sl::kGridY);
   // Caption tab: cmnmes "slot" in bn.
-  HT(face_gn, sl::kSlotCapX, sl::kSlotCapY, capt("slot", "Slot") + U" 1", kText, sl::kSlotCapScale);
+  HT(face_gn, sl::kSlotCapX, sl::kSlotCapY, capt("slot", "Slot") + (save_card == 0 ? U" 1" : U" 2"), kText, sl::kSlotCapScale);
   group(Centre);
   Frame(84, sl::kDetailX, sl::kDetailY);
   // Caption tab (bn): "File#" + the number + 1 of the cursor box's FILE, parsed from the CHRONOnn name; an
@@ -335,8 +376,9 @@ void MainMenu::Impl::build_save() {
     if (cp.party[static_cast<size_t>(i)] < save::kNumChars)
       avatar(cp.party[static_cast<size_t>(i)], PX(sl::kFaceX + sl::kFaceStep * static_cast<float>(i)), PY(sl::kFaceY), PX(sl::kFace), PY(sl::kFace));
   const std::u32string leader = cp.party[0] < save::kNumChars ? char_name(cp.party[0]) : std::u32string();
-  // The auto-save FILE (CHRONO00) shows its caption wherever its box is.
-  const std::u32string name = cp.slot == 0 ? utf32(sl::auto_save_caption(lang_index())) : leader;
+  // The auto-save FILE (card 1's CHRONO00) shows its caption wherever its box is.
+  const bool auto_file = cp.slot == 0 && save_card == 0;
+  const std::u32string name = auto_file ? utf32(sl::auto_save_caption(lang_index())) : leader;
   const std::string stars = std::to_string(std::min(cp.stars, 99)), tb = sl::playtime(cp.frames);
   std::string gold = grouped_gold(cp.gold);
   gold.erase(0, gold.find_first_not_of(' '));
@@ -345,7 +387,7 @@ void MainMenu::Impl::build_save() {
     // Name / auto-save caption: style 0x83 / 0xB7, shrink to 97, two lines for the auto-save outside EN / JP (save_layout.h name_fit).
     const int ds = jp() ? font::kKb : font::kBn;
     fonts.prepare(ds, name);
-    const sl::NameFit nf = sl::name_fit(fonts.measure(ds, name, 0.35f), cp.slot == 0, lang_index());
+    const sl::NameFit nf = sl::name_fit(fonts.measure(ds, name, 0.35f), auto_file, lang_index());
     size_t line_start = 0;
     for (int line = 0;; ++line) {
       const size_t line_end = name.find(U'\n', line_start);
