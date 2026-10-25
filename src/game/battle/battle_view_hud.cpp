@@ -529,8 +529,10 @@ void BattleView::build_hud() {
   // The battle-script event window (E0).
   build_script_msg();
   if (ui_ == Ui::Result) build_result_ui();
-  // Debug free camera, "Hide overlays": no HUD / menus / windows / results (the F9 text below stays).
-  if (free_cam().hide_overlays()) ops_.clear();
+  // Debug free camera, "Hide overlays", or Select held / [Enhancements] AutoHideCastHud while an element / tech / summon is charged or
+  // released: no HUD / menus / windows / results (the F9 text below stays; the damage digits are drawn elsewhere).
+  const bool casting = act_.phase == Act::Phase::Cast || act_.phase == Act::Phase::Release;
+  if (free_cam().hide_overlays() || ((select_held_ || autohide_cast_) && casting)) ops_.clear();
   if (dbg_.overlay) build_camera_overlay();
 }
 

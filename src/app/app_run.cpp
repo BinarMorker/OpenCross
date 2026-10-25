@@ -106,9 +106,25 @@ void App::log_frametime() {
 }
 
 void App::frame_hotkeys() {
-  // The settings window: Esc, or the pad's Back / View button.
-  const bool settings_key = input.key_pressed[SDL_SCANCODE_ESCAPE] || (input.pad_connected && input.pad_pressed[SDL_GAMEPAD_BUTTON_BACK]);
+  // The settings window: Esc, or a tap of the pad's Back / View button. The tap opens it on the release; the press closes it. Held past
+  // kSelectHoldMs it never opens and, as RDE's Select, hides the battle overlays during a cast instead.
+  constexpr u64 kSelectHoldMs = 300;
+  const bool select_down = input.pad_connected && input.pad_down[SDL_GAMEPAD_BUTTON_BACK];
+  const bool select_pressed = input.pad_connected && input.pad_pressed[SDL_GAMEPAD_BUTTON_BACK];
+  const u64 now_ms = SDL_GetTicks();
+  bool settings_key = input.key_pressed[SDL_SCANCODE_ESCAPE];
+  if (select_pressed) {
+    settings_key = settings_key || ui.options_open;
+    select_tap = !ui.options_open;
+    select_down_ms = now_ms;
+  } else if (select_tap && (ui.options_open || now_ms - select_down_ms >= kSelectHoldMs)) {
+    select_tap = false;
+  } else if (select_tap && !select_down) {
+    select_tap = false;
+    settings_key = input.pad_connected;
+  }
   if (settings_key && !routing && !replaying) ui.options_open = !ui.options_open;
+  battle.set_select_held(select_down && !ui.options_open && !routing && !replaying);
   settings_pad_filter();
   if (input.key_pressed[SDL_SCANCODE_F8]) ui.toggle("Debug");
   // A mode switch / monitor move rebuilds the swapchain at the new size.

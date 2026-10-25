@@ -697,6 +697,11 @@ OptionsChange ImGuiLayer::graphics_tab(platform::Config& cfg) {
                      "visible at the PS1's resolution but stand out at higher resolutions and with upscaled textures.",
                      cfg.edge_blend))
         change.enhancements = true;
+      if (check_cell("Hide menus during casts",
+                     "Hides the battle HUD, menus, field effect ring and message windows while an element, tech or summon plays, as holding "
+                     "the pad's Select does. The damage numbers still show.",
+                     cfg.autohide_cast_hud))
+        change.enhancements = true;
       ImGui::EndTable();
     }
   };

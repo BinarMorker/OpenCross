@@ -320,6 +320,9 @@ class App {
   // Pad buttons / axes held while the settings window was open: hidden from the game until let go.
   std::array<bool, platform::Input::kButtons> settings_held_buttons{};
   std::array<bool, platform::Input::kAxes> settings_held_axes{};
+  // The pad's Back / View press that may still open the settings window on its release (a tap), and when it went down.
+  bool select_tap = false;
+  u64 select_down_ms = 0;
   game::SlowFieldCycle slow_field_cycle;
   // RDE's HD "Home / Another World" name over the world maps.
   ui::WorldName world_name;

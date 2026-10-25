@@ -166,6 +166,10 @@ class BattleView {
   // state at interpolation alpha 1.
   void set_paused(bool on) { paused_ = on; if (on) alpha_ = 1.0f; }
   bool paused() const { return paused_; }
+  // RDE: the pad's Select held during a cast hides the HUD, menus and windows (the damage digits stay). Pushed by the host every frame.
+  void set_select_held(bool held) { select_held_ = held; }
+  // [Enhancements] AutoHideCastHud: the same hiding during every cast, without Select.
+  void set_autohide_cast(bool on) { autohide_cast_ = on; }
   // Call between ctx.begin_frame() and ctx.end_frame(). `sprites_resume` = another sprite pass already ran this frame.
   // draw() = draw_scene() at window resolution into picture(), then draw_ui().
   void draw(const render::Frame& frame, bool sprites_resume = false);
@@ -1246,6 +1250,8 @@ class BattleView {
   bool sys_pending_ = false;
   // Ops 2C .. 38 (script cut scene): the party panels, ring and command box are not drawn.
   bool hud_off_ = false;
+  bool select_held_ = false;
+  bool autohide_cast_ = false;
   // Op 62: a window position for the next window only.
   bool smsg_pos_set_ = false;
   int smsg_pos_x_ = 0, smsg_pos_y_ = 0;

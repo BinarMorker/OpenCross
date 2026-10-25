@@ -222,6 +222,7 @@ bool Config::load(const std::filesystem::path& file) {
   crt = parse_bool(ini.get("Video", "Crt"), crt);
   smooth_water_line = parse_bool(ini.get("Enhancements", "SmoothWaterLine"), smooth_water_line);
   battle_shadows = parse_bool(ini.get("Enhancements", "BattleShadows"), battle_shadows);
+  autohide_cast_hud = parse_bool(ini.get("Enhancements", "AutoHideCastHud"), autohide_cast_hud);
   smooth_effect_rings = parse_bool(ini.get("Enhancements", "SmoothEffectRings"), smooth_effect_rings);
   smooth_reflections = parse_bool(ini.get("Enhancements", "SmoothReflections"), smooth_reflections);
   {
@@ -330,6 +331,7 @@ bool Config::save(const std::filesystem::path& file) const {
   ini.set("Video", "Crt", on_off(crt));
   ini.set("Enhancements", "SmoothWaterLine", on_off(smooth_water_line));
   ini.set("Enhancements", "BattleShadows", on_off(battle_shadows));
+  ini.set("Enhancements", "AutoHideCastHud", on_off(autohide_cast_hud));
   ini.set("Enhancements", "SmoothEffectRings", on_off(smooth_effect_rings));
   ini.set("Enhancements", "SmoothReflections", on_off(smooth_reflections));
   ini.set("Enhancements", "Lighting", on_off(lighting));

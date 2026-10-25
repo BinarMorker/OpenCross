@@ -139,6 +139,7 @@ void App::apply_frame_options() {
     meshes.set_enhanced_lighting(config.lighting);
     render::set_edge_blend(config.edge_blend);
     if (battle_ready) battle.set_spell_lights(config.lighting);
+    if (battle_ready) battle.set_autohide_cast(config.autohide_cast_hud);
     if (world_ok) world.set_smooth_rings(rings);
     if (battle_ready) battle.set_smooth_rings(rings);
   }

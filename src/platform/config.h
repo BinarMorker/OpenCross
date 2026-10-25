@@ -134,6 +134,7 @@ void bind_cheats(const Cheats* set);
 //            models + bright spell effects light the battle units and stage. EdgeBlend: cross-fades the faces along the texture seams of
 //            the stage / title meshes, any art mode. SmoothReflections: env-mapped model parts (FATE, Lavos, ...) slide their reflection
 //            sub-texel (off = the PS1's one-texel steps). BattleShadows: smooth per-vertex floor darkening in battles.
+//            AutoHideCastHud: the battle HUD / menus / windows are hidden during element, tech and summon casts (as pad Select held).
 //   [Audio]  Master / Music / Sfx: bus gains 0..1. Voices: play the voice lines of the mods' voices folders.
 //            VoiceVolume 0..100 (the voice bus gain, times Master). BgmSource: remastered (RDE HCA files) or original (PS1 AKAO sequences).
 //   [Debug]  Room: jump straight to this field room; empty = start at the title. Flow: title | name | slots | opening | field (field = no
@@ -194,6 +195,7 @@ struct Config {
   bool edge_blend = false;
   bool smooth_reflections = true;
   bool battle_shadows = true;
+  bool autohide_cast_hud = false;
   bool crt = false;
   float master = 1.0f;
   float music = 1.0f;
