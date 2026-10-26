@@ -1,6 +1,7 @@
 #include "import/model.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -669,6 +670,40 @@ ByteSpan at0_pack_or_empty(ByteSpan prd) {
   return {};
 }
 
+// Share of the 32 x 32 texels at (x, y) of `main` that match strip half `half` of eye frame 1 (the half-shut eye: the mask / skin / hair
+// around the eye are the open texture's); 0 when the rect leaves the image.
+double eye_fit(const Image& main, const Image& strip, size_t half, u32 x, u32 y) {
+  if (x + 32 > main.width || y + 32 > main.height) return 0.0;
+  u32 same = 0;
+  for (u32 row = 0; row < 32; ++row)
+    for (u32 col = 0; col < 32; ++col) {
+      const u8* a = &main.pixels[(size_t(y + row) * main.width + x + col) * 4];
+      const u8* b = &strip.pixels[(size_t(row) * strip.width + half * 32 + col) * 4];
+      if (std::abs(a[0] - b[0]) + std::abs(a[1] - b[1]) + std::abs(a[2] - b[2]) < 24) ++same;
+    }
+  return same / 1024.0;
+}
+
+// The eye rects of a texture whose atlas does not keep them where S5 says: the HD file set re-lays some textures but keeps the PS1 word
+// (Guile: rect (52, 28) is braid in the HD texture, the eye is at (2, 28)), so a blink would paste the eye over another part. A rect the
+// strip does not fit at all moves to where it fits best; the PS1 data's own loose fits (the shut frame differs around the eye) stay.
+void fit_eye_rects(ModelAsset& asset) {
+  const Image& main = asset.textures[0];
+  const Image& strip = asset.textures[asset.main_texture_count];
+  if (main.indexed || strip.indexed || strip.width < 128 || strip.height < 32 || main.width < 32 || main.height < 32) return;
+  for (size_t half = 0; half < 2; ++half) {
+    if (eye_fit(main, strip, half, asset.eye.x[half], asset.eye.y[half]) >= 0.1) continue;
+    double best = 0.0;
+    u32 best_x = 0, best_y = 0;
+    for (u32 y = 0; y + 32 <= main.height; ++y)
+      for (u32 x = 0; x + 32 <= main.width; x += 2)
+        if (const double fit = eye_fit(main, strip, half, x, y); fit > best) best = fit, best_x = x, best_y = y;
+    if (best < 0.5) continue;
+    asset.eye.x[half] = static_cast<u16>(best_x);
+    asset.eye.y[half] = static_cast<u16>(best_y);
+  }
+}
+
 ModelAsset load_mdl(ByteSpan obj, const TexInfo& tex, ByteSpan ext_pack, const char* ext_source, bool field, Notes& notes,
                     ByteSpan hd_tim = {}) {
   // HD-mode (cdrom2) field models carry a trailing block (~0.2-0.5 KB, a second 'drp' table) after the EOF pointer.
@@ -795,6 +830,7 @@ ModelAsset load_mdl(ByteSpan obj, const TexInfo& tex, ByteSpan ext_pack, const c
       asset.eye.valid = true;
       asset.eye.x = {static_cast<u16>((eye_word & 0xFF) & ~1u), static_cast<u16>(((eye_word >> 16) & 0xFF) & ~1u)};
       asset.eye.y = {static_cast<u16>((eye_word >> 8) & 0xFF), static_cast<u16>((eye_word >> 24) & 0xFF)};
+      fit_eye_rects(asset);
     }
   }
   return asset;

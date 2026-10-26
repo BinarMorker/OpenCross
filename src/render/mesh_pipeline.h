@@ -14,8 +14,9 @@
 // others are opaque (import/tim.h kStpAlpha); ABR 0 = (B + F) / 2, 1 = B + F, 2 = B - F, 3 = B + F / 4.
 //
 // Ordering-table mode (DrawParams::ot_faces; field and every battle model): the PS1 files every
-// polygon in ONE ordering-table slot, (average camera z of its corners) >> 4 (AVSZ3 / ZSF3 = 0x155 then >> 2),
-// or the nearest corner's z >> 4 for constructs whose shading-entry flag 0x10 is set, plus the actor's layer bias. A face is
+// polygon in ONE ordering-table slot, (average camera z of its corners) >> 4 (AVSZ3 / AVSZ4, ZSF3 = 0x155 then >> 2),
+// or the nearest corner's z >> 4 for constructs whose shading-entry flag 0x10 is set, plus the actor's layer bias; a quad's two triangles
+// share the slot of all four corners. A face is
 // therefore wholly in front of or behind a background layer: no per-pixel cut through a coplanar / ground layer. The meshes are drawn
 // unindexed and every vertex carries the skinning inputs of its triangle's other two corners, so the vertex shader computes the face's slot
 // and its water state; the fragment depth is that slot plus a sub-slot fraction (the fragment's own z clamped into the slot), which keeps

@@ -163,9 +163,17 @@ void main() {
   world_y = wl[0].y;
   slab_v = u.slab.xy;
   if (pc.ot.x > 0.5) {
-    // The triangle's ordering-table slot: AVSZ3 average z >> 4, or the nearest z >> 4 (op 93).
-    float z0 = (u.view * g0).z, z1 = (u.view * g1).z, z2 = (u.view * g2).z;
-    float sz = pc.ot.y > 0.5 ? min(z0, min(z1, z2)) : (z0 + z1 + z2) / 3.0;
+    // The face's ordering-table slot: AVSZ3 / AVSZ4 average z >> 4, or the nearest z >> 4 (op 93). A quad is one primitive: both halves
+    // take the slot of all four corners, summed in source order (v0..v3) so the halves agree bit for bit.
+    float sz;
+    if (in_uvq.z > 0.5) {
+      vec4 v0 = in_uvq.z > 1.5 ? wl[3] : g0, v2 = in_uvq.z > 1.5 ? g0 : g2, v3 = in_uvq.z > 1.5 ? g2 : wl[3];
+      float z0 = (u.view * v0).z, z1 = (u.view * g1).z, z2 = (u.view * v2).z, z3 = (u.view * v3).z;
+      sz = pc.ot.y > 0.5 ? min(min(z0, z1), min(z2, z3)) : (z0 + z1 + z2 + z3) / 4.0;
+    } else {
+      float z0 = (u.view * g0).z, z1 = (u.view * g1).z, z2 = (u.view * g2).z;
+      sz = pc.ot.y > 0.5 ? min(z0, min(z1, z2)) : (z0 + z1 + z2) / 3.0;
+    }
     face_slot = floor(max(sz, 0.0) / 16.0);
     // A face is under water when any corner's world y is below the level (level - VY < 0).
     face_wet = (pc.misc.z > 0.5 && max(g0.y, max(g1.y, g2.y)) > pc.misc.w) ? 1.0 : 0.0;
