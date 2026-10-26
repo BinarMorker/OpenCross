@@ -138,6 +138,7 @@ void bind_cheats(const Cheats* set);
 //            the stage / title meshes, any art mode. SmoothReflections: env-mapped model parts (FATE, Lavos, ...) slide their reflection
 //            sub-texel (off = the PS1's one-texel steps). BattleShadows: smooth per-vertex floor darkening in battles.
 //            AutoHideCastHud: the battle HUD / menus / windows are hidden during element, tech and summon casts (as pad Select held).
+//            RetainBattleScenery: the battle stage's intro-only layer (bg_00's sea, fish and birds, dust, smoke ...) stays for the whole battle.
 //   [Audio]  Master / Music / Sfx: bus gains 0..1. Voices: play the voice lines of the mods' voices folders.
 //            VoiceVolume 0..100 (the voice bus gain, times Master). BgmSource: remastered (RDE HCA files) or original (PS1 AKAO sequences).
 //   [Debug]  Room: jump straight to this field room; empty = start at the title. Flow: title | name | slots | opening | field (field = no
@@ -199,6 +200,7 @@ struct Config {
   bool smooth_reflections = true;
   bool battle_shadows = true;
   bool autohide_cast_hud = false;
+  bool retain_battle_scenery = false;
   bool crt = false;
   int msaa = 1;
   static constexpr int kMsaaLevels[] = {1, 2, 4, 8};

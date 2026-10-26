@@ -170,6 +170,8 @@ class BattleView {
   void set_select_held(bool held) { select_held_ = held; }
   // [Enhancements] AutoHideCastHud: the same hiding during every cast, without Select.
   void set_autohide_cast(bool on) { autohide_cast_ = on; }
+  // [Enhancements] RetainBattleScenery: the stage's `bti0` layer is not stopped when the intro ends (nor by a pack's op 0x60).
+  void set_keep_intro_layer(bool on);
   // Call between ctx.begin_frame() and ctx.end_frame(). `sprites_resume` = another sprite pass already ran this frame.
   // draw() = draw_scene() at window resolution into picture(), then draw_ui().
   void draw(const render::Frame& frame, bool sprites_resume = false);
@@ -1257,6 +1259,9 @@ class BattleView {
   bool hud_off_ = false;
   bool select_held_ = false;
   bool autohide_cast_ = false;
+  bool keep_intro_layer_ = false;
+  // The intro has ended and the outro has not yet brought the `bti0` layer back.
+  bool intro_layer_cut_ = false;
   // Op 62: a window position for the next window only.
   bool smsg_pos_set_ = false;
   int smsg_pos_x_ = 0, smsg_pos_y_ = 0;

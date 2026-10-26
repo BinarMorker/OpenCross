@@ -143,6 +143,7 @@ void App::apply_frame_options() {
     render::set_edge_blend(config.edge_blend);
     if (battle_ready) battle.set_spell_lights(config.lighting);
     if (battle_ready) battle.set_autohide_cast(config.autohide_cast_hud);
+    if (battle_ready) battle.set_keep_intro_layer(config.retain_battle_scenery);
     if (world_ok) world.set_smooth_rings(rings);
     if (battle_ready) battle.set_smooth_rings(rings);
   }

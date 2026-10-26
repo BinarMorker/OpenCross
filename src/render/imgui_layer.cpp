@@ -729,6 +729,13 @@ OptionsChange ImGuiLayer::graphics_tab(platform::Config& cfg) {
                      "the pad's Select does. The damage numbers still show.",
                      cfg.autohide_cast_hud))
         change.enhancements = true;
+      if (check_cell("Retain battle scenery",
+                     "Some battlefields show extra scenery while the camera pans in (the sea, fish and birds on the beach, drifting dust, "
+                     "smoke ...) that the game removes once the fight starts and only brings back for the victory pose, most likely to "
+                     "spare the PS1's limited performance for the characters and spells. This keeps it for the whole battle. Off: the "
+                     "original behaviour.",
+                     cfg.retain_battle_scenery))
+        change.enhancements = true;
       ImGui::EndTable();
     }
   };

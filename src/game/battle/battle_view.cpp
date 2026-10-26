@@ -606,6 +606,7 @@ bool BattleView::finish_start() {
   chain_.clear();
   time_ = 0;
   intro_ticks_ = 0;
+  intro_layer_cut_ = false;
   orbit_pc_ = dyn_target_ = -1;
   menu_glide_ = false;
   auto_delay_ = 0;

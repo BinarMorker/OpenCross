@@ -214,7 +214,7 @@ void BattleView::fx_other(const assets::SeqCmd& cmd) {
     case 0x7B: fx_bti_gate_ = true; break;
     case 0x5F: case 0x60:
       if (fx_bti_gate_) {
-        fx_stage_layer("bti0", cmd.op == 0x5F, true);
+        if (cmd.op == 0x5F || !keep_intro_layer_) fx_stage_layer("bti0", cmd.op == 0x5F, true);
         if (cmd.op == 0x60) fx_bti_gate_ = false;
       }
       break;
@@ -579,6 +579,13 @@ void BattleView::fx_swap_stage(int id) {
   // Names only the old stage had stay in the bank.
   bank_.add_drp(*prd, true);
   log::info("battle fx: stage {} loaded at tick {}", base, tick_count_);
+}
+
+// Switched live during the command phase: the `bti0` layer restarts (every emitter, as the outro does) or stops as at the intro's end.
+void BattleView::set_keep_intro_layer(bool on) {
+  if (on == keep_intro_layer_) return;
+  keep_intro_layer_ = on;
+  if (intro_layer_cut_ && finish_ == Finish::None) fx_stage_layer("bti0", on, on);
 }
 
 // A stage layer switched by an effect (ops 0x26 / 0x27 / 0x36-0x3D / 0x5F / 0x60): the stage's emitters of that name. The stage scene owns

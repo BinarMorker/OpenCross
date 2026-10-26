@@ -340,7 +340,8 @@ void BattleView::tick_camera() {
     }
     // The command phase starts once no camera shot task and no timeline but 'loop' is alive; then every stage emitter named `bti0` is
     // stopped and its live objects freed - bg_00's sea (nea5 / nea6 / the nea7 sheen), birds and fish exist only during the
-    // intro (the `near` / `far` / `roof` / `ring` layers stay). The outro starts them again before 'bto0' (battle_view_action.cpp).
+    // intro (the `near` / `far` / `roof` / `ring` layers stay). The outro starts them again before 'bto0' (battle_view_sequence.cpp).
+    // [Enhancements] RetainBattleScenery leaves the layer running.
     if ((intro_started_ && pli_pending_.empty() && !camera_.sequence_running() && !camera_.task_running() && intro_ticks_ > 8) || intro_ticks_ > 1500 || debug_ui_ != 0 || dbg_.cast_element > 0 ||
         dbg_.weapon >= 0) {
       // A cut intro (dev casts / debug UI / the cap) never reached the party intro: place them now.
@@ -356,7 +357,8 @@ void BattleView::tick_camera() {
       camera_.stop_sequences();
       // At the end of the intro a cut `pli*` (dev casts / debug UI) must not leave its 3E..40 warp on.
       fx_warp_.on = false;
-      fx_stage_layer("bti0", false, false);
+      intro_layer_cut_ = true;
+      if (!keep_intro_layer_) fx_stage_layer("bti0", false, false);
       // The camera holds the party intro's last pose until the menu camera takes over.
       camera_.kill_shot();
       camera_.reset_fade();
