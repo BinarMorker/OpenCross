@@ -519,6 +519,21 @@ OptionsChange ImGuiLayer::graphics_tab(platform::Config& cfg) {
       change.other = true;
     }
 
+    row("Antialiasing", "Multisample antialiasing (MSAA) of the 3D pictures and the 2D drawn over them: smooths polygon edges, more "
+                        "samples = smoother, more GPU time and memory. The PS1-resolution pictures (Retro look) are not antialiased. A "
+                        "high render scale already supersamples the 3D: the samples are lowered there (at 4x, to none) to stay within "
+                        "the memory of an 8x 4K picture.");
+    {
+      static const std::vector<std::string> kMsaaNames = {"Off", "2x MSAA", "4x MSAA", "8x MSAA"};
+      int mi = 0;
+      for (int i = 0; i < static_cast<int>(std::size(platform::Config::kMsaaLevels)); ++i)
+        if (cfg.msaa == platform::Config::kMsaaLevels[i]) mi = i;
+      if (combo("##msaa", mi, kMsaaNames)) {
+        cfg.msaa = platform::Config::kMsaaLevels[mi];
+        change.msaa = true;
+      }
+    }
+
     row("Frame rate limit", "Upper bound on rendered frames per second (the game itself always runs at 60 ticks per second; "
                             "frames in between are interpolated).");
     static const int kCaps[] = {0, 30, 60, 75, 120, 144, 165, 240};
@@ -599,6 +614,18 @@ OptionsChange ImGuiLayer::graphics_tab(platform::Config& cfg) {
                    "backgrounds stay nearest."))
       change.other = true;
     if (filter_row("3D models", cfg.filter)) change.filter = true;
+    row("Anisotropic filtering", "Keeps the bilinear textures of the 3D models, battle stages and title sea sharp on surfaces seen at a "
+                                 "steep angle (floors, walls receding into the distance). No effect on nearest-filtered textures.");
+    {
+      static const std::vector<std::string> kAnisotropyNames = {"Off", "2x", "4x", "8x", "16x"};
+      int ai = 0;
+      for (int i = 0; i < static_cast<int>(std::size(platform::Config::kAnisotropyLevels)); ++i)
+        if (cfg.anisotropy == platform::Config::kAnisotropyLevels[i]) ai = i;
+      if (combo("##aniso", ai, kAnisotropyNames)) {
+        cfg.anisotropy = platform::Config::kAnisotropyLevels[ai];
+        change.anisotropy = true;
+      }
+    }
     end_rows();
   }
 
@@ -848,6 +875,7 @@ void ImGuiLayer::render(const Frame& frame) {
   ImGui::Render();
   ImDrawData* draw_data = ImGui::GetDrawData();
   Imgui_ImplSDLGPU3_PrepareDrawData(draw_data, frame.ctx->upload_cmd());
+  frame.ctx->begin_overlay();
   ImGui_ImplSDLGPU3_RenderDrawData(draw_data, frame.ctx->cmd(), frame.ctx->pass());
 }
 

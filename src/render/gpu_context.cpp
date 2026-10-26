@@ -37,7 +37,7 @@ void SDLCALL gpu_log(void* user, int category, SDL_LogPriority priority, const c
 }
 
 SDL_GPUTexture* make_image(SDL_GPUDevice* device, u32 width, u32 height, SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage,
-                           const char* name) {
+                           const char* name, SDL_GPUSampleCount samples = SDL_GPU_SAMPLECOUNT_1) {
   SDL_GPUTextureCreateInfo info{};
   info.type = SDL_GPU_TEXTURETYPE_2D;
   info.format = format;
@@ -46,7 +46,7 @@ SDL_GPUTexture* make_image(SDL_GPUDevice* device, u32 width, u32 height, SDL_GPU
   info.height = height;
   info.layer_count_or_depth = 1;
   info.num_levels = 1;
-  info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+  info.sample_count = samples;
   SDL_GPUTexture* texture = SDL_CreateGPUTexture(device, &info);
   if (!texture) log::error("{} {}x{}: SDL_CreateGPUTexture: {}", name, width, height, SDL_GetError());
   else SDL_SetGPUTextureName(device, texture, name);
@@ -155,15 +155,106 @@ bool GpuContext::apply_swapchain() {
 }
 
 bool GpuContext::ensure_frame_images(u32 width, u32 height) {
-  if (frame_color_ && frame_depth_ && extent_.width == width && extent_.height == height) return true;
-  if (frame_color_) SDL_ReleaseGPUTexture(device_, frame_color_);
-  if (frame_depth_) SDL_ReleaseGPUTexture(device_, frame_depth_);
+  const SDL_GPUSampleCount samples = sample_count_for(width, height);
+  if (frame_color_ && frame_depth_ && extent_.width == width && extent_.height == height && frame_samples_ == samples) return true;
+  for (SDL_GPUTexture* image : {frame_color_, frame_depth_, frame_msaa_color_, frame_overlay_depth_})
+    if (image) SDL_ReleaseGPUTexture(device_, image);
+  frame_msaa_color_ = frame_overlay_depth_ = nullptr;
   frame_color_ = make_image(device_, width, height, color_format(), SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER, "frame colour");
-  frame_depth_ = make_image(device_, width, height, depth_format_, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, "frame depth");
+  frame_depth_ = make_image(device_, width, height, depth_format_, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, "frame depth", samples);
+  frame_samples_ = samples;
   extent_ = {width, height};
   if (!frame_color_ || !frame_depth_) return false;
-  log::info("frame images: {}x{}", width, height);
+  if (samples != SDL_GPU_SAMPLECOUNT_1) {
+    frame_msaa_color_ = make_image(device_, width, height, color_format(), SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, "frame msaa colour", samples);
+    frame_overlay_depth_ = make_image(device_, width, height, depth_format_, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, "frame overlay depth");
+    if (!frame_msaa_color_ || !frame_overlay_depth_) {
+      msaa_ = 1;
+      return ensure_frame_images(width, height);
+    }
+  }
+  log::info("frame images: {}x{}, {} samples", width, height, 1u << static_cast<u32>(samples));
   return true;
+}
+
+void GpuContext::set_msaa(u32 samples) {
+  u32 supported = 1;
+  for (const u32 count : {2u, 4u, 8u})
+    if (count <= samples && SDL_GPUTextureSupportsSampleCount(device_, color_format(), sample_count(count)) &&
+        SDL_GPUTextureSupportsSampleCount(device_, depth_format_, sample_count(count)))
+      supported = count;
+  if (supported == msaa_) return;
+  msaa_ = supported;
+  for (RenderTarget* target : multisampled_targets_) target->release_samples();
+}
+
+SDL_GPUSampleCount GpuContext::sample_count_for(u32 width, u32 height) const {
+  u32 samples = msaa_;
+  while (samples > 1 && static_cast<u64>(width) * height * samples > kMaxMsaaSamples) samples /= 2;
+  return sample_count(samples);
+}
+
+void GpuContext::track_multisampled(RenderTarget* target, bool tracked) {
+  std::erase(multisampled_targets_, target);
+  if (tracked) multisampled_targets_.push_back(target);
+}
+
+void GpuContext::resolve(const PassImages& images) {
+  if (!images.resolve) return;
+  SDL_GPUColorTargetInfo color_info{};
+  color_info.texture = images.color;
+  color_info.load_op = SDL_GPU_LOADOP_LOAD;
+  color_info.store_op = SDL_GPU_STOREOP_RESOLVE_AND_STORE;
+  color_info.resolve_texture = images.resolve;
+  if (SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd_, &color_info, 1, nullptr)) SDL_EndGPURenderPass(pass);
+  else log::error("resolve: SDL_BeginGPURenderPass: {}", SDL_GetError());
+}
+
+void GpuContext::set_anisotropy(u32 level) {
+  level = std::clamp(level, 1u, 16u);
+  if (level == anisotropy_) return;
+  anisotropy_ = level;
+  release_anisotropic_samplers();
+}
+
+SDL_GPUSampler* GpuContext::filtered(SDL_GPUSampler* sampler) {
+  if (anisotropy_ <= 1) return sampler;
+  std::lock_guard lock(samplers_mutex_);
+  const auto it = linear_samplers_.find(sampler);
+  if (it == linear_samplers_.end()) return sampler;
+  LinearSampler& linear = it->second;
+  if (!linear.anisotropic) {
+    SDL_GPUSamplerCreateInfo info = linear.info;
+    info.enable_anisotropy = true;
+    info.max_anisotropy = static_cast<float>(anisotropy_);
+    linear.anisotropic = SDL_CreateGPUSampler(device_, &info);
+    if (!linear.anisotropic) {
+      log::error("anisotropic sampler: {}", SDL_GetError());
+      return sampler;
+    }
+  }
+  return linear.anisotropic;
+}
+
+void GpuContext::register_linear_sampler(SDL_GPUSampler* sampler, const SDL_GPUSamplerCreateInfo& info) {
+  std::lock_guard lock(samplers_mutex_);
+  linear_samplers_[sampler] = {info, nullptr};
+}
+
+void GpuContext::unregister_sampler(SDL_GPUSampler* sampler) {
+  std::lock_guard lock(samplers_mutex_);
+  const auto it = linear_samplers_.find(sampler);
+  if (it == linear_samplers_.end()) return;
+  if (it->second.anisotropic) SDL_ReleaseGPUSampler(device_, it->second.anisotropic);
+  linear_samplers_.erase(it);
+}
+
+void GpuContext::release_anisotropic_samplers() {
+  std::lock_guard lock(samplers_mutex_);
+  for (auto& [sampler, linear] : linear_samplers_) {
+    if (linear.anisotropic) SDL_ReleaseGPUSampler(device_, linear.anisotropic);
+    linear.anisotropic = nullptr;
+  }
 }
 
 void GpuContext::set_vsync(bool on) {
@@ -209,7 +300,8 @@ bool GpuContext::begin_frame(Frame& out) {
   targets_.clear();
   streams_.clear();
   in_frame_ = true;
-  begin_rendering(frame_color_, frame_depth_, extent_, true, clear_);
+  overlay_ = false;
+  begin_rendering(current_images(), true, clear_);
 
   out.ctx = this;
   out.index = frame_index_;
@@ -218,15 +310,16 @@ bool GpuContext::begin_frame(Frame& out) {
   return true;
 }
 
-void GpuContext::begin_rendering(SDL_GPUTexture* color, SDL_GPUTexture* depth, Extent extent, bool clear_color, const float (&rgba)[4]) {
+void GpuContext::begin_rendering(const PassImages& images, bool clear_color, const float (&rgba)[4]) {
   end_rendering();
+  const Extent extent = images.extent;
   SDL_GPUColorTargetInfo color_info{};
-  color_info.texture = color;
+  color_info.texture = images.color;
   color_info.clear_color = {rgba[0], rgba[1], rgba[2], rgba[3]};
   color_info.load_op = clear_color ? SDL_GPU_LOADOP_CLEAR : SDL_GPU_LOADOP_LOAD;
   color_info.store_op = SDL_GPU_STOREOP_STORE;
   SDL_GPUDepthStencilTargetInfo depth_info{};
-  depth_info.texture = depth;
+  depth_info.texture = images.depth;
   depth_info.clear_depth = 1.0f;
   depth_info.load_op = SDL_GPU_LOADOP_CLEAR;
   depth_info.store_op = SDL_GPU_STOREOP_DONT_CARE;
@@ -234,6 +327,7 @@ void GpuContext::begin_rendering(SDL_GPUTexture* color, SDL_GPUTexture* depth, E
   depth_info.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
   pass_ = SDL_BeginGPURenderPass(cmd_, &color_info, 1, &depth_info);
   pass_extent_ = extent;
+  pass_samples_ = images.samples;
   if (!pass_) {
     log::error("SDL_BeginGPURenderPass: {}", SDL_GetError());
     return;
@@ -246,46 +340,50 @@ void GpuContext::begin_rendering(SDL_GPUTexture* color, SDL_GPUTexture* depth, E
 void GpuContext::end_rendering() {
   if (pass_) SDL_EndGPURenderPass(pass_);
   pass_ = nullptr;
+  pass_samples_ = SDL_GPU_SAMPLECOUNT_1;
 }
 
-void GpuContext::current_images(SDL_GPUTexture*& color, SDL_GPUTexture*& depth, Extent& extent) const {
-  if (targets_.empty()) {
-    color = frame_color_;
-    depth = frame_depth_;
-    extent = extent_;
-    return;
+GpuContext::PassImages GpuContext::current_images() const {
+  if (!targets_.empty()) {
+    const RenderTarget& target = *targets_.back();
+    SDL_GPUTexture* msaa_color = target.msaa_color();
+    return {msaa_color ? msaa_color : target.color(), msaa_color ? target.color() : nullptr, target.depth(), {target.width(), target.height()},
+            target.sample_count()};
   }
-  const RenderTarget& target = *targets_.back();
-  color = target.color();
-  depth = target.depth();
-  extent = {target.width(), target.height()};
+  if (frame_msaa_color_ && !overlay_) return {frame_msaa_color_, frame_color_, frame_depth_, extent_, frame_samples_};
+  return {frame_color_, nullptr, frame_overlay_depth_ ? frame_overlay_depth_ : frame_depth_, extent_, SDL_GPU_SAMPLECOUNT_1};
+}
+
+void GpuContext::begin_overlay() {
+  if (!in_frame_ || overlay_ || !frame_msaa_color_ || !targets_.empty()) return;
+  end_rendering();
+  resolve(current_images());
+  overlay_ = true;
+  begin_rendering(current_images(), false, clear_);
 }
 
 void GpuContext::begin_target(RenderTarget& target, const Frame& frame, Frame& out) { begin_target(target, frame, out, clear_); }
 
 void GpuContext::begin_target(RenderTarget& target, const Frame& frame, Frame& out, const float (&clear_rgba)[4]) {
+  target.prepare_samples(*this);
   targets_.push_back(&target);
-  begin_rendering(target.color(), target.depth(), {target.width(), target.height()}, true, clear_rgba);
+  begin_rendering(current_images(), true, clear_rgba);
   out = frame;
   out.extent = {target.width(), target.height()};
 }
 
 void GpuContext::end_target(RenderTarget& target) {
-  if (!targets_.empty() && targets_.back() == &target) targets_.pop_back();
-  SDL_GPUTexture* color = nullptr;
-  SDL_GPUTexture* depth = nullptr;
-  Extent extent;
-  current_images(color, depth, extent);
-  begin_rendering(color, depth, extent, false, clear_);
+  if (!targets_.empty() && targets_.back() == &target) {
+    end_rendering();
+    resolve(current_images());
+    targets_.pop_back();
+  }
+  begin_rendering(current_images(), false, clear_);
 }
 
 void GpuContext::clear_depth() {
   if (!in_frame_) return;
-  SDL_GPUTexture* color = nullptr;
-  SDL_GPUTexture* depth = nullptr;
-  Extent extent;
-  current_images(color, depth, extent);
-  begin_rendering(color, depth, extent, false, clear_);
+  begin_rendering(current_images(), false, clear_);
 }
 
 void GpuContext::set_scissor(const Rect& rect) {
@@ -353,6 +451,7 @@ void GpuContext::end_frame() {
   in_frame_ = false;
   end_rendering();
   targets_.clear();
+  resolve(current_images());
 
   const bool capture = !screenshot_path_.empty() || static_cast<bool>(capture_cb_);
   SDL_GPUTransferBuffer* download = nullptr;
@@ -431,12 +530,14 @@ void GpuContext::shutdown() {
   band_staging_ = nullptr;
   if (white_texture_) SDL_ReleaseGPUTexture(device_, white_texture_);
   if (white_sampler_) SDL_ReleaseGPUSampler(device_, white_sampler_);
+  release_anisotropic_samplers();
+  linear_samplers_.clear();
   white_texture_ = nullptr;
   white_sampler_ = nullptr;
   white_ = TexRef();
-  if (frame_color_) SDL_ReleaseGPUTexture(device_, frame_color_);
-  if (frame_depth_) SDL_ReleaseGPUTexture(device_, frame_depth_);
-  frame_color_ = frame_depth_ = nullptr;
+  for (SDL_GPUTexture* image : {frame_color_, frame_depth_, frame_msaa_color_, frame_overlay_depth_})
+    if (image) SDL_ReleaseGPUTexture(device_, image);
+  frame_color_ = frame_depth_ = frame_msaa_color_ = frame_overlay_depth_ = nullptr;
   extent_ = {};
   SDL_ReleaseWindowFromGPUDevice(device_, window_);
   SDL_DestroyGPUDevice(device_);

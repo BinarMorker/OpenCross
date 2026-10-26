@@ -589,7 +589,7 @@ void MeshPipeline::draw(const MeshModel& model, const DrawParams& params) {
         env_w2 = -256.0f;
       }
       if (!tex) continue;
-      const SDL_GPUTextureSamplerBinding texture_binding{tex.texture, tex.sampler};
+      const SDL_GPUTextureSamplerBinding texture_binding{tex.texture, ctx_->filtered(tex.sampler)};
       SDL_BindGPUFragmentSamplers(render_pass, 0, &texture_binding, 1);
       const bool near_sort = model_draw.mesh < 32 && ((params.near_meshes >> model_draw.mesh) & 1u);
       float tr = params.tint[0], tg = params.tint[1], tb = params.tint[2];

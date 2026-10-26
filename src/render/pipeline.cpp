@@ -46,8 +46,26 @@ SDL_GPUColorTargetBlendState blend_state(Blend blend) {
 
 bool Pipeline::create(GpuContext& ctx, const PipelineDesc& desc) {
   destroy();
-  device_ = ctx.device();
+  ctx_ = &ctx;
+  desc_ = desc;
+  attributes_.assign(desc.attributes.begin(), desc.attributes.end());
+  desc_.attributes = attributes_;
+  variants_[SDL_GPU_SAMPLECOUNT_1] = build(SDL_GPU_SAMPLECOUNT_1);
+  return variants_[SDL_GPU_SAMPLECOUNT_1] != nullptr;
+}
 
+SDL_GPUGraphicsPipeline* Pipeline::handle() const {
+  if (!ctx_ || !variants_[SDL_GPU_SAMPLECOUNT_1]) return nullptr;
+  const SDL_GPUSampleCount samples = ctx_->pass_sample_count();
+  if (!variants_[samples] && !failed_[samples]) {
+    variants_[samples] = build(samples);
+    failed_[samples] = !variants_[samples];
+  }
+  return variants_[samples];
+}
+
+SDL_GPUGraphicsPipeline* Pipeline::build(SDL_GPUSampleCount samples) const {
+  const PipelineDesc& desc = desc_;
   SDL_GPUVertexBufferDescription vertex_buffer{};
   vertex_buffer.slot = 0;
   vertex_buffer.pitch = desc.vertex_stride;
@@ -62,7 +80,7 @@ bool Pipeline::create(GpuContext& ctx, const PipelineDesc& desc) {
     attributes.push_back(out);
   }
 
-  const SDL_GPUColorTargetDescription color_target{ctx.color_format(), blend_state(desc.blend)};
+  const SDL_GPUColorTargetDescription color_target{ctx_->color_format(), blend_state(desc.blend)};
 
   SDL_GPUGraphicsPipelineCreateInfo info{};
   info.vertex_shader = desc.vertex;
@@ -78,27 +96,28 @@ bool Pipeline::create(GpuContext& ctx, const PipelineDesc& desc) {
   info.rasterizer_state.cull_mode = desc.cull;
   info.rasterizer_state.front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE;
   info.rasterizer_state.enable_depth_clip = true;
-  info.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
+  info.multisample_state.sample_count = samples;
   info.depth_stencil_state.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
   info.depth_stencil_state.enable_depth_test = desc.depth_test;
   info.depth_stencil_state.enable_depth_write = desc.depth_write;
   info.target_info.color_target_descriptions = &color_target;
   info.target_info.num_color_targets = 1;
-  info.target_info.depth_stencil_format = ctx.depth_format();
+  info.target_info.depth_stencil_format = ctx_->depth_format();
   info.target_info.has_depth_stencil_target = true;
 
-  pipeline_ = SDL_CreateGPUGraphicsPipeline(device_, &info);
-  if (!pipeline_) {
-    log::error("SDL_CreateGPUGraphicsPipeline: {}", SDL_GetError());
-    return false;
-  }
-  return true;
+  SDL_GPUGraphicsPipeline* pipeline = SDL_CreateGPUGraphicsPipeline(ctx_->device(), &info);
+  if (!pipeline) log::error("SDL_CreateGPUGraphicsPipeline ({} samples): {}", 1u << static_cast<u32>(samples), SDL_GetError());
+  return pipeline;
 }
 
 void Pipeline::destroy() {
-  if (device_ && pipeline_) SDL_ReleaseGPUGraphicsPipeline(device_, pipeline_);
-  pipeline_ = nullptr;
-  device_ = nullptr;
+  for (SDL_GPUGraphicsPipeline*& pipeline : variants_) {
+    if (ctx_ && pipeline) SDL_ReleaseGPUGraphicsPipeline(ctx_->device(), pipeline);
+    pipeline = nullptr;
+  }
+  for (bool& failed : failed_) failed = false;
+  attributes_.clear();
+  ctx_ = nullptr;
 }
 
 }  // namespace oc::render

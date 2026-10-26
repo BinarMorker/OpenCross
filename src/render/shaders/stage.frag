@@ -57,7 +57,9 @@ void main() {
       vec4 c11 = texture(tex, uv_page + (lo + (b + 0.5) / px) * uv_scale);
       c = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
     } else {
-      c = texture(tex, uv_page + (lo + mod(uv_tex - lo, span)) * uv_scale);
+      // The gradients of the unwrapped coordinate: the wrap's jump would widen an anisotropic footprint across the atlas.
+      vec2 unwrapped = uv_tex * uv_scale;
+      c = textureGrad(tex, uv_page + (lo + mod(uv_tex - lo, span)) * uv_scale, dFdx(unwrapped), dFdy(unwrapped));
     }
   } else {
     c = texture(tex, t);

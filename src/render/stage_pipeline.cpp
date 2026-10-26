@@ -65,8 +65,8 @@ void bind_index_buffer(SDL_GPURenderPass* render_pass, SDL_GPUBuffer* buffer) {
   SDL_BindGPUIndexBuffer(render_pass, &binding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
 }
 
-void bind_texture(SDL_GPURenderPass* render_pass, const TexRef& texture) {
-  const SDL_GPUTextureSamplerBinding binding{texture.texture, texture.sampler};
+void bind_texture(GpuContext& ctx, SDL_GPURenderPass* render_pass, const TexRef& texture) {
+  const SDL_GPUTextureSamplerBinding binding{texture.texture, ctx.filtered(texture.sampler)};
   SDL_BindGPUFragmentSamplers(render_pass, 0, &binding, 1);
 }
 
@@ -605,7 +605,7 @@ void StagePipeline::draw(const StageMesh& mesh, const Mat4& proj, std::span<cons
         bound_in = nullptr;
       }
       if (it.sub->texture != bound_tex) {
-        bind_texture(render_pass, sets[static_cast<size_t>(it.sub->texture)]);
+        bind_texture(*ctx_, render_pass, sets[static_cast<size_t>(it.sub->texture)]);
         bound_tex = it.sub->texture;
       }
       if (it.in != bound_in || it.blend != bound_blend || it.factor != bound_factor || it.alpha != bound_alpha) {
@@ -737,7 +737,7 @@ void StagePipeline::draw(const StageMesh& mesh, const Mat4& proj, std::span<cons
       const int blend = draw_blend(in, sub, factor, alpha);
       const Pipeline& pl = (ps1_jitter().on ? pipes_affine_ : pipes_)[std::clamp(in.cull, 0, 2)][blend];
       SDL_BindGPUGraphicsPipeline(render_pass, pl.handle());
-      bind_texture(render_pass, sets[static_cast<size_t>(sub.texture)]);
+      bind_texture(*ctx_, render_pass, sets[static_cast<size_t>(sub.texture)]);
       PushData pd;
       pd.clip = proj * cam;
       fill_push(pd, in, cue_, factor, alpha, smooth_fog_, linear_draw_);
@@ -886,7 +886,7 @@ void StagePipeline::draw_cpu(const StageMesh& mesh, const assets::StageAsset& as
     }
     const Pipeline& pl = (in.ground || ps1_jitter().on ? pipes_affine_ : pipes_)[std::clamp(in.cull, 0, 2)][blend];
     SDL_BindGPUGraphicsPipeline(render_pass, pl.handle());
-    bind_texture(render_pass, sets[static_cast<size_t>(sub.texture)]);
+    bind_texture(*ctx_, render_pass, sets[static_cast<size_t>(sub.texture)]);
     PushData pd;
     pd.clip = proj * cam;
     fill_push(pd, in, cue_, factor, alpha, smooth_fog_, linear_draw_);
@@ -966,7 +966,7 @@ void StagePipeline::draw_seams(const StageMesh& mesh, const assets::StagePart& p
     const std::vector<assets::StageVertex>& out = per_sub[sub_index];
     if (out.empty()) continue;
     write_vertices(out.data(), static_cast<u32>(out.size()), at);
-    bind_texture(render_pass, sets[static_cast<size_t>(mesh.subs[mp.first_sub + sub_index].texture)]);
+    bind_texture(*ctx_, render_pass, sets[static_cast<size_t>(mesh.subs[mp.first_sub + sub_index].texture)]);
     SDL_DrawGPUPrimitives(render_pass, static_cast<u32>(out.size()), 1, at, 0);
     at += static_cast<u32>(out.size());
   }
@@ -1119,7 +1119,7 @@ void StagePipeline::draw_prims(const StageMesh& mesh, const assets::StageAsset& 
     const int blend_index = draw_blend(neutral, sub, factor, alpha);
     const Pipeline& pl = (ps1_jitter().on ? pipes_affine_ : pipes_)[it.two_sided ? 2 : 0][blend_index];
     SDL_BindGPUGraphicsPipeline(render_pass, pl.handle());
-    bind_texture(render_pass, sets[static_cast<size_t>(it.texture)]);
+    bind_texture(*ctx_, render_pass, sets[static_cast<size_t>(it.texture)]);
     PushData pd;
     pd.clip = proj * cam_matrix;
     fill_push(pd, neutral, DepthCue{}, factor, alpha);
@@ -1146,7 +1146,7 @@ void StagePipeline::draw_dynamic(const Mat4& proj, const std::array<float, 12>& 
   write_indices(indices.data(), static_cast<u32>(indices.size()), dyn_iused_);
   const Pipeline& pl = (ps1_jitter().on ? pipes_affine_ : pipes_)[2][std::clamp(blend, 0, 3)];
   SDL_BindGPUGraphicsPipeline(render_pass, pl.handle());
-  bind_texture(render_pass, dyn_white_set_);
+  bind_texture(*ctx_, render_pass, dyn_white_set_);
   bind_vertex_buffer(render_pass, dyn_vertices_.handle());
   bind_index_buffer(render_pass, dyn_indices_.handle());
   Mat4 cam_matrix;

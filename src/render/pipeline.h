@@ -1,6 +1,7 @@
 #pragma once
 // Graphics pipeline for the frame / target images: formats come from the GpuContext, viewport/scissor are per render pass.
 #include <span>
+#include <vector>
 
 #include "render/gpu_context.h"
 
@@ -38,14 +39,22 @@ class Pipeline {
   Pipeline(const Pipeline&) = delete;
   Pipeline& operator=(const Pipeline&) = delete;
 
+  // The shaders of `desc` must live until destroy(): the multisampled variants are built from them on first use.
   bool create(GpuContext& ctx, const PipelineDesc& desc);
   void destroy();
 
-  SDL_GPUGraphicsPipeline* handle() const { return pipeline_; }
+  // The variant for the sample count of the render pass in progress (GpuContext::pass_sample_count).
+  SDL_GPUGraphicsPipeline* handle() const;
 
  private:
-  SDL_GPUDevice* device_ = nullptr;
-  SDL_GPUGraphicsPipeline* pipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline* build(SDL_GPUSampleCount samples) const;
+
+  GpuContext* ctx_ = nullptr;
+  PipelineDesc desc_;
+  std::vector<VertexAttribute> attributes_;
+  // Indexed by SDL_GPUSampleCount (1, 2, 4, 8 samples).
+  mutable SDL_GPUGraphicsPipeline* variants_[4] = {};
+  mutable bool failed_[4] = {};
 };
 
 }  // namespace oc::render

@@ -47,7 +47,7 @@ bool CrtPass::begin(GpuContext& ctx, const Frame& frame) {
   if (!pipeline_.handle()) return false;
   if (!target_.valid() || target_.width() != frame.extent.width || target_.height() != frame.extent.height) {
     target_.destroy();
-    if (!target_.create(ctx, frame.extent.width, frame.extent.height)) return false;
+    if (!target_.create(ctx, frame.extent.width, frame.extent.height, true)) return false;
     set_ = target_.ref(sampler_);
   }
   Frame inner;

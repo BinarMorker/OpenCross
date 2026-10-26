@@ -121,6 +121,9 @@ void bind_cheats(const Cheats* set);
 //            the 2D / UI drawn at output resolution; with Ps1Res the multiple of the PS1 320 x 224 target instead (2 = 640 x 448); one of
 //            kRenderScales (snapped on load). Ps1Jitter: GTE integer vertex snapping + affine texture mapping in the 3D pipelines
 //            (render/ps1_jitter.h). Crt: final full-frame CRT post pass (scanlines, mask, vignette), ImGui excluded (render/crt_pass.h).
+//            Msaa: multisample antialiasing samples of the window-resolution pictures (1 = off, 2, 4, 8; lowered to what the GPU
+//            supports); the PS1-resolution passes stay aliased. Anisotropy: anisotropic filtering level of the bilinear textures of the
+//            3D models and stages (1 = off, 2, 4, 8, 16).
 //   [Game]   FastMode / SlowMode (RDE's speed toggles; exclusive; hotkeys F2 / F1 (platform/keymap.h),
 //            pad RT / LT): the simulation (field, battle) runs FastRate x faster (0 = RDE's: 4x in the field, 2x in battle; 2..5 =
 //            that many times; FixedStep caps at 5 ticks per frame) or at SlowRate percent (10..90, default RDE's 50); movies stay at
@@ -197,6 +200,10 @@ struct Config {
   bool battle_shadows = true;
   bool autohide_cast_hud = false;
   bool crt = false;
+  int msaa = 1;
+  static constexpr int kMsaaLevels[] = {1, 2, 4, 8};
+  int anisotropy = 1;
+  static constexpr int kAnisotropyLevels[] = {1, 2, 4, 8, 16};
   float master = 1.0f;
   float music = 1.0f;
   float sfx = 1.0f;

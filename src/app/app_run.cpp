@@ -277,6 +277,8 @@ void App::field_frame() {
 // What the Esc options window changed this frame.
 void App::apply_options_change(const render::OptionsChange& change) {
   if (change.vsync) ctx.set_vsync(config.vsync);
+  if (change.msaa) ctx.set_msaa(static_cast<u32>(config.msaa));
+  if (change.anisotropy) ctx.set_anisotropy(static_cast<u32>(config.anisotropy));
   // [Video] WindowMode / Width / Height / Display apply live; the swapchain follows.
   if (change.window) {
     window.apply_video(static_cast<int>(config.window_mode), config.width, config.height, config.display);

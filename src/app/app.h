@@ -187,7 +187,7 @@ class App {
   void draw_field_ui(const SceneFrame& sf);
   void draw_title_menu(const SceneFrame& sf);
   void field_clip(const SceneFrame& sf, bool on);
-  bool ensure_target(render::RenderTarget& rt, render::TexRef& set, u32 w, u32 h, const render::Sampler& smp);
+  bool ensure_target(render::RenderTarget& rt, render::TexRef& set, u32 w, u32 h, const render::Sampler& smp, bool multisampled = false);
   void draw_field_slab(const SceneFrame& sf, const render::Frame& slab_frame, float fw, float fh, bool clip);
   void draw_warp(const SceneFrame& sf, render::TexRef set, const render::Letterbox& dst, const render::Letterbox& src, float sw, float sh);
   void show_lowres(const SceneFrame& sf, render::TexRef set, const render::Letterbox& lb, float lw, float lh);

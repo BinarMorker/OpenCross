@@ -146,6 +146,8 @@ void App::init_vfs() {
 
 bool App::init_render() {
   if (!ctx.init(window.handle(), config.vsync, config.gpu_driver)) return false;
+  ctx.set_msaa(static_cast<u32>(config.msaa));
+  ctx.set_anisotropy(static_cast<u32>(config.anisotropy));
   ctx.set_clear_color(0.08f, 0.09f, 0.14f);
 
   // The [Video] Crt pass.

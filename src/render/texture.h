@@ -67,6 +67,7 @@ class Sampler {
   SDL_GPUSampler* handle() const { return sampler_; }
 
  private:
+  GpuContext* ctx_ = nullptr;
   SDL_GPUDevice* device_ = nullptr;
   SDL_GPUSampler* sampler_ = nullptr;
 };

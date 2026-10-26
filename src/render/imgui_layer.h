@@ -30,11 +30,13 @@ struct OptionsChange {
   bool ps1_res = false;
   bool window = false;
   bool filter = false;
+  bool msaa = false;
+  bool anisotropy = false;
   bool widescreen = false;
   bool enhancements = false;
   bool other = false;
   bool any() const {
-    return vsync || art_mode || audio || portraits || bgm_source || language || ps1_res || window || filter ||
+    return vsync || art_mode || audio || portraits || bgm_source || language || ps1_res || window || filter || msaa || anisotropy ||
            widescreen || enhancements || other;
   }
 };

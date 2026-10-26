@@ -274,7 +274,7 @@ void App::begin_scene_target(SceneFrame& sf) {
     scene_scaled = jolt.on || (tw != frame.extent.width || th != frame.extent.height);
     if (scene_scaled && (!srt.valid() || srt.width() != tw || srt.height() != th || !sset)) {
       sset = {};
-      if (srt.create(ctx, tw, th)) sset = srt.ref(linear);
+      if (srt.create(ctx, tw, th, true)) sset = srt.ref(linear);
       if (!sset) {
         log::warn("render scale {}: no {}x{} scene target, drawing at window resolution", rscale, tw, th);
         srt.destroy();
@@ -383,7 +383,7 @@ void App::draw_field_lowres(const SceneFrame& sf) {
 void App::draw_field_full(const SceneFrame& sf) {
   const render::Frame& pf = sf.pf;
   const float pw = sf.pw, ph = sf.ph;
-  if (sf.wave_hd && ensure_target(wave_rt, wave_set, pf.extent.width, pf.extent.height, linear)) {
+  if (sf.wave_hd && ensure_target(wave_rt, wave_set, pf.extent.width, pf.extent.height, linear, true)) {
     // The deep part into a target of the picture frame's size (same letterbox), warped into the picture, then the near part over it.
     render::Frame wf;
     ctx.begin_target(wave_rt, pf, wf);
@@ -492,13 +492,13 @@ void App::field_clip(const SceneFrame& sf, bool on) {
   sf.pf.set_scissor(scissor);
 }
 
-bool App::ensure_target(render::RenderTarget& rt, render::TexRef& set, u32 w, u32 h, const render::Sampler& smp) {
+bool App::ensure_target(render::RenderTarget& rt, render::TexRef& set, u32 w, u32 h, const render::Sampler& smp, bool multisampled) {
   if (rt.valid() && rt.width() == w && rt.height() == h) {
     set = rt.ref(smp);
     return true;
   }
   set = {};
-  if (w == 0 || h == 0 || !rt.create(ctx, w, h)) return false;
+  if (w == 0 || h == 0 || !rt.create(ctx, w, h, multisampled)) return false;
   set = rt.ref(smp);
   return rt.valid();
 }

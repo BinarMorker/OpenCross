@@ -44,22 +44,34 @@ class RenderTarget {
   RenderTarget(const RenderTarget&) = delete;
   RenderTarget& operator=(const RenderTarget&) = delete;
 
-  bool create(GpuContext& ctx, u32 width, u32 height);
+  // `multisampled`: drawn with the context's MSAA (GpuContext::set_msaa) into a multisampled image that is resolved into color().
+  bool create(GpuContext& ctx, u32 width, u32 height, bool multisampled = false);
   void destroy();
+  // Matches the multisampled images to the context's MSAA (begin_target calls it); color() and the TexRefs of it stay valid.
+  bool prepare_samples(GpuContext& ctx);
+  // Frees the multisampled images (MSAA changed); prepare_samples makes them again.
+  void release_samples();
 
   bool valid() const { return color_ != nullptr; }
   u32 width() const { return width_; }
   u32 height() const { return height_; }
   SDL_GPUTexture* color() const { return color_; }
+  // Null when single-sampled.
+  SDL_GPUTexture* msaa_color() const { return msaa_color_; }
   SDL_GPUTexture* depth() const { return depth_; }
+  SDL_GPUSampleCount sample_count() const { return samples_; }
   // The colour image as sampled after GpuContext::end_target.
   TexRef ref(const Sampler& sampler) const { return {color_, sampler.handle(), width_, height_}; }
 
  private:
+  GpuContext* ctx_ = nullptr;
   SDL_GPUDevice* device_ = nullptr;
   SDL_GPUTexture* color_ = nullptr;
+  SDL_GPUTexture* msaa_color_ = nullptr;
   SDL_GPUTexture* depth_ = nullptr;
   u32 width_ = 0, height_ = 0;
+  bool multisampled_ = false;
+  SDL_GPUSampleCount samples_ = SDL_GPU_SAMPLECOUNT_1;
 };
 
 }  // namespace oc::render

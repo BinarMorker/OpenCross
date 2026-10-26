@@ -221,6 +221,16 @@ bool Config::load(const std::filesystem::path& file) {
   }
   ps1_jitter = parse_bool(ini.get("Video", "Ps1Jitter"), ps1_jitter);
   crt = parse_bool(ini.get("Video", "Crt"), crt);
+  {
+    const int stored_msaa = parse_int(ini.get("Video", "Msaa"), msaa);
+    msaa = 1;
+    for (const int level : kMsaaLevels)
+      if (level <= stored_msaa) msaa = level;
+    const int stored_anisotropy = parse_int(ini.get("Video", "Anisotropy"), anisotropy);
+    anisotropy = 1;
+    for (const int level : kAnisotropyLevels)
+      if (level <= stored_anisotropy) anisotropy = level;
+  }
   smooth_water_line = parse_bool(ini.get("Enhancements", "SmoothWaterLine"), smooth_water_line);
   battle_shadows = parse_bool(ini.get("Enhancements", "BattleShadows"), battle_shadows);
   autohide_cast_hud = parse_bool(ini.get("Enhancements", "AutoHideCastHud"), autohide_cast_hud);
@@ -331,6 +341,8 @@ bool Config::save(const std::filesystem::path& file) const {
   ini.set("Video", "RenderScale", fmt_float(render_scale));
   ini.set("Video", "Ps1Jitter", on_off(ps1_jitter));
   ini.set("Video", "Crt", on_off(crt));
+  ini.set("Video", "Msaa", std::to_string(msaa));
+  ini.set("Video", "Anisotropy", std::to_string(anisotropy));
   ini.set("Enhancements", "SmoothWaterLine", on_off(smooth_water_line));
   ini.set("Enhancements", "BattleShadows", on_off(battle_shadows));
   ini.set("Enhancements", "AutoHideCastHud", on_off(autohide_cast_hud));

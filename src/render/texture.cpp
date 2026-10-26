@@ -204,13 +204,17 @@ bool Sampler::create(GpuContext& ctx, bool linear, bool repeat) {
     log::error("SDL_CreateGPUSampler: {}", SDL_GetError());
     return false;
   }
+  ctx_ = &ctx;
+  if (linear) ctx.register_linear_sampler(sampler_, info);
   return true;
 }
 
 void Sampler::destroy() {
+  if (ctx_ && sampler_) ctx_->unregister_sampler(sampler_);
   if (device_ && sampler_) SDL_ReleaseGPUSampler(device_, sampler_);
   sampler_ = nullptr;
   device_ = nullptr;
+  ctx_ = nullptr;
 }
 
 }  // namespace oc::render

@@ -76,11 +76,14 @@ void build_screen_warp(const ScreenWarpParams& params, std::vector<WarpQuad>& ou
 }
 
 
-bool RenderTarget::create(GpuContext& ctx, u32 width, u32 height) {
+bool RenderTarget::create(GpuContext& ctx, u32 width, u32 height, bool multisampled) {
   destroy();
+  ctx_ = &ctx;
   device_ = ctx.device();
   width_ = width;
   height_ = height;
+  multisampled_ = multisampled;
+  if (multisampled) ctx.track_multisampled(this, true);
   SDL_GPUTextureCreateInfo info{};
   info.type = SDL_GPU_TEXTURETYPE_2D;
   info.width = width;
@@ -91,10 +94,7 @@ bool RenderTarget::create(GpuContext& ctx, u32 width, u32 height) {
   info.format = ctx.color_format();
   info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
   color_ = SDL_CreateGPUTexture(device_, &info);
-  info.format = ctx.depth_format();
-  info.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
-  depth_ = SDL_CreateGPUTexture(device_, &info);
-  if (!color_ || !depth_) {
+  if (!color_ || !prepare_samples(ctx)) {
     log::error("render target {}x{}: SDL_CreateGPUTexture: {}", width, height, SDL_GetError());
     destroy();
     return false;
@@ -102,13 +102,54 @@ bool RenderTarget::create(GpuContext& ctx, u32 width, u32 height) {
   return true;
 }
 
-void RenderTarget::destroy() {
-  if (device_) {
-    if (color_) SDL_ReleaseGPUTexture(device_, color_);
+// A multisampled target that cannot get its images falls back to single-sampled.
+bool RenderTarget::prepare_samples(GpuContext& ctx) {
+  const SDL_GPUSampleCount wanted = multisampled_ ? ctx.sample_count_for(width_, height_) : SDL_GPU_SAMPLECOUNT_1;
+  if (depth_ && wanted == samples_) return true;
+  for (const SDL_GPUSampleCount samples : {wanted, SDL_GPU_SAMPLECOUNT_1}) {
+    if (msaa_color_) SDL_ReleaseGPUTexture(device_, msaa_color_);
     if (depth_) SDL_ReleaseGPUTexture(device_, depth_);
+    msaa_color_ = depth_ = nullptr;
+    samples_ = samples;
+    SDL_GPUTextureCreateInfo info{};
+    info.type = SDL_GPU_TEXTURETYPE_2D;
+    info.width = width_;
+    info.height = height_;
+    info.layer_count_or_depth = 1;
+    info.num_levels = 1;
+    info.sample_count = samples;
+    if (samples != SDL_GPU_SAMPLECOUNT_1) {
+      info.format = ctx.color_format();
+      info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+      msaa_color_ = SDL_CreateGPUTexture(device_, &info);
+    }
+    info.format = ctx.depth_format();
+    info.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET;
+    depth_ = SDL_CreateGPUTexture(device_, &info);
+    if (depth_ && (msaa_color_ || samples == SDL_GPU_SAMPLECOUNT_1)) return true;
+    log::error("render target {}x{} ({} samples): SDL_CreateGPUTexture: {}", width_, height_, 1u << static_cast<u32>(samples), SDL_GetError());
   }
-  color_ = depth_ = nullptr;
+  return false;
+}
+
+void RenderTarget::release_samples() {
+  if (!device_) return;
+  if (msaa_color_) SDL_ReleaseGPUTexture(device_, msaa_color_);
+  if (depth_) SDL_ReleaseGPUTexture(device_, depth_);
+  msaa_color_ = depth_ = nullptr;
+}
+
+void RenderTarget::destroy() {
+  if (ctx_ && multisampled_) ctx_->track_multisampled(this, false);
+  if (device_) {
+    for (SDL_GPUTexture* image : {color_, msaa_color_, depth_})
+      if (image) SDL_ReleaseGPUTexture(device_, image);
+  }
+  color_ = msaa_color_ = depth_ = nullptr;
+  samples_ = SDL_GPU_SAMPLECOUNT_1;
+  multisampled_ = false;
   device_ = nullptr;
+  ctx_ = nullptr;
 }
 
 }  // namespace oc::render

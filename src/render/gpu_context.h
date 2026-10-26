@@ -15,6 +15,7 @@
 #include <mutex>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "core/types.h"
@@ -30,6 +31,11 @@ class RenderTarget;
 class StreamBuffer;
 class Texture;
 class Sampler;
+
+// 1, 2, 4 or 8 samples as SDL's enum (other counts round down).
+inline SDL_GPUSampleCount sample_count(u32 samples) {
+  return samples >= 8 ? SDL_GPU_SAMPLECOUNT_8 : samples >= 4 ? SDL_GPU_SAMPLECOUNT_4 : samples >= 2 ? SDL_GPU_SAMPLECOUNT_2 : SDL_GPU_SAMPLECOUNT_1;
+}
 
 struct Extent {
   u32 width = 0, height = 0;
@@ -113,6 +119,22 @@ class GpuContext {
 
   // Takes effect on the next begin_frame.
   void set_vsync(bool on);
+  // Multisample antialiasing of the frame and of the multisampled render targets: 1, 2, 4 or 8 samples, lowered to what the GPU supports.
+  // A change releases every multisampled image; the next begin_frame / begin_target makes them again.
+  void set_msaa(u32 samples);
+  u32 msaa() const { return msaa_; }
+  // The MSAA of an image of this size: halved until it holds at most kMaxMsaaSamples samples (a supersampled render-scale target is
+  // already antialiased, and multisampling it would take gigabytes).
+  static constexpr u64 kMaxMsaaSamples = 3840ull * 2160ull * 8ull;
+  SDL_GPUSampleCount sample_count_for(u32 width, u32 height) const;
+  // The sample count of the rendering in progress (1 outside a pass): the pipelines bind their variant of it.
+  SDL_GPUSampleCount pass_sample_count() const { return pass_samples_; }
+  // Anisotropic filtering level of the linear samplers the 3D pipelines bind (1 = off, up to 16).
+  void set_anisotropy(u32 level);
+  // `sampler` as the 3D pipelines bind it: a linear Sampler's anisotropic twin when anisotropic filtering is on, else itself.
+  SDL_GPUSampler* filtered(SDL_GPUSampler* sampler);
+  // Before ImGui: moves the rest of the frame into a single-sampled rendering of the resolved frame image (ImGui's pipeline is single-sampled).
+  void begin_overlay();
   void set_clear_color(float r, float g, float b, float a = 1.0f);
   void request_resize() { rebuild_swapchain_ = true; }
   // Saves the next frame handed to end_frame() as a PNG (blocks for that frame).
@@ -159,15 +181,37 @@ class GpuContext {
 
  private:
   friend class StreamBuffer;
+  friend class Sampler;
+  friend class RenderTarget;
+
+  // What one render pass draws into. Multisampled: `color` is the multisampled image, resolved into `resolve` once its drawing is done
+  // (end_target, begin_overlay, end_frame), not each time the pass is suspended.
+  struct PassImages {
+    SDL_GPUTexture* color = nullptr;
+    SDL_GPUTexture* resolve = nullptr;
+    SDL_GPUTexture* depth = nullptr;
+    Extent extent{};
+    SDL_GPUSampleCount samples = SDL_GPU_SAMPLECOUNT_1;
+  };
+  struct LinearSampler {
+    SDL_GPUSamplerCreateInfo info{};
+    SDL_GPUSampler* anisotropic = nullptr;
+  };
 
   bool create_device(const std::string& driver);
   bool apply_swapchain();
   bool ensure_frame_images(u32 width, u32 height);
-  // Begins a render pass into the given images (colour cleared or loaded, depth always cleared) with viewport / scissor = `extent`.
-  void begin_rendering(SDL_GPUTexture* color, SDL_GPUTexture* depth, Extent extent, bool clear_color, const float (&rgba)[4]);
+  // Begins a render pass into the given images (colour cleared or loaded, depth always cleared) with viewport / scissor = their extent.
+  void begin_rendering(const PassImages& images, bool clear_color, const float (&rgba)[4]);
   void end_rendering();
   // The images of the innermost begin_target, or the frame's.
-  void current_images(SDL_GPUTexture*& color, SDL_GPUTexture*& depth, Extent& extent) const;
+  PassImages current_images() const;
+  void register_linear_sampler(SDL_GPUSampler* sampler, const SDL_GPUSamplerCreateInfo& info);
+  void unregister_sampler(SDL_GPUSampler* sampler);
+  void release_anisotropic_samplers();
+  void track_multisampled(RenderTarget* target, bool tracked);
+  // A colour-only pass that resolves the multisampled image of `images` (no-op when single-sampled).
+  void resolve(const PassImages& images);
   void encode(SDL_GPUCommandBuffer* cmd, std::span<const UploadOp> ops);
   void flush_streams();
   void readback(SDL_GPUCommandBuffer* cmd);
@@ -182,6 +226,12 @@ class GpuContext {
   // itself cannot be read back, and its format varies).
   SDL_GPUTexture* frame_color_ = nullptr;
   SDL_GPUTexture* frame_depth_ = nullptr;
+  // With MSAA: the multisampled colour image resolved into frame_color_ (frame_depth_ is multisampled too), and the single-sampled depth
+  // of the overlay pass.
+  SDL_GPUTexture* frame_msaa_color_ = nullptr;
+  SDL_GPUTexture* frame_overlay_depth_ = nullptr;
+  SDL_GPUSampleCount frame_samples_ = SDL_GPU_SAMPLECOUNT_1;
+  bool overlay_ = false;
   Extent extent_{};
   SDL_GPUTexture* swapchain_image_ = nullptr;
 
@@ -191,6 +241,12 @@ class GpuContext {
   SDL_GPUTransferBuffer* band_staging_ = nullptr;
   SDL_GPURenderPass* pass_ = nullptr;
   Extent pass_extent_{};
+  SDL_GPUSampleCount pass_samples_ = SDL_GPU_SAMPLECOUNT_1;
+  u32 msaa_ = 1;
+  std::vector<RenderTarget*> multisampled_targets_;
+  u32 anisotropy_ = 1;
+  std::mutex samplers_mutex_;
+  std::unordered_map<SDL_GPUSampler*, LinearSampler> linear_samplers_;
   u32 frame_index_ = 0;
   u64 frame_serial_ = 0;
 
