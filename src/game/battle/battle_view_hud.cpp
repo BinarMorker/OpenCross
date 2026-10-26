@@ -166,6 +166,10 @@ void BattleView::load_hud_art(const vfs::Vfs& vfs) {
       }
   }
   png(hud_[kHDiamond], "hd/battle/battle/battle_11.png");
+  // Chrono Cross colour row dots, frames 1..7.
+  static constexpr std::array<int, 7> kColourDotArt = {98, 96, 95, 100, 99, 101, 97};
+  for (size_t frame = 0; frame < kColourDotArt.size(); ++frame)
+    png(hud_[kHColourDot + frame], std::format("hd/battle/battle/battle_{}.png", kColourDotArt[frame]).c_str());
   png(hud_[kHPageCur], "hd/battle/battle/battle_86.png");
   // Party-panel status icons: a 3 x 2 grid, 6 x 5 PS1 px each.
   png(hud_[kHStatus], "hd/battle/battle/battle_34.png");
@@ -241,6 +245,8 @@ void BattleView::step_ring() {
   for (int cell = 0; cell < 12; ++cell) want[static_cast<size_t>(cell)] = target[static_cast<size_t>(cell / 4)];
   if (!ring_cells_set_ || ui_ == Ui::Intro) {
     ring_cells_ = want;
+    ring_drawn_.fill(-1);
+    ring_key_.fill(-2);
     ring_cells_set_ = true;
     ring_feed_count_ = 0;
     ring_tick_ = tick_count_;
@@ -288,12 +294,16 @@ void BattleView::rebuild_ring() {
   if (ring_masks_.size() != 12u * 208 * 112) return;
   // Cells 0..11 in order, 4 crescent shells per ellipse (a01..a04 outer, a05..a08 middle, a09..a12 inner). A cell with a colour
   // OVERWRITES its mask (m >= 0x80: colour at alpha 0x80; 0 < m < 0x80: rgb += (C - rgb) * m / 128, alpha = max(m, alpha)); a cell with no colour punches
-  // its mask out of what was drawn before. Colours: green, white, "black" (drawn as a near-black fill), red, yellow, blue.
+  // its mask out of what was drawn before. Colours: green, white, "black" (drawn as a near-black fill), red, yellow, blue. A slot without a colour
+  // (a cast with no colour byte) is never drawn, so its cells keep the colour they last showed in this battle; only a cell that never had
+  // one is punched out.
   static const Rgb kRing[6] = {{0, 255, 0}, {255, 255, 255}, {16, 12, 16}, {255, 0, 0}, {255, 255, 0}, {0, 0, 255}};
   std::vector<u8> px(208 * 112 * 4, 0);
   bool any = false;
   for (int cell = 0; cell < 12; ++cell) {
-    const int colour = ring_cells_[static_cast<size_t>(cell)];
+    int colour = ring_cells_[static_cast<size_t>(cell)];
+    if (colour >= 0 && colour < 6) ring_drawn_[static_cast<size_t>(cell)] = colour;
+    else colour = ring_drawn_[static_cast<size_t>(cell)];
     const u8* mask = &ring_masks_[static_cast<size_t>(cell) * 208 * 112];
     if (colour < 0 || colour >= 6) {
       if (!any) continue;
@@ -463,6 +473,19 @@ void BattleView::build_field_ring() {
   btext(0x20086, kCaption[std::clamp(static_cast<int>(lang_), 0, 5)], 60, 23 * kPs1Px / (kCanvasH / 216.0f), 0x757575);
 }
 
+// Chrono Cross colour row: while a party grid holds the Chrono Cross, the last seven cast colours as 16 x 16 dots at PS1 (0x68 + 16 i, 0x10).
+// A history entry (colour + 1: green white black red yellow blue, 7 colourless) picks the dot frame.
+void BattleView::build_colour_row() {
+  if (!battle_->colour_row_shown()) return;
+  static constexpr std::array<int, 8> kColourDotFrame = {0, 2, 5, 6, 1, 4, 3, 7};
+  for (size_t i = 0; i < colour_row_.size(); ++i) {
+    const int entry = colour_row_[i];
+    if (entry <= 0 || entry >= static_cast<int>(kColourDotFrame.size())) continue;
+    const int frame = kColourDotFrame[static_cast<size_t>(entry)];
+    add_img(hud_[kHColourDot + static_cast<size_t>(frame - 1)], static_cast<float>(0x68 + 16 * i) * kPs1Px, 0x10 * kPs1Px, 16 * kPs1Px, 16 * kPs1Px);
+  }
+}
+
 // Party status panels: BattleView::build_party_panels in battle_view_ui.cpp.
 
 // The battle message window (PS1 window slot: text origin (32, 144), 16 px line pitch).
@@ -508,6 +531,7 @@ void BattleView::build_hud() {
         ops_[g0].grp = 1;
         ops_[g0].shift = 13 * 4.0f;
       }
+    build_colour_row();
   }
 
   if (!hud_off_) {

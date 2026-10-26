@@ -46,10 +46,11 @@ void BattleView::fx_grey_apply(bool restore) {
         }
       return render::bleed_transparent(px, img.width, img.height);
     };
+    // The drawn images (a texture mod's replacement included; its 8-bit channels take the HD rule).
     for (size_t i = 0; i < asset.textures.size() && i < gpu.textures.size(); ++i) {
-      const import::Image& img = asset.textures[i];
+      const import::Image& img = asset.drawn_texture(i, false);
       if (gpu.textures[i] && !img.indexed && img.pixels.size() >= static_cast<size_t>(img.width) * img.height * 4u)
-        gpu.textures[i]->update(*ctx_, fade(img, 5).data());
+        gpu.textures[i]->update(*ctx_, fade(img, asset.has_mod(i) ? 8 : 5).data());
       if (i < gpu.hd_textures.size() && gpu.hd_textures[i] && asset.has_hd(i)) gpu.hd_textures[i]->update(*ctx_, fade(asset.hd_textures[i], 8).data());
     }
     // The eye-blink variants (textures eye_base + 0 / 1 = texture 0 with the shut-eye frames pasted in) fade with the rest of the model.
@@ -57,13 +58,13 @@ void BattleView::fx_grey_apply(bool restore) {
       for (int frame = 1; frame <= 2; ++frame) {
         const size_t ti = static_cast<size_t>(gpu.eye_base + frame - 1);
         if (ti >= gpu.textures.size() || !gpu.textures[ti]) continue;
-        import::Image sd_image = asset.textures[0];
-        sd_image.pixels = asset.eye_frame_pixels(asset.textures[0].pixels, sd_image.width, sd_image.height, frame);
+        import::Image sd_image = asset.drawn_texture(0, false);
+        sd_image.pixels = asset.drawn_eye_frame(frame, false);
         if (sd_image.pixels.empty()) continue;
-        gpu.textures[ti]->update(*ctx_, fade(sd_image, 5).data());
+        gpu.textures[ti]->update(*ctx_, fade(sd_image, asset.has_mod(0) ? 8 : 5).data());
         if (ti < gpu.hd_textures.size() && gpu.hd_textures[ti] && asset.has_hd(0)) {
           import::Image hd_image = asset.hd_textures[0];
-          hd_image.pixels = asset.eye_frame_pixels(hd_image.pixels, hd_image.width, hd_image.height, frame);
+          hd_image.pixels = asset.drawn_eye_frame(frame, true);
           if (!hd_image.pixels.empty()) gpu.hd_textures[ti]->update(*ctx_, fade(hd_image, 8).data());
         }
       }

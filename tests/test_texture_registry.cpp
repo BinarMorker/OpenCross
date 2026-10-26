@@ -12,10 +12,12 @@
 #include <vector>
 
 #include "assets/battle_stage.h"
+#include "game/battle/model_table.h"
 #include "game/title_backdrop.h"
 #include "import/battle_stage.h"
 #include "import/room_effects.h"
 #include "platform/paths.h"
+#include "render/model_tiles.h"
 #include "render/stage_tiles.h"
 #include "render/texture_registry.h"
 #include "vfs/mods.h"
@@ -162,6 +164,47 @@ int main() {
   CHECK(texture_path(model_texture_key("battle/player/selju/selju", 1, 3, 4, 4, a.data())) == "model/battle/player/selju/selju/clut1.png");
   CHECK(texture_path(model_texture_key("battle/player/selju/selju", 4, 3, 4, 4, a.data())) == "model/battle/player/selju/selju/overlay2.png");
   CHECK(texture_path(model_texture_key("@room_model", 0, 2, 4, 4, a.data())) == "room_model/" + texture_content_tag(4, 4, a.data()) + ".png");
+  CHECK(texture_path(model_texture_key(oc::game::weapon_texture_source("battle/wepon/sword.bin", 3), 0, 1, 4, 4, a.data())) == "model/battle/wepon/sword/part3.png");
+  CHECK(oc::game::weapon_texture_source("battle/wepon//monster/adk_yari.bin", 0) == "battle/wepon/monster/adk_yari/part0");
+  {
+    // Room model tiles: per page, the texel rects the faces sample; overlapping ones merge, a separate one stays; an all-transparent rect is no tile.
+    oc::assets::ModelAsset room;
+    oc::import::Image page;
+    page.width = page.height = 64;
+    page.pixels.assign(64 * 64 * 4, 200);
+    for (u32 y = 40; y < 64; ++y)
+      for (u32 x = 40; x < 64; ++x) page.pixels[(size_t(y) * 64 + x) * 4 + 3] = 0;
+    room.textures = {page};
+    oc::assets::Mesh mesh;
+    mesh.materials.push_back({0});
+    auto texel = [](u32 x, u32 y) { return std::array<float, 2>{(x + 0.5f) / 64, (y + 0.5f) / 64}; };
+    const std::array<std::array<u32, 2>, 12> corners = {{{0, 0}, {9, 0}, {0, 9}, {5, 5}, {14, 5}, {5, 14}, {30, 30}, {33, 30}, {30, 31}, {50, 50}, {55, 50}, {50, 55}}};
+    for (const auto& corner : corners) {
+      mesh.indices.push_back(static_cast<u32>(mesh.vertices.size()));
+      mesh.vertices.push_back({0, texel(corner[0], corner[1])});
+    }
+    mesh.submeshes.push_back({0, 0, 12});
+    room.meshes.push_back(mesh);
+    const auto tiles = model_tiles(room);
+    CHECK(tiles.size() == 2);
+    CHECK(tiles.size() == 2 && tiles[0].x == 0 && tiles[0].y == 0 && tiles[0].w == 15 && tiles[0].h == 15);
+    CHECK(tiles.size() == 2 && tiles[1].x == 30 && tiles[1].y == 30 && tiles[1].w == 4 && tiles[1].h == 2 && tiles[1].hash.size() == 8);
+  }
+  {
+    // Model STP alpha: the file is 0 / 255; a replacement (2x here) gets the original's flag back, per texel when the original mixes them.
+    const std::vector<u8> original = {9, 9, 9, 0xBF, 9, 9, 9, 0xFF, 0, 0, 0, 0, 9, 9, 9, 0xBF};
+    const std::vector<u8> file = model_file_pixels(2, 2, original.data());
+    CHECK(file[3] == 0xFF && file[7] == 0xFF && file[11] == 0 && file[15] == 0xFF);
+    std::vector<u8> repl(4 * 4 * 4, 200);
+    repl[3] = 0x40;
+    model_restore_stp(2, 2, original.data(), 4, 4, repl);
+    // (0,0) under coverage 0x40 -> transparent; (1,0) over texel 0 -> STP; (2,0) over texel 1 -> plain; (0,2) over the transparent texel -> the common flag (STP).
+    CHECK(repl[3] == 0 && repl[7] == 0xBF && repl[11] == 0xFF && repl[(2 * 4 + 0) * 4 + 3] == 0xBF);
+    const std::vector<u8> all_stp = {9, 9, 9, 0xBF, 0, 0, 0, 0, 0, 0, 0, 0, 9, 9, 9, 0xBF};
+    std::vector<u8> full(4 * 4 * 4, 0xFF);
+    model_restore_stp(2, 2, all_stp.data(), 4, 4, full);
+    CHECK(std::all_of(full.begin(), full.end(), [&, i = 0](u8 v) mutable { return (i++ % 4 != 3) || v == 0xBF; }));
+  }
   CHECK(texture_content_tag(4, 4, a.data()) == texture_content_tag(4, 4, a.data()));
   CHECK(texture_content_tag(4, 4, a.data()) != texture_content_tag(4, 4, b.data()));
   CHECK(texture_content_tag(4, 4, a.data()).size() == 8);
@@ -183,6 +226,12 @@ int main() {
   // The "Dump all textures" job writes regardless of the DumpTextures flag.
   texture_registry::configure({false, true});
   CHECK(!texture_registry::dump(stage_texture_key("title", "", 1, 1, 0, 0), 2, 2, px.data()));
+  CHECK(texture_registry::dump_forced(stage_texture_key("title", "", 1, 1, 0, 0), 2, 2, px.data()));
+  CHECK(fs::is_regular_file(tmp / "dump" / "title" / "01_m1_c0x0.png"));
+  // The dump folder deleted between two dump jobs of one session: the second job writes the file again.
+  fs::remove_all(tmp / "dump" / "title");
+  CHECK(!texture_registry::dump_forced(stage_texture_key("title", "", 1, 1, 0, 0), 2, 2, px.data()));
+  texture_registry::begin_dump();
   CHECK(texture_registry::dump_forced(stage_texture_key("title", "", 1, 1, 0, 0), 2, 2, px.data()));
   CHECK(fs::is_regular_file(tmp / "dump" / "title" / "01_m1_c0x0.png"));
   texture_registry::configure({true, true});
@@ -282,6 +331,14 @@ int main() {
   mods.mods()[0].enabled = false;
   mods.apply(files, vfs::ModArt::Sd);
   CHECK(!files.has_textures());
+  // Only Modded art enhances RDE's art; switching HD <-> Modded with the same mods still counts as an overlay change.
+  CHECK(!files.enhanced());
+  mods.apply(files, vfs::ModArt::Hd);
+  const std::uint32_t hd_generation = files.generation();
+  CHECK(!files.enhanced());
+  mods.apply(files, vfs::ModArt::Modded);
+  CHECK(files.enhanced() && files.generation() != hd_generation);
+  mods.apply(files, vfs::ModArt::Sd);
 
   // ---- tile library + per-object textures (render::bake_object_textures) ----------------------------------------------
   {

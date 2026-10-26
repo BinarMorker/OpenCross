@@ -1223,15 +1223,24 @@ void ScriptedBrain::to_actions(const Battle& battle, const std::vector<QueuedAtt
   }
 }
 
+std::array<u8, 7> ScriptedBrain::colour_sequence() const {
+  std::array<u8, 7> sequence{};
+  if (vm_) std::copy_n(vm_->colour_history().begin(), sequence.size(), sequence.begin());
+  return sequence;
+}
+
 void ScriptedBrain::on_attack(Battle& battle, int actor, int kind, int id, int target) {
   if (!vm_) return;
-  if (kind == 1 && actor < kPcSlots && id > 0 && id < static_cast<int>(battle.tables().elements.size())) {
+  if (kind == 1 && id > 0) {
     // One history entry per cast (the core calls this once per target).
+    // Var 0x52 takes the colour of every element with a colour byte; the history skips record byte 0 bit 0x80 (seq_colour).
     const std::tuple<int, int, int> cast{battle.actions(), actor, id};
     if (cast != last_cast_) {
       last_cast_ = cast;
-      const int colour = data::colour_index_of_bit(battle.tables().elements[static_cast<size_t>(id)].colour_bit());
-      vm_->note_cast_colour(colour < 0 || colour > 5 ? 6 : colour);
+      const u8 colour_mask = battle.element_colour(id) & 0xFC;
+      const int colour = colour_mask == 0xFC ? 6 : data::colour_index_of_bit(colour_mask);
+      if (battle.seq_colour(id) >= 0) vm_->note_cast_colour(colour);
+      else if (colour >= 0) vm_->set_var(0x52, colour);
     }
   }
   // Reserved vars: last attack type / value (weapon attack: the hit strength 0..2; element: its id) / target mask; global at 0x20, per PC at

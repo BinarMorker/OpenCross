@@ -33,10 +33,11 @@ class Remap : public OverlayFx {
 // seint: init snapshots the stock target list; the target getter returns copies of caster 0's entry, one per target of the other side (a
 // monster target for a PC caster, a PC target for a monster caster), at least one; the caster list is empty for the whole effect. 0x100
 // refilters the snapshot: the targets healed by the action (hit == 3) and not dead; 0x101: the targets with hit != 3. The getters are
-// restored at exit. Not reproduced: the 'comp' child pack (model 'ee97' with its weapon 'yari').
+// restored at exit. The unpacked 'comp' pack's model 'ee97' carries its mesh 'yari' on mount record 0.
 class Seint : public Remap {
  protected:
   void init() override {
+    if (ctx_.models) ctx_.models->mount_model = "ee97", ctx_.models->mount_mesh = "yari";
     snap_ = stock_targets();
     const std::vector<int> casters = stock_casters();
     caster0_ = casters.empty() ? -1 : casters.front();

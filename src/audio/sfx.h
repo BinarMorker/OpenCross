@@ -71,7 +71,8 @@ class SfxBank {
   bool load(Bytes effect00, const Bytes& wave0000);
   // Room sound from the room's subfile 10 (yos0, instrument banks) and subfile 9 (yos1, SFX frames). The frames replace the previous
   // room's; the banks are uploaded over `current` (the table the last loader left; null = this bank's own) and nothing restores
-  // wave0000, so a room without banks keeps the last ones.
+  // wave0000, so a room without banks keeps the last ones. When `current` is another loader's table the room being left uploads its
+  // banks over it first, so the next room inherits them and not the other loader's.
   void set_room(ByteSpan yos0, ByteSpan yos1, std::shared_ptr<const InstrumentTable> current = nullptr);
   // The field resumes after another loader (a battle) wrote the shared table: the room's banks are uploaded again over `current`.
   void reload_room(std::shared_ptr<const InstrumentTable> current);

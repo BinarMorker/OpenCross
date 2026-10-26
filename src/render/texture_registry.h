@@ -40,9 +40,15 @@ TextureKey stage_group_key(const std::string& group, int index, int mode, int cl
 // Key of a RAW (mode, CLUT) atlas of a stage / title asset, for debugging only (`occ dump-textures --raw`): raw/<category>/<name>/<idx>_m<mode>_c<x>x<y>.png.
 // Not a replaceable category.
 TextureKey raw_atlas_key(const std::string& group, int index, int mode, int clut_x, int clut_y);
-// Key of one model texture (assets::ModelAsset::source): "<member stem>" -> model/<stem>/clut<row>.png | overlay<k>.png; "@<category>" (room models,
-// VRAM-page textures) -> content-named <category>/<tag>.png.
+// Key of one model texture (assets::ModelAsset::source): "<member stem>" -> model/<stem>/clut<row>.png | overlay<k>.png; a weapon pack part
+// "battle/wepon/<pack>/part<n>" -> model/battle/wepon/<pack>/part<n>.png; "@<category>" (room models, VRAM-page textures) -> content-named
+// <category>/<tag>.png.
 TextureKey model_texture_key(const std::string& source, size_t index, size_t main_count, u32 w, u32 h, const u8* rgba);
+// Model textures keep the PS1 STP bit in alpha (import/tim.h kStpAlpha); the files do not show it. model_file_pixels: the image as dumped, every
+// non-transparent texel opaque (alpha 0 / 255 only). model_restore_stp: a replacement (any size, alpha = coverage, < 128 transparent) gets the STP of
+// the original: the original's own flag when every texel shares it, else the flag of the original texel it covers.
+std::vector<u8> model_file_pixels(u32 w, u32 h, const u8* rgba);
+void model_restore_stp(u32 original_w, u32 original_h, const u8* original, u32 w, u32 h, std::vector<u8>& rgba);
 // Short content tag (8 hex digits, FNV-1a over size + pixels): names effect sheets that share a name but differ in content.
 std::string texture_content_tag(u32 w, u32 h, const u8* rgba);
 
@@ -60,6 +66,8 @@ Settings settings();
 void set_dump_root(const std::filesystem::path& root);
 // The VFS whose mod overlay supplies the replacement files (null = none). Also sets the default dump root from the game folder.
 void bind(const vfs::Vfs* vfs);
+// The bound VFS (null = none).
+const vfs::Vfs* bound_vfs();
 
 // True when dump() can write or replace() can find something: dumping is on, or replacing is on and a mod provides textures. The upload
 // sites that would pay for computing a key (hashing) test this first.
@@ -88,6 +96,9 @@ struct Stats {
 };
 Stats stats();
 void reset_stats();
+// A full dump starts (the "Dump all textures" job, `occ dump-textures`): forgets which files this session wrote, so every one is written again
+// (the dump folder may have been deleted since). The per-file "once per session" rule then holds within the job.
+void begin_dump();
 
 }  // namespace texture_registry
 }  // namespace oc::render

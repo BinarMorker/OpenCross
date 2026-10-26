@@ -268,8 +268,8 @@ void test_hd() {
 }
 
 // Eye swap: frame 1 / 2 of the eye strip (whose r = g = b = strip x) is pasted over the two eye rects, the left rect from
-// strip x 0.. / 64.., the right from 32.. / 96..; texels outside the rects stay; frames 0 and 3 and a texture that is not
-// a whole multiple of the 1x width give nothing; a 4x texture scales the rects and the strip texel by 4 (nearest).
+// strip x 0.. / 64.., the right from 32.. / 96..; texels outside the rects stay; frames 0 and 3 give nothing; a 4x texture scales the
+// rects and the strip texel by 4 (nearest), a texture of any other size by its own ratio; a replacement strip maps by its size ratio.
 void test_eye_swap() {
   assets::ModelAsset asset;
   asset.main_texture_count = 1;
@@ -299,7 +299,19 @@ void test_eye_swap() {
   CHECK(big_frame.size() == big.size() && px(big_frame, 512, 40, 80) == 0 && px(big_frame, 512, 43, 80) == 0 && px(big_frame, 512, 44, 80) == 1 &&
         px(big_frame, 512, 39, 80) == 7);
   CHECK(px(big_frame, 512, 160 + 4 * 31 + 3, 200) == 32 + 31);
-  CHECK(asset.eye_frame_pixels(std::vector<u8>(130 * 256 * 4, 7), 130, 256, 1).empty());
+  // A replacement of any size: the rects scale by its own ratio (130 / 128 wide).
+  const auto odd_frame = asset.eye_frame_pixels(std::vector<u8>(130 * 256 * 4, 7), 130, 256, 1);
+  CHECK(odd_frame.size() == 130 * 256 * 4 && px(odd_frame, 130, 10, 20) == 0 && px(odd_frame, 130, 11, 20) == 1 && px(odd_frame, 130, 9, 20) == 7);
+  // A replacement strip (2x) maps onto the 1x strip by its size ratio: the same frame as the model's own strip.
+  import::Image strip2;
+  strip2.width = 256, strip2.height = 64;
+  strip2.pixels.resize(256 * 64 * 4);
+  for (u32 y = 0; y < 64; ++y)
+    for (u32 x = 0; x < 256; ++x)
+      for (u32 channel = 0; channel < 4; ++channel)
+        strip2.pixels[(y * 256 + x) * 4 + channel] = asset.textures[1].pixels[((y / 2) * 128 + x / 2) * 4 + channel];
+  CHECK(asset.eye_frame_pixels(asset.textures[0].pixels, 128, 256, 2, &strip2) == frame2);
+  CHECK(asset.eye_frame_pixels(big, 512, 1024, 1, &strip2) == big_frame);
 }
 
 // Assembles sections S1..S5 (S6 = 0) into an Mdl container.

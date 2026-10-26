@@ -60,6 +60,8 @@ class StatusModelView : public MenuModelView {
   const vfs::Vfs& vfs_;
   std::map<int, std::unique_ptr<Entry>> cache_;  // key = model * 2 + hd_art
   std::map<std::string, std::shared_ptr<game::ModelHandle>> weapons_;  // "<pack>#<part>"
+  // vfs::Vfs::generation() the caches were built for.
+  u32 generation_ = 0;
   std::map<int, int> min_distance_;
   std::vector<render::Mat4> palette_;
   // The menu's stock environment page (an 8 bpp read of the menu's own frame buffer).

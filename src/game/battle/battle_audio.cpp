@@ -281,8 +281,8 @@ void BattleAudio::play_global(int effect_id) {
   if (sfx_) sfx_->play(effect_id);
 }
 
-void BattleAudio::play_menu(int effect_id) {
-  if (sfx_) sfx_->play_menu(effect_id, 0x800000);
+void BattleAudio::play_menu(int effect_id, uint32_t mask) {
+  if (sfx_) sfx_->play_menu(effect_id, mask);
 }
 
 bool BattleAudio::start_song(int song, bool warn_on_failure) {

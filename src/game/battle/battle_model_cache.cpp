@@ -89,31 +89,7 @@ int ModelCache::weapon_digit(const data::GameTables* tables, const battle::Unit&
 
 std::shared_ptr<ModelHandle> ModelCache::load_weapon(const vfs::Vfs& vfs, render::MeshPipeline& meshes, int char_id, int part) {
   if (char_id < 0 || char_id >= 44 || part < 0) return nullptr;
-  const std::string key = std::string(kWeaponPacks[char_id]) + "#" + std::to_string(part);
-  if (auto it = weapons.find(key); it != weapons.end()) return it->second;
-  std::shared_ptr<ModelHandle> handle;
-  if (auto raw = vfs.read(std::string("cdrom/battle/wepon/") + kWeaponPacks[char_id] + ".bin")) {
-    std::string err;
-    if (auto wp = import::load_weapon_pack(*raw, &err); wp && part < static_cast<int>(wp->parts.size())) {
-      assets::ModelAsset weapon_asset;
-      weapon_asset.kind = "weapon";
-      weapon_asset.skeleton.joints.emplace_back();
-      weapon_asset.textures.push_back(wp->parts[static_cast<size_t>(part)].texture);
-      weapon_asset.main_texture_count = 1;
-      weapon_asset.meshes.push_back(wp->parts[static_cast<size_t>(part)].mesh);
-      {
-        float lo[3] = {1e9f, 1e9f, 1e9f}, hi[3] = {-1e9f, -1e9f, -1e9f};
-        for (const assets::SkinVertex& sv : wp->parts[static_cast<size_t>(part)].mesh.pool)
-          for (int k = 0; k < 3; ++k) lo[k] = std::min(lo[k], sv.bind_pos[static_cast<size_t>(k)]), hi[k] = std::max(hi[k], sv.bind_pos[static_cast<size_t>(k)]);
-        log::info("battle weapon {}: x {:.0f}..{:.0f} y {:.0f}..{:.0f} z {:.0f}..{:.0f}", key, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]);
-      }
-      handle = Actor::make_model(meshes, std::move(weapon_asset));
-    } else {
-      log::warn("battle: weapon {}#{}: {}", kWeaponPacks[char_id], part, err.empty() ? "no such part" : err);
-    }
-  }
-  weapons[key] = handle;
-  return handle;
+  return weapon_part(vfs, meshes, std::string("battle/wepon/") + kWeaponPacks[char_id] + ".bin", part);
 }
 
 // A monster's weapon, present when its weapon item and weapon model are both non-zero. The texture and the
@@ -128,27 +104,46 @@ std::shared_ptr<ModelHandle> ModelCache::load_enemy_weapon(const vfs::Vfs& vfs, 
     log::warn("battle: enemy weapon: model {} has no weapon .bin", model);
     return nullptr;
   }
-  const std::string key = "bin:" + std::string(bin) + "#" + std::to_string(part);
+  return weapon_part(vfs, meshes, std::string(bin), part);
+}
+
+std::shared_ptr<ModelHandle> ModelCache::weapon_part(const vfs::Vfs& vfs, render::MeshPipeline& meshes, const std::string& bin, int part) {
+  const std::string key = bin + "#" + std::to_string(part);
   if (auto it = weapons.find(key); it != weapons.end()) return it->second;
-  std::shared_ptr<ModelHandle> handle;
-  if (auto raw = vfs.read("cdrom/" + std::string(bin))) {
-    std::string err;
-    if (auto wp = import::load_weapon_pack(*raw, &err); wp && part < static_cast<int>(wp->parts.size())) {
-      assets::ModelAsset weapon_asset;
-      weapon_asset.kind = "weapon";
-      weapon_asset.skeleton.joints.emplace_back();
-      weapon_asset.textures.push_back(wp->parts[static_cast<size_t>(part)].texture);
-      weapon_asset.main_texture_count = 1;
-      weapon_asset.meshes.push_back(wp->parts[static_cast<size_t>(part)].mesh);
-      handle = Actor::make_model(meshes, std::move(weapon_asset));
-      log::info("battle: enemy weapon {} part {} (texture {}x{} from the pack's own TIM)", bin, part, wp->parts[static_cast<size_t>(part)].texture.width,
-                wp->parts[static_cast<size_t>(part)].texture.height);
-    } else {
-      log::warn("battle: enemy weapon {}#{}: {}", bin, part, err.empty() ? "no such part" : err);
-    }
-  }
+  std::shared_ptr<ModelHandle> handle = build_weapon(vfs, meshes, bin, part);
   weapons[key] = handle;
   return handle;
+}
+
+std::shared_ptr<ModelHandle> ModelCache::build_weapon(const vfs::Vfs& vfs, render::MeshPipeline& meshes, const std::string& bin, int part) {
+  std::string err;
+  const auto raw = vfs.read("cdrom/" + bin);
+  const auto pack = raw ? import::load_weapon_pack(*raw, &err) : std::nullopt;
+  if (!pack || part >= static_cast<int>(pack->parts.size())) {
+    log::warn("battle: weapon {}#{}: {}", bin, part, !raw ? "file not found" : err.empty() ? "no such part" : err);
+    return nullptr;
+  }
+  const assets::WeaponPart& weapon = pack->parts[static_cast<size_t>(part)];
+  assets::ModelAsset weapon_asset;
+  weapon_asset.kind = "weapon";
+  weapon_asset.source = weapon_texture_source(bin, part);
+  weapon_asset.skeleton.joints.emplace_back();
+  weapon_asset.textures.push_back(weapon.texture);
+  weapon_asset.main_texture_count = 1;
+  weapon_asset.meshes.push_back(weapon.mesh);
+  log::info("battle: weapon {} part {} (texture {}x{})", bin, part, weapon.texture.width, weapon.texture.height);
+  return Actor::make_model(meshes, std::move(weapon_asset));
+}
+
+void ModelCache::reload_weapons(const vfs::Vfs& vfs, render::MeshPipeline& meshes) {
+  for (auto& [key, live] : weapons) {
+    if (!live) continue;
+    const size_t hash = key.rfind('#');
+    std::shared_ptr<ModelHandle> fresh = build_weapon(vfs, meshes, key.substr(0, hash), std::stoi(key.substr(hash + 1)));
+    if (!fresh || !fresh->gpu) continue;
+    live->asset = std::move(fresh->asset);
+    live->gpu = std::move(fresh->gpu);
+  }
 }
 
 // S5 (state scripts) of the model and the 'atk' / camera data of its at0.prd.

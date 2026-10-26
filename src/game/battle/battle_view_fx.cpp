@@ -18,6 +18,38 @@ namespace oc::game {
 
 using namespace bv;
 
+namespace {
+
+// An effect pack's copy of a battle unit (its pages hold the unit's 1x texture at the top left, the copy samples it with the unit's own UVs)
+// gets the art the unit itself is drawn with when that is something else (a texture mod's image, the Modded art's 4x texture): every page
+// scaled to the art's size, the art pasted over its 1x region, as the copy's ModelAsset::mod_textures (its UVs are normalised).
+void paste_unit_art(assets::ModelAsset& copy, const assets::ModelAsset& unit) {
+  if (unit.textures.empty() || copy.textures.empty()) return;
+  const import::Image& one = unit.textures[0];
+  const import::Image& art = unit.drawn_texture(0, true);
+  if (&art == &one || !one.width || !one.height || art.indexed) return;
+  const double scale_x = double(art.width) / one.width, scale_y = double(art.height) / one.height;
+  copy.mod_textures.assign(copy.textures.size(), {});
+  for (size_t i = 0; i < copy.textures.size(); ++i) {
+    const import::Image& page = copy.textures[i];
+    if (page.indexed || !page.width || !page.height) continue;
+    import::Image scaled;
+    scaled.width = static_cast<u32>(std::lround(page.width * scale_x)), scaled.height = static_cast<u32>(std::lround(page.height * scale_y));
+    scaled.pixels.resize(static_cast<size_t>(scaled.width) * scaled.height * 4);
+    for (u32 y = 0; y < scaled.height; ++y)
+      for (u32 x = 0; x < scaled.width; ++x) {
+        const bool in_art = i == 0 && x < art.width && y < art.height;
+        const u8* src = in_art ? &art.pixels[(static_cast<size_t>(y) * art.width + x) * 4]
+                               : &page.pixels[(static_cast<size_t>(std::min(page.height - 1, static_cast<u32>(y / scale_y))) * page.width +
+                                               std::min(page.width - 1, static_cast<u32>(x / scale_x))) * 4];
+        std::memcpy(&scaled.pixels[(static_cast<size_t>(y) * scaled.width + x) * 4], src, 4);
+      }
+    copy.mod_textures[i] = std::move(scaled);
+  }
+}
+
+}  // namespace
+
 FxScene BattleView::fx_scene() const {
   FxScene scene;
   for (int i = 0; i < battle::kUnits; ++i) {
@@ -207,9 +239,10 @@ void BattleView::fx_load_models(FxGpu& gpu, const FxPack& pack) {
     // HD art: sky's act0 is a byte copy of battle/player/selju2/selju.obj (S1 mesh + S2 skeleton; S3 shading and the clips are the
     // pack's own) on a page that holds selju.ltc's image + CLUT, so in HD it gets the mesh + texture the HD Serge unit is drawn with (cdrom2).
     Bytes hd_mdl;
+    std::string stem;
     if (hd_ && vfs_ && vfs_->hd_mode()) {
       auto hd_vram = std::make_unique<import::Vram>();
-      const std::string stem = fx_hd_counterpart(entry.data, vram, tpx, tpage_y, clut_x, clut_y, hd_mdl, *hd_vram);
+      stem = fx_hd_counterpart(entry.data, vram, tpx, tpage_y, clut_x, clut_y, hd_mdl, *hd_vram);
       if (!stem.empty()) {
         for (int row = 0; row < 2; ++row) {
           const std::vector<u16> clut = hd_vram->read_clut(clut_x, std::min(clut_y + row, 255), 256);
@@ -231,6 +264,8 @@ void BattleView::fx_load_models(FxGpu& gpu, const FxPack& pack) {
     }
     auto model = std::make_unique<FxGpu::Model>();
     model->asset = std::move(*asset);
+    if (!stem.empty())
+      if (const std::shared_ptr<ModelHandle> unit = load_model_for(stem)) paste_unit_art(model->asset, unit->asset);
     model->gpu = meshes_->create_model(model->asset);
     if (!model->gpu) continue;
     model->pose.set_model(&model->asset);
@@ -316,6 +351,9 @@ void BattleView::fx_draw_models(const render::Frame& frame, const render::Letter
                              static_cast<u32>(std::min(fw - x0, std::round(lb.width()))), static_cast<u32>(std::min(fh - y0, std::round(kBufferRows * lb.scale_y)))};
   const render::Mat4 vp = cam_.view_proj(lb), view = cam_.view();
   const effects::FxModels* fms = fx_ ? fx_->bespoke_models() : nullptr;
+  const assets::StageAsset* mount_asset = fx_pack_ ? fx_pack_->meshes.get() : nullptr;
+  FxGpu* mount_gpu = fms && !fms->mount_mesh.empty() && gpu.stage && mount_asset ? &gpu : nullptr;
+  std::vector<render::StageInstance> mounted;
   for (const auto& mi : inst) {
     if (mi.sprite_type != 20 || !mi.name) continue;
     // A model the overlay hid is skipped.
@@ -351,8 +389,42 @@ void BattleView::fx_draw_models(const render::Frame& frame, const render::Letter
     // Per-face slots like the units.
     unit_ot_faces(fx_model.asset, dp);
     meshes_->draw(*fx_model.gpu, dp);
+    // The overlay's mounted mesh: JointMatrix(attach.joint) * [RotMatrixZYX(mount.rot) | attach.pos + mount.pos], to camera space.
+    if (mount_gpu && *mi.name == fms->mount_model) {
+      const auto part = mount_gpu->parts.find(fms->mount_mesh);
+      const assets::MountPoint& mount = fx_model.asset.attach.mounts[0];
+      const assets::AttachPoint& ap = fx_model.asset.attach.points[std::min<size_t>(mount.attach, fx_model.asset.attach.points.size() - 1)];
+      if (part != mount_gpu->parts.end() && mount.attach < fx_model.asset.attach.points.size() && ap.joint < palette_.size()) {
+        assets::Vec3 off = ap.pos, deg{0, 0, 0};
+        for (size_t k = 0; k < 3; ++k) {
+          off[k] += mount.pos[k];
+          deg[k] = mount.rot[k] * (360.0f / 4096.0f);
+        }
+        const render::Mat4 world = model * palette_[ap.joint] * render::mat4_from_rt(assets::rotation_zyx(deg), off);
+        const std::array<float, 3>* axes[3] = {&cam_.right, &cam_.down, &cam_.fwd};
+        render::StageInstance in;
+        in.part = part->second;
+        for (int row = 0; row < 3; ++row) {
+          const std::array<float, 3>& axis = *axes[row];
+          for (int col = 0; col < 3; ++col)
+            in.cam[static_cast<size_t>(row * 3 + col)] = axis[0] * world.at(0, col) + axis[1] * world.at(1, col) + axis[2] * world.at(2, col);
+          in.cam[static_cast<size_t>(9 + row)] =
+              axis[0] * (world.at(0, 3) - cam_.eye[0]) + axis[1] * (world.at(1, 3) - cam_.eye[1]) + axis[2] * (world.at(2, 3) - cam_.eye[2]);
+        }
+        for (size_t channel = 0; channel < 3; ++channel) in.rgb[channel] = static_cast<u8>(mi.rgb[channel]);
+        mounted.push_back(in);
+      }
+    }
   }
   if (open) meshes_->end();
+  if (!mounted.empty()) {
+    const effects::ViewParams fx_cam = fx_view();
+    stage_pipe_.begin(frame, scissor);
+    stage_pipe_.set_gte(fx_cam.h, fx_cam.ox, fx_cam.oy);
+    stage_pipe_.draw(*mount_gpu->stage, render::StagePipeline::projection(lb, fx_cam.h, fx_cam.ox, fx_cam.oy), mounted, linear_filter_ < 0 ? hd_ : linear_filter_ != 0,
+                     mount_asset);
+    stage_pipe_.end();
+  }
 }
 
 // The weapon techs' mesh sprites name the caster's weapon mesh by the PC's two-digit character number (guill_1-3 "02" = Guile, stick / stick2

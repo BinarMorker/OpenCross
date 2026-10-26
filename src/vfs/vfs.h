@@ -37,6 +37,8 @@ struct Overlay {
   std::unordered_map<std::string, std::filesystem::path> files;
   std::map<std::string, std::filesystem::path> archives;
   std::unordered_map<std::string, std::filesystem::path> textures;
+  // Modded art: OpenCross's own improvements on RDE's art are on (HD art stays as RDE draws it).
+  bool enhance = false;
 };
 
 class Vfs {
@@ -86,6 +88,8 @@ class Vfs {
   // The first (by path) active mod texture whose canonical path starts with `prefix` and ends with `suffix` (tile replacements are matched by their hash only).
   std::optional<std::filesystem::path> texture_file_matching(std::string_view prefix, std::string_view suffix) const;
   bool has_textures() const;
+  // Overlay::enhance of the installed overlay.
+  bool enhanced() const;
 
  private:
   std::filesystem::path game_dir_;

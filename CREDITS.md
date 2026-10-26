@@ -1,6 +1,6 @@
 # Credits
 
-This file lists (A) the third-party libraries and build tools OpenCross uses, and (B) the references used for file formats, game data and hardware behaviour.
+This file lists (A) the third-party libraries and build tools OpenCross uses, (B) the references used for file formats, game data and hardware behaviour, and (C) the playtesters.
 
 ## A. Libraries and build tools
 
@@ -32,5 +32,11 @@ This file lists (A) the third-party libraries and build tools OpenCross uses, an
 | vgmstream (sqex_sead) | bnnm et al. | https://github.com/vgmstream/vgmstream | SEAD `.sab` container, HCA key table |
 | FF7 / FF9 AKAO wiki pages | ff7-mods, ffrtt | https://ff7-mods.github.io/ff7-flat-wiki/FF7/PSX/Sound/AKAO_sequence.html , https://wiki.ffrtt.ru/index.php/FF9/Sound/AKAO_sequence | AKAO sequence opcode families |
 | psx-spx | nocash, N. Noble (ed.) | https://psx-spx.consoledev.net | PS1 GPU / GTE / SPU behaviour (packets, CLUTs, ADPCM, Gaussian interpolation, noise) |
+
+## C. Playtesters
+
+| Name | Where |
+|---|---|
+| BathoryDormin | Nexus Mods |
 
 Chrono Cross © 1999 Square (Square Enix). The Radical Dreamers Edition © 2022 Square Enix / D4 Enterprise. OpenCross is a fan project; it requires a legitimately owned copy of the Radical Dreamers Edition.

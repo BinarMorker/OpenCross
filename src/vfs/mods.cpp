@@ -260,6 +260,7 @@ std::vector<ModPref> ModManager::prefs() const {
 
 void ModManager::apply(Vfs& vfs, ModArt art) const {
   Overlay ov;
+  ov.enhance = art == ModArt::Modded;
   size_t active = 0;
   for (const Mod& mod : mods_) {
     if (!mod.enabled || !loads_on(mod.load_on, art)) continue;

@@ -110,6 +110,7 @@ void BattleView::unload_scene() {
   ghost_view_.fill(false);
   fx_conceal_.fill(false);
   hud_off_ = false;
+  colour_row_ = {};
   // Everything the script presentation keeps between frames starts clean in a new battle (a fight left by running away mid-window
   // must not leave a half-open window / pending position / engaged PC / menu-facing memory in the next scripted fight).
   smsg_ = ScriptMsg{};
@@ -184,8 +185,8 @@ void BattleView::set_art_mode(bool hd, bool force) {
   // Art-mode switch during a battle = a pure rendering swap: the unit models are read again through the VFS, which now
   // resolves battle/player|monster through the other file set (cdrom2 = other mesh / UV atlas / .ltc; the clips are the same data),
   // and their mesh + GPU copy replace the old ones *inside* the shared ModelHandle, so UnitPose (which points at
-  // ModelHandle::asset), the scripts, the battle state and every unit's pose / position stay. Stages (battle/bg), weapons and the effect
-  // packs have no cdrom2 variant: nothing to rebuild there.
+  // ModelHandle::asset), the scripts, the battle state and every unit's pose / position stay. Stages (battle/bg) and the effect packs have no
+  // cdrom2 variant; the weapons have none either but are rebuilt the same way for the texture mods (a mod switched on / off).
   // Pack models that took their battle model's cdrom2 mesh + texture (fx_hd_counterpart) are rebuilt at the pack's next cast; the
   // pack playing now keeps its copy to its end (the pseudo-actor points into it).
   for (auto it = fx_gpu_.begin(); it != fx_gpu_.end();)
@@ -208,6 +209,7 @@ void BattleView::set_art_mode(bool hd, bool force) {
       ++kept;
     }
   }
+  if (vfs_ && meshes_) model_cache_.reload_weapons(*vfs_, *meshes_);
   log::info("battle: art mode {} swapped in place: {} unit models rebuilt, {} kept; battle state untouched", hd ? "hd" : "original", swapped, kept);
 }
 

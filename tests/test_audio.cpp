@@ -484,6 +484,32 @@ void test_sfx_room_banks() {
   CHECK(kept && kept->overwritten && kept->sample && slots(209)->sample && kept->sample->pcm == slots(209)->sample->pcm);
 }
 
+// A battle ends and the field leaves the room before any sound played (no resume yet): the next room, bankless like the world map, still
+// inherits the room's banks and not what the battle left over the same RAM (the forest sound after Opassa read slot 209).
+void test_sfx_room_leave_after_battle() {
+  Bytes effect00(0x820, 0);
+  std::memcpy(effect00.data(), "AKAO", 4);
+  for (size_t i = 0; i < 256; ++i) put32(effect00, 0x10 + i * 4, 0xFFFFFFFFu);
+  put32(effect00, 0x10, 0xFFFF0000u);
+  audio::SfxBank bank;
+  CHECK(bank.load(effect00, tiny_bank_at(0, 0x71100, 0x79)));
+  bank.set_room(room_yos0(tiny_bank_at(209, 0x1100, 0x79)), {});
+  const audio::Instrument* room = bank.table()->peek(209);
+  CHECK(room && room->sample);
+  auto battle = std::make_shared<audio::InstrumentTable>(*bank.table());
+  battle->overlay(audio::parse_bank(tiny_bank_at(210, 0x1100, 0x35)));
+  const audio::Instrument* clobbered = battle->peek(209);
+  CHECK(clobbered && clobbered->overwritten && clobbered->sample && clobbered->sample->pcm != room->sample->pcm);
+  bank.set_room({}, {}, battle);
+  const audio::Instrument* inherited = bank.table()->peek(209);
+  CHECK(inherited && !inherited->overwritten && inherited->sample && inherited->sample->pcm == room->sample->pcm);
+  const audio::Instrument* battle_slot = bank.table()->peek(210);
+  CHECK(battle_slot && battle_slot->overwritten && battle_slot->sample && battle_slot->sample->pcm == room->sample->pcm);
+  const std::shared_ptr<const audio::InstrumentTable> kept = bank.table();
+  bank.set_room({}, {}, kept);
+  CHECK(bank.table() == kept);
+}
+
 // The SPU voice reads the sound RAM live: a held note on instrument 0 (uploaded at 0x1100) keeps sounding when a later bank for slot 1
 // is uploaded over the same RAM, and from then on plays the new bytes - the same output as a note started on those bytes; a note that
 // starts after the upload on the older table plays them too. Without the upload the note keeps the first bytes.
@@ -674,6 +700,7 @@ int main() {
   test_akao_mixer();
   test_sfx_channels();
   test_sfx_room_banks();
+  test_sfx_room_leave_after_battle();
   test_sfx_live_ram();
   test_battle_render();
   test_pitch_rate();

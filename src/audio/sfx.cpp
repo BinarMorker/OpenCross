@@ -86,14 +86,16 @@ bool SfxBank::load(Bytes effect00, const Bytes& wave0000) {
 }
 
 // The room's banks overwrite their slots of the table the previous loaders left; a room without banks keeps that table, so a global
-// effect reading a room slot (208..223) plays the sample the last bank put there.
+// effect reading a room slot (208..223) plays the sample the last bank put there. A battle that ended since the last sound left its own
+// banks on the table: the room being left uploads its banks again first (the field's resume), so a bankless room inherits them.
 void SfxBank::set_room(ByteSpan yos0, ByteSpan yos1, std::shared_ptr<const InstrumentTable> current) {
   frames_.clear();
-  room_banks_.clear();
   if (!base_) return;
+  if (current && current != table_) reload_room(current);
+  room_banks_.clear();
   for (ByteSpan bank : split_yos(yos0, false))
     if (auto parsed = parse_bank(bank)) room_banks_.push_back(std::move(parsed));
-  reload_room(current ? std::move(current) : table_);
+  reload_room(table_);
   for (ByteSpan frame : split_yos(yos1, true)) {
     if (frame.empty()) {
       frames_.push_back(nullptr);

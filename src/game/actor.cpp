@@ -72,6 +72,7 @@ int exp_blend_ticks() {
 std::shared_ptr<ModelHandle> Actor::make_model(render::MeshPipeline& pipeline, assets::ModelAsset asset) {
   auto handle = std::make_shared<ModelHandle>();
   handle->asset = std::move(asset);
+  render::resolve_model_textures(handle->asset);
   handle->gpu = pipeline.create_model(handle->asset);
   if (!handle->gpu) return nullptr;
   return handle;

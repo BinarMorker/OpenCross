@@ -67,8 +67,9 @@ class BattleAudio {
   // The live instrument table (tools / tests).
   const audio::InstrumentTable& instrument_table() const { return *live_tbl_; }
   void play_global(int effect_id);
-  // Battle menu sounds: mask 0x800000, centre pan, full volume; a new one cuts the last of the same mask.
-  void play_menu(int effect_id);
+  // Battle menu sounds: mask 0x800000 (the Chrono Cross colour chime 0x400000), centre pan, full volume; a new one cuts the last of the same
+  // mask.
+  void play_menu(int effect_id, uint32_t mask = 0x800000);
   // The global SFX table (effect00.dat ids; null without a mixer / bank).
   audio::Sfx* sfx() { return sfx_.get(); }
 

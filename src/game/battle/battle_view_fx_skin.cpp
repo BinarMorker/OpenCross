@@ -496,7 +496,7 @@ render::TexRef BattleView::fx_unit_texture_set(int unit, int tex, u8 white) {
   // The white-CLUT silhouette: 1 = every non-transparent texel white, 2 = every texel white (STP set: blended).
   if (white) {
     if (static_cast<size_t>(tex) >= asset->textures.size()) return {};
-    return fx_textures_.white_texture_set(*ctx_, *sprites_, hd_ ? linear_ : nearest_, asset->texture_for(static_cast<size_t>(tex), hd_), white);
+    return fx_textures_.white_texture_set(*ctx_, *sprites_, hd_ ? linear_ : nearest_, asset->drawn_texture(static_cast<size_t>(tex), hd_), white);
   }
   const render::MeshModel& gpu = *model_gpu;
   const bool use_hd = hd_ && static_cast<size_t>(tex) < gpu.hd_textures.size() && gpu.hd_textures[static_cast<size_t>(tex)];

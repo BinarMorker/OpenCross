@@ -259,7 +259,7 @@ class Vm {
       scripted_death_[static_cast<size_t>(unit)] = (owed_mask >> unit & 1u) != 0;
     }
   }
-  // The player's colour history: called once per PC element / tech cast with colour 0..5, 6 = colourless. Feeds AB / AE and var 0x52.
+  // The cast colour history: called once per element cast (PC or enemy) with colour 0..5, 6 = colourless. Feeds AB / AE and var 0x52.
   void note_cast_colour(int colour);
   const std::array<u8, 8>& colour_history() const { return chist_; }
 
@@ -347,6 +347,7 @@ class ScriptedBrain final : public EnemyBrain {
   void on_killed(Battle& battle, int unit, Rng& rng, std::vector<EnemyAction>& out) override;
   void on_attacked(Battle& battle, int unit, Rng& rng, std::vector<EnemyAction>& out) override;
   void on_attack(Battle& battle, int actor, int kind, int id, int target) override;
+  std::array<u8, 7> colour_sequence() const override;
   bool end_check_enabled() const override { return !vm_ || vm_->end_check_enabled(); }
   int forced_result() const override { return vm_ ? vm_->forced_result() : -1; }
   bool no_drops() const override { return vm_ && vm_->no_drops(); }

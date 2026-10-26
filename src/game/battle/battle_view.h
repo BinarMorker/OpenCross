@@ -736,6 +736,7 @@ class BattleView {
   bool ring_settled() const;
   void build_party_panels();
   void build_field_ring();
+  void build_colour_row();
   void replay(const render::Frame& frame, const render::Letterbox& lb, float alpha);
   // draw_ui is replaying into the PS1-resolution target (replay derives the picture rectangle from `lb`).
   bool ui_pass_ = false;
@@ -948,9 +949,9 @@ class BattleView {
   // HUD art: waku panel base / frame / active frame, gauge cells gg-1 / gg-2, field frame, damage digits, cursor frames, the field ring,
   // the HIT% caption leader (osak), pad / key glyph atlases, the camera icon, the element list plate (win4), the target info window
   // (waku-03), the red cursor diamonds (battle_11), the status icons (battle_34), the window skin halves (battle_04 STP / opaque texels) and
-  // the script window's page / end cursor (battle_86, 8 x 16 PS1 px cells).
+  // the script window's page / end cursor (battle_86, 8 x 16 PS1 px cells) and the seven Chrono Cross colour row dots (16 x 16).
   enum HudTex { kHWakuBase, kHWaku, kHWakuAct, kHGg1, kHGg2, kHField, kHDigits, kHCursor, kHRing, kHOsak, kHPad, kHCam, kHWin4Base, kHWin4Frame,
-                kHWaku03, kHKeys, kHDiamond, kHStatus, kHSkinSemi, kHSkinOpaque, kHPageCur, kHCount };
+                kHWaku03, kHKeys, kHDiamond, kHStatus, kHSkinSemi, kHSkinOpaque, kHPageCur, kHColourDot, kHCount = kHColourDot + 7 };
   std::array<Tex, kHCount> hud_;
   // 12 cell masks, 208x112 each (elementfield/a01..a12.bmp).
   std::vector<u8> ring_masks_;
@@ -962,7 +963,11 @@ class BattleView {
   bool ring_cells_set_ = false;
   // An action presented since the last shift repainted the whole ring: the next shift feeds all 12 cells.
   bool ring_repaint_seen_ = false;
+  // The Chrono Cross colour row as last shown (colour + 1 per dot, 0 = empty).
+  std::array<u8, 7> colour_row_{};
   std::array<int, 12> ring_key_{-2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2};
+  // The colour each cell last showed in this battle (-1 none): a cell whose slot has no colour keeps it.
+  std::array<int, 12> ring_drawn_{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
   // Damage digit ink ranges in battle_33.tim (HD px) + the "miss!" word as entry 10.
   std::vector<std::pair<int, int>> digit_x_;
   // battle_08_93: the item-like (record type 5) cast-header plate (120 x 16).

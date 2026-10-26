@@ -222,6 +222,7 @@ bool TitleBackdrop::load_models(render::MeshPipeline& meshes) {
     res->asset = std::move(*asset);
     // Texture dump / replace: room_model/<content tag>.png.
     res->asset.source = "@room_model";
+    render::resolve_model_textures(res->asset);
     res->gpu = meshes.create_model(res->asset);
     if (!res->gpu) {
       log::warn("title backdrop: model {}: GPU upload failed", entry.name);

@@ -60,6 +60,8 @@ add_library(oc_render STATIC
   texture_registry.cpp
   stage_tiles.h
   stage_tiles.cpp
+  model_tiles.h
+  model_tiles.cpp
   render_target.h
   render_target.cpp
   sprite_batch.h

@@ -12,6 +12,7 @@ namespace {
 
 constexpr int kMaxChain = 4;
 constexpr int kVaryInnateElement = 336;
+constexpr int kChronoCrossElement = 0x7E;
 
 // The armour colour byte's x150/100 step looks its colour MASK up in the six-entry opposite-colour table that is indexed by colour index
 // everywhere else: the green, white and black masks (1, 2, 4) land inside it and raise black, white and green elements; red and yellow (8, 16)
@@ -256,6 +257,9 @@ bool Battle::start(std::vector<PartyMember> party, int scene, const BattleOption
   units_ = {};
   std::stable_sort(party.begin(), party.end(), [](const PartyMember& lhs, const PartyMember& rhs) { return lhs.char_id < rhs.char_id; });
   party_ = std::move(party);
+  colour_row_ = std::any_of(party_.begin(), party_.end(), [](const PartyMember& member) {
+    return std::any_of(member.cells.begin(), member.cells.end(), [](u16 cell) { return (cell & 0x7FFF) == kChronoCrossElement; });
+  });
   bench_ = opt.bench;
   dopple_mask_ = opt.dopple_mask;
   const auto& scene_rec = tables_.scenes[static_cast<size_t>(scene)];
@@ -487,6 +491,15 @@ u8 Battle::element_colour(int id) const {
   const u8 colour_bit = tables_.elements[static_cast<size_t>(id)].colour_bit();
   if (id == kVaryInnateElement && vary_innate_colour_) return static_cast<u8>((colour_bit & 3) | vary_innate_colour_);
   return pip_tech_colour_ && pip_tech(id) ? static_cast<u8>((colour_bit & 3) | (pip_tech_colour_ & 0xFC)) : colour_bit;
+}
+
+int Battle::seq_colour(int element_id) const {
+  if (element_id < 0 || element_id >= static_cast<int>(tables_.elements.size())) return -1;
+  if (tables_.elements[static_cast<size_t>(element_id)].b(0) & 0x80) return -1;
+  const u8 colour_mask = element_colour(element_id) & 0xFC;
+  if (colour_mask == 0) return -1;
+  if (colour_mask == 0xFC) return 6;
+  return data::colour_index_of_bit(colour_mask);
 }
 
 void Battle::finish_ring(const data::ElemRec& element, int colour) {
@@ -1254,6 +1267,8 @@ void Battle::do_element(int actor, int element_id, int row, int target, bool pus
   ev.steal_msg = steal_msg;
   ev.steal_word = steal_word;
   ev.ring_repaint = ring_done;
+  ev.seq_colour = seq_colour(element_id);
+  ev.colour_seq = brain_.colour_sequence();
   // After the target loop: Frozen (lo 0x20000000, `kDefeated` here: Ice Blast's status) newly set and the
   // target's HP != 0 -> row 6 'Frozen -- can't move!'; else element record +0x13 != 0 and
   // the mode landed on any target -> that row (opened at the action end for 120 ticks)

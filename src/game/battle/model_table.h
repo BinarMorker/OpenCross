@@ -4,6 +4,7 @@
 // consecutive triple {.ltd texture, .obj, weapon .bin} in the disc file table, players first (ids 0..51), monsters from 65.
 // Generated from the disc file table order; empty = no model (gap). Slots that are dummy.dat on disc 1 are filled from cdrom2.fnd (disc 2: Vita, FATE, Dragon Tears, Time Devourer, Cytoplasm ...).
 #include <array>
+#include <string>
 #include <string_view>
 
 namespace oc::game {
@@ -462,5 +463,14 @@ inline constexpr std::array<std::string_view, 224> kBattleWeaponBins = {{
     "battle/wepon/black.bin",
     "",
 }};
+
+// Texture dump / replace source of a weapon pack part: `bin` = the pack's member path ("battle/wepon/sword.bin") -> "battle/wepon/sword/part<n>"
+// (model/battle/wepon/sword/part<n>.png). A PC and a monster that use the same pack part share the file.
+inline std::string weapon_texture_source(std::string_view bin, int part) {
+  std::string stem(bin.ends_with(".bin") ? bin.substr(0, bin.size() - 4) : bin);
+  // "battle/wepon//monster/adk_yari.bin" above.
+  for (size_t at = stem.find("//"); at != std::string::npos; at = stem.find("//", at)) stem.erase(at, 1);
+  return stem + "/part" + std::to_string(part);
+}
 
 }  // namespace oc::game

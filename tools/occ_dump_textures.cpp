@@ -1,4 +1,4 @@
-// occ dump-textures [stages|title|effects|rooms|models|all] [--raw] <outdir>
+// occ dump-textures [stages|title|effects|rooms|models|weapons|all] [--raw] <outdir>
 //   The same headless dump as the Mods tab's "Dump all textures" button, into <outdir> instead of <GameDir>\dump\textures, in the
 //   texture registry's layout (a folder tree copied below a mod as `textures\...` replaces the textures). The category names are the
 //   Mods tab's checkboxes; no category (or only --raw) means everything, and --raw adds the raw atlases under raw/. Prints per-phase
@@ -26,13 +26,14 @@ int occ_dump_textures(vfs::Vfs& game_fs, const std::vector<std::string>& args) {
     else if (args[i] == "effects") categories |= game::kDumpEffects;
     else if (args[i] == "rooms") categories |= game::kDumpRooms;
     else if (args[i] == "models") categories |= game::kDumpModels;
+    else if (args[i] == "weapons") categories |= game::kDumpWeapons;
     else if (args[i] == "all") categories |= game::kDumpAll;
     else if (args[i] == "--raw") categories |= game::kDumpRaw;
     else outdir = args[i];
   }
   if (!(categories & game::kDumpAll)) categories |= game::kDumpAll;
   if (outdir.empty()) {
-    std::fprintf(stderr, "usage: occ [-g <gamedir>] dump-textures [stages|title|effects|rooms|models|all] [--raw] <outdir>\n");
+    std::fprintf(stderr, "usage: occ [-g <gamedir>] dump-textures [stages|title|effects|rooms|models|weapons|all] [--raw] <outdir>\n");
     return 2;
   }
   std::filesystem::create_directories(outdir);

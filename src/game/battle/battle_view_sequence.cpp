@@ -445,6 +445,16 @@ void BattleView::end_group() {
   audio_.end_actor();
   // A cut-short hensin / tumaru effect never reached its swap op: the form still changes.
   if (pending_form_ != -2 || pending_evolve_unit_ >= 0) fx_form_phase(2);
+  // The Chrono Cross colour row takes the colour history of the action's last element cast and plays that colour's chime.
+  static constexpr std::array<int, 7> kColourChime = {0xAB, 0xB3, 0xA7, 0xA7, 0xA3, 0xAF, 0xB7};
+  for (auto event = act_.ev.rbegin(); event != act_.ev.rend(); ++event) {
+    if (event->kind != battle::ActionEvent::Kind::Element || event->seq_colour < 0) continue;
+    if (battle_->colour_row_shown()) {
+      colour_row_ = event->colour_seq;
+      audio_.play_menu(kColourChime[static_cast<size_t>(event->seq_colour)], 0x400000);
+    }
+    break;
+  }
   act_ = Act{};
   // The flagged record opens the plate at (32, 144) and arms its 0x78-tick timer.
   if (sys_pending_) {

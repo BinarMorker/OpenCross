@@ -9,9 +9,11 @@
 
 #include "core/log.h"
 #include "render/camera.h"
+#include "render/model_tiles.h"
 #include "render/ps1_jitter.h"
 #include "render/shaders.h"
 #include "render/texture_registry.h"
+#include "vfs/vfs.h"
 
 namespace oc::render {
 // The fragment shader alpha-tests at 0.5 and the actors are sampled bilinearly: a transparent texel keeps its (usually white / black) colour and
@@ -201,6 +203,28 @@ void MeshPipeline::destroy() {
   ctx_ = nullptr;
 }
 
+void resolve_model_textures(assets::ModelAsset& asset) {
+  if (asset.source == "@room_model") {
+    if (const vfs::Vfs* vfs = texture_registry::bound_vfs()) resolve_room_model_textures(asset, *vfs);
+    return;
+  }
+  if (asset.source.empty() || !texture_registry::active()) return;
+  for (size_t i = 0; i < asset.textures.size(); ++i) {
+    const import::Image& img = asset.textures[i];
+    if (img.indexed || !img.width || !img.height || img.pixels.size() < size_t(img.width) * img.height * 4) continue;
+    const import::Image& best = asset.has_hd(i) && !asset.hd_textures[i].indexed ? asset.hd_textures[i] : img;
+    const TextureKey key = model_texture_key(asset.source, i, asset.main_texture_count, img.width, img.height, img.pixels.data());
+    if (texture_registry::settings().dump) texture_registry::dump(key, best.width, best.height, model_file_pixels(best.width, best.height, best.pixels.data()).data());
+    import::Image mod;
+    mod.width = img.width, mod.height = img.height;
+    mod.pixels.assign(img.pixels.begin(), img.pixels.begin() + static_cast<std::ptrdiff_t>(size_t(img.width) * img.height * 4));
+    if (!texture_registry::replace(key, mod.width, mod.height, mod.pixels)) continue;
+    model_restore_stp(best.width, best.height, best.pixels.data(), mod.width, mod.height, mod.pixels);
+    asset.mod_textures.resize(asset.textures.size());
+    asset.mod_textures[i] = std::move(mod);
+  }
+}
+
 std::unique_ptr<MeshModel> MeshPipeline::create_model(const assets::ModelAsset& asset) {
   auto model = std::make_unique<MeshModel>();
   model->joint_count = std::min<u32>(static_cast<u32>(asset.skeleton.joints.size()), kMaxJoints);
@@ -213,9 +237,12 @@ std::unique_ptr<MeshModel> MeshPipeline::create_model(const assets::ModelAsset& 
   model->textures.resize(asset.textures.size());
   for (auto& texture : model->textures) texture = std::make_unique<Texture>();
   model->hd_textures.resize(asset.textures.size());
-  // The final (bled-less) pixels of texture 0 for the eye variants: the 1x image or its replacement.
-  std::vector<u8> eye_px;
-  u32 eye_w = 0, eye_h = 0;
+  // A 4x image is uploaded only where no mod replaces the texture (assets::ModelAsset::drawn_texture).
+  auto hd_of = [&](size_t i) -> const import::Image* {
+    if (asset.has_mod(i) || !asset.has_hd(i)) return nullptr;
+    const import::Image& hd = asset.hd_textures[i];
+    return !hd.indexed && hd.pixels.size() >= size_t(hd.width) * hd.height * 4 ? &hd : nullptr;
+  };
   for (size_t i = 0; i < asset.textures.size(); ++i) {
     const import::Image& img = asset.textures[i];
     if (img.width == 0 || img.height == 0 || img.indexed) {
@@ -226,24 +253,11 @@ std::unique_ptr<MeshModel> MeshPipeline::create_model(const assets::ModelAsset& 
       model->hd_sets_linear.push_back(TexRef());
       continue;
     }
-    // Texture dump / replace (texture_registry.h): model/<member stem>/clut<row>.png or room_model/<tag>.png; any replacement size is fine (normalised UVs).
-    u32 tw = img.width, th = img.height;
-    std::vector<u8> repl;
-    if (!asset.source.empty() && texture_registry::active() && img.pixels.size() >= size_t(tw) * th * 4) {
-      const TextureKey key = model_texture_key(asset.source, i, asset.main_texture_count, tw, th, img.pixels.data());
-      texture_registry::dump(key, tw, th, img.pixels.data());
-      repl.assign(img.pixels.begin(), img.pixels.begin() + static_cast<std::ptrdiff_t>(size_t(tw) * th * 4));
-      if (!texture_registry::replace(key, tw, th, repl)) repl.clear();
-    }
-    if (i == 0 && asset.eye.valid) {
-      eye_px = repl.empty() ? img.pixels : repl;
-      eye_w = tw, eye_h = th;
-    }
-    const std::vector<u8> bled = repl.empty() ? bleed_transparent(img.pixels, img.width, img.height) : bleed_transparent(repl, tw, th);
-    if (!model->textures[i]->create(*ctx_, tw, th, TextureFormat::Rgba8, bled.data())) return nullptr;
+    const import::Image& drawn = asset.drawn_texture(i, false);
+    const std::vector<u8> bled = bleed_transparent(drawn.pixels, drawn.width, drawn.height);
+    if (!model->textures[i]->create(*ctx_, drawn.width, drawn.height, TextureFormat::Rgba8, bled.data())) return nullptr;
     make_sets(*model->textures[i], model->sets_nearest, model->sets_linear);
-    const import::Image* hd = asset.has_hd(i) ? &asset.hd_textures[i] : nullptr;
-    if (hd && !hd->indexed && hd->pixels.size() >= size_t(hd->width) * hd->height * 4) {
+    if (const import::Image* hd = hd_of(i)) {
       model->hd_textures[i] = std::make_unique<Texture>();
       const std::vector<u8> hd_bled = bleed_transparent(hd->pixels, hd->width, hd->height);
       if (!model->hd_textures[i]->create(*ctx_, hd->width, hd->height, TextureFormat::Rgba8, hd_bled.data())) return nullptr;
@@ -256,29 +270,27 @@ std::unique_ptr<MeshModel> MeshPipeline::create_model(const assets::ModelAsset& 
 
   // Eye-blink variants (frames 1, 2 of the .ltc strip pasted over the eye rects of texture 0): extra textures after the asset's own, so the
   // draw of texture 0 can swap to them without a texture upload (the PS1 copies the strip into VRAM).
-  if (asset.eye.valid && !eye_px.empty()) {
+  if (asset.eye.valid && !asset.textures.empty() && model->textures[0]) {
     const size_t base_index = model->textures.size();
-    bool ok = true;
+    const import::Image& drawn = asset.drawn_texture(0, false);
+    const import::Image* hd = hd_of(0);
     std::vector<std::vector<u8>> frames, hd_frames;
-    for (int frame_number = 1; frame_number <= 2 && ok; ++frame_number) {
-      frames.push_back(asset.eye_frame_pixels(eye_px, eye_w, eye_h, frame_number));
-      ok = !frames.back().empty();
-      if (ok && asset.has_hd(0) && !asset.hd_textures[0].indexed)
-        hd_frames.push_back(asset.eye_frame_pixels(asset.hd_textures[0].pixels, asset.hd_textures[0].width, asset.hd_textures[0].height, frame_number));
+    for (int frame_number = 1; frame_number <= 2; ++frame_number) {
+      frames.push_back(asset.drawn_eye_frame(frame_number, false));
+      if (hd) hd_frames.push_back(asset.drawn_eye_frame(frame_number, true));
     }
-    if (ok && model->textures[0]) {
-      for (int frame_index = 0; frame_index < 2; ++frame_index) {
+    if (!frames[0].empty() && !frames[1].empty()) {
+      for (size_t frame_index = 0; frame_index < 2; ++frame_index) {
         auto tex = std::make_unique<Texture>();
-        const std::vector<u8> bled = bleed_transparent(frames[static_cast<size_t>(frame_index)], eye_w, eye_h);
-        if (!tex->create(*ctx_, eye_w, eye_h, TextureFormat::Rgba8, bled.data())) return nullptr;
+        const std::vector<u8> bled = bleed_transparent(frames[frame_index], drawn.width, drawn.height);
+        if (!tex->create(*ctx_, drawn.width, drawn.height, TextureFormat::Rgba8, bled.data())) return nullptr;
         make_sets(*tex, model->sets_nearest, model->sets_linear);
         model->textures.push_back(std::move(tex));
         std::unique_ptr<Texture> hd_tex;
-        if (hd_frames.size() == 2 && !hd_frames[static_cast<size_t>(frame_index)].empty()) {
-          const import::Image& hd = asset.hd_textures[0];
+        if (hd && !hd_frames[frame_index].empty()) {
           hd_tex = std::make_unique<Texture>();
-          const std::vector<u8> hd_bled = bleed_transparent(hd_frames[static_cast<size_t>(frame_index)], hd.width, hd.height);
-          if (!hd_tex->create(*ctx_, hd.width, hd.height, TextureFormat::Rgba8, hd_bled.data())) return nullptr;
+          const std::vector<u8> hd_bled = bleed_transparent(hd_frames[frame_index], hd->width, hd->height);
+          if (!hd_tex->create(*ctx_, hd->width, hd->height, TextureFormat::Rgba8, hd_bled.data())) return nullptr;
           make_sets(*hd_tex, model->hd_sets_nearest, model->hd_sets_linear);
         } else {
           model->hd_sets_nearest.push_back(TexRef());

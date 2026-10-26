@@ -11,6 +11,7 @@
 #include "import/model.h"
 #include "import/room_effects.h"
 #include "import/tim.h"
+#include "render/texture_registry.h"
 
 namespace oc::ui {
 
@@ -110,6 +111,23 @@ std::optional<assets::ModelAsset> shut_eyes(const assets::ModelAsset& open, Byte
       }
   }
   return shut;
+}
+
+// Texture dump / replace of an HD art menu model (model/menu/player/<stem>/clut0.png): its 4x image, both pages. Done here, not by the mesh
+// pipeline, so the shut-eye copy is cut from the replacement too; the replacement stands in for the 1x texture as well.
+void replace_menu_texture(assets::ModelAsset& asset, const std::string& stem) {
+  namespace tr = render::texture_registry;
+  if (!tr::active() || !asset.has_hd(0) || asset.hd_textures[0].indexed || asset.textures.empty()) return;
+  import::Image& hd = asset.hd_textures[0];
+  const render::TextureKey key = render::model_texture_key("menu/player/" + stem, 0, 1, hd.width, hd.height, hd.pixels.data());
+  if (tr::settings().dump) tr::dump(key, hd.width, hd.height, render::model_file_pixels(hd.width, hd.height, hd.pixels.data()).data());
+  u32 w = hd.width, h = hd.height;
+  std::vector<u8> rgba = hd.pixels;
+  if (!tr::replace(key, w, h, rgba)) return;
+  render::model_restore_stp(hd.width, hd.height, hd.pixels.data(), w, h, rgba);
+  hd.width = w, hd.height = h;
+  hd.pixels = std::move(rgba);
+  asset.textures[0] = hd;
 }
 
 // The menu's stock environment page as a 256 x 256 8 bpp texture: texel (u, v) is byte u & 1 of the frame word at (320 + u / 2, 256 + v),
@@ -218,6 +236,8 @@ StatusModelView::Entry* StatusModelView::entry(int model, bool hd_art) {
       }
       // Entry 3 = Mdl, entry 5 = Atim cpt (main texture + overlay); entry 4 is the closed-eye TIM. The importer wants the Mdl bytes only.
       if (auto asset = import::load_model(mdl, cpt->entries[5].data, ByteSpan{}, &err, hd ? ByteSpan(*hd) : ByteSpan{})) {
+        // HD art only: the original art's menu model is another mesh with the disc texture.
+        if (cpt->entries[5].data.empty()) replace_menu_texture(*asset, stem);
         if (auto shut = shut_eyes(*asset, cpt->entries[1].data, cpt->entries[4].data, cpt->entries[5].data))
           created->body_shut = game::Actor::make_model(meshes_, std::move(*shut));
         created->body = game::Actor::make_model(meshes_, std::move(*asset));
@@ -265,6 +285,7 @@ void StatusModelView::set_weapon(Entry& shown, int weapon_model, int part) {
     if (auto pack = import::load_weapon_pack(*raw, &err); pack && part < static_cast<int>(pack->parts.size())) {
       assets::ModelAsset weapon_asset;
       weapon_asset.kind = "weapon";
+      weapon_asset.source = game::weapon_texture_source(bin, part);
       weapon_asset.skeleton.joints.emplace_back();
       weapon_asset.textures.push_back(pack->parts[static_cast<size_t>(part)].texture);
       weapon_asset.main_texture_count = 1;
@@ -371,6 +392,12 @@ void StatusModelView::draw_effects(const render::Frame& frame, float vw, float v
 // shadow (every vertex of the body and the weapons slid along kShadowRay onto y = 0, one flat grey) lies behind everything; the status
 // effects are depth-tested against the model.
 void StatusModelView::draw(const render::Frame& frame, float vw, float vh, const MenuModelSlot& slot) {
+  // A texture mod switched on / off: the models and weapons are built again.
+  if (const u32 generation = vfs_.generation(); generation != generation_) {
+    generation_ = generation;
+    cache_.clear();
+    weapons_.clear();
+  }
   Entry* shown = entry(slot.model, slot.hd);
   if (!shown || !shown->body) return;
   const bool restarted = shown->session != slot.session;

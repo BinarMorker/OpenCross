@@ -1,6 +1,7 @@
 #pragma once
 // Engine-side description of one character / monster / field-object model. Plain float data:
 // no PS1 types, no VRAM. Produced by import::load_model() / load_field_model(); consumed by the render layer.
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <string>
@@ -196,7 +197,8 @@ struct ModelAsset {
   // "battle" or "field".
   std::string kind;
   // Texture dump / replace name (render/texture_registry.h model_texture_key): the member stem ("battle/player/selju/selju",
-  // "fieldobj/player/cl_bort/cl_bort") or "@room_model" for models whose texture is cut from a VRAM page. Empty = not dumped.
+  // "fieldobj/player/cl_bort/cl_bort"), a weapon pack part ("battle/wepon/sword/part3") or "@room_model" for models whose texture is cut
+  // from a VRAM page. Empty = not dumped.
   std::string source;
   // One mesh per construct.
   std::vector<Mesh> meshes;
@@ -228,33 +230,54 @@ struct ModelAsset {
   // Only textures[0] gets an HD image (the HD TIM carries its own single CLUT).
   std::vector<import::Image> hd_textures;
   u32 hd_scale = 4;
+  // A replacement image for textures[i] (empty vector / width 0 = none), any size, STP kept: a texture mod's (render::resolve_model_textures)
+  // or, on an effect pack's copy of a battle unit, the unit's drawn art cut into the page. Drawn in place of textures[i] AND hd_textures[i].
+  std::vector<import::Image> mod_textures;
 
-  // Pixels of the main texture `base` (RGBA8, w x h; the 1x image or a replacement / HD one of any integer multiple) with frame `frame` (1 or 2)
-  // of the eye strip pasted over the two eye rects (scaled by w / the 1x width, nearest). Empty when the model has no eye swap or no strip.
-  std::vector<u8> eye_frame_pixels(const std::vector<u8>& base, u32 w, u32 h, int frame) const {
+  // Pixels of the main texture `base` (RGBA8, w x h; the 1x image, the 4x one or a replacement of any size) with frame `frame` (1 or 2)
+  // of the eye strip pasted over the two eye rects (nearest). `strip` = a replacement of the strip (any size) instead of the model's own.
+  // Empty when the model has no eye swap or no strip.
+  std::vector<u8> eye_frame_pixels(const std::vector<u8>& base, u32 w, u32 h, int frame, const import::Image* strip = nullptr) const {
     std::vector<u8> out;
     if (!eye.valid || frame < 1 || frame > 2 || main_texture_count >= textures.size() || textures.empty()) return out;
-    const import::Image& strip = textures[main_texture_count];
+    const import::Image& one_strip = textures[main_texture_count];
     const import::Image& one = textures[0];
-    if (strip.width < 128 || strip.height < 32 || strip.indexed || one.width == 0 || w < one.width || w % one.width != 0 || base.size() < size_t(w) * h * 4) return out;
-    const u32 scale = w / one.width;
+    if (!strip) strip = &one_strip;
+    if (one_strip.width < 128 || one_strip.height < 32 || strip->indexed || !strip->width || !strip->height ||
+        strip->pixels.size() < size_t(strip->width) * strip->height * 4 || one.width == 0 || one.height == 0 || base.size() < size_t(w) * h * 4)
+      return out;
+    // `base` texels per 1x texel, and strip texels per 1x strip texel.
+    const double scale_x = double(w) / one.width, scale_y = double(h) / one.height;
+    const double strip_x = double(strip->width) / one_strip.width, strip_y = double(strip->height) / one_strip.height;
     out = base;
-    for (size_t half = 0; half < 2; ++half)
-      for (u32 dy = 0; dy < 32 * scale; ++dy)
-        for (u32 dx = 0; dx < 32 * scale; ++dx) {
-          const u32 px = u32(eye.x[half]) * scale + dx, py = u32(eye.y[half]) * scale + dy;
-          if (px >= w || py >= h) continue;
-          const u32 sx = u32(frame - 1) * 64 + u32(half) * 32 + dx / scale, sy = dy / scale;
-          const u8* src = &strip.pixels[(size_t(sy) * strip.width + sx) * 4];
+    for (size_t half = 0; half < 2; ++half) {
+      const u32 x0 = u32(eye.x[half] * scale_x), x1 = std::min(w, u32((eye.x[half] + 32) * scale_x));
+      const u32 y0 = u32(eye.y[half] * scale_y), y1 = std::min(h, u32((eye.y[half] + 32) * scale_y));
+      for (u32 py = y0; py < y1; ++py)
+        for (u32 px = x0; px < x1; ++px) {
+          const double u = (frame - 1) * 64 + double(half) * 32 + ((px + 0.5) / scale_x - eye.x[half]);
+          const double v = (py + 0.5) / scale_y - eye.y[half];
+          const u32 sx = std::min(strip->width - 1, u32(u * strip_x)), sy = std::min(strip->height - 1, u32(v * strip_y));
+          const u8* src = &strip->pixels[(size_t(sy) * strip->width + sx) * 4];
           u8* dst = &out[(size_t(py) * w + px) * 4];
           dst[0] = src[0], dst[1] = src[1], dst[2] = src[2], dst[3] = src[3];
         }
+    }
     return out;
   }
   bool has_hd(size_t i = 0) const { return i < hd_textures.size() && hd_textures[i].width != 0; }
   // Texture i for the requested quality; falls back to the original when no HD image exists. UVs are normalised, so
   // the same mesh UVs work for both.
   const import::Image& texture_for(size_t i, bool hd) const { return hd && has_hd(i) ? hd_textures[i] : textures[i]; }
+  bool has_mod(size_t i) const { return i < mod_textures.size() && mod_textures[i].width != 0; }
+  // The image texture i is drawn with: the mod's, else texture_for(i, hd).
+  const import::Image& drawn_texture(size_t i, bool hd) const { return has_mod(i) ? mod_textures[i] : texture_for(i, hd); }
+  // drawn_texture(0, hd) with eye frame `frame` pasted from the drawn strip (the mod's or the model's own). Empty as eye_frame_pixels.
+  std::vector<u8> drawn_eye_frame(int frame, bool hd) const {
+    if (textures.empty()) return {};
+    const import::Image& base = drawn_texture(0, hd);
+    return eye_frame_pixels(base.pixels, base.width, base.height, frame, has_mod(main_texture_count) ? &mod_textures[main_texture_count] : nullptr);
+  }
 };
 
 // Weapon part: TIM texture (RGBA8) + rigid mesh.

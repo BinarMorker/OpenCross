@@ -40,7 +40,7 @@ struct ModelScripts {
 
 struct ModelCache {
   std::map<std::string, std::shared_ptr<ModelHandle>> models;
-  // "pack#part".
+  // "<pack member path>#<part>" (battle/wepon/sword.bin#3): a PC's and a monster's use of one pack part share it.
   std::map<std::string, std::shared_ptr<ModelHandle>> weapons;
   std::map<std::string, std::shared_ptr<ModelScripts>> scripts;
   // Used when a model has no 'atk' table.
@@ -60,6 +60,11 @@ struct ModelCache {
   std::shared_ptr<ModelHandle> load_model_for(const vfs::Vfs& vfs, render::MeshPipeline& meshes, const std::string& dir_stem);
   std::shared_ptr<ModelHandle> load_weapon(const vfs::Vfs& vfs, render::MeshPipeline& meshes, int char_id, int part);
   std::shared_ptr<ModelHandle> load_enemy_weapon(const vfs::Vfs& vfs, render::MeshPipeline& meshes, int model, int part);
+  // Part `part` of the weapon pack `bin` ("battle/wepon/sword.bin"), cached; build_weapon is the uncached load.
+  std::shared_ptr<ModelHandle> weapon_part(const vfs::Vfs& vfs, render::MeshPipeline& meshes, const std::string& bin, int part);
+  static std::shared_ptr<ModelHandle> build_weapon(const vfs::Vfs& vfs, render::MeshPipeline& meshes, const std::string& bin, int part);
+  // A texture mod switched on / off: every loaded weapon is built again through the VFS and swapped INTO its handle (the units keep pointing at it).
+  void reload_weapons(const vfs::Vfs& vfs, render::MeshPipeline& meshes);
   std::shared_ptr<ModelScripts> load_scripts_for(const vfs::Vfs& vfs, const CamBank* bank, const std::string& dir_stem);
 };
 

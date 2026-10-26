@@ -184,7 +184,7 @@ struct Config {
   bool widescreen = false;
   ArtMode art_mode = ArtMode::Hd;
   std::vector<ModSetting> mods;
-  bool dump_stages = true, dump_title = true, dump_rooms = true, dump_models = true, dump_effects = false;
+  bool dump_stages = true, dump_title = true, dump_rooms = true, dump_models = true, dump_weapons = true, dump_effects = false;
   bool ps1_res = false;
   float render_scale = 1.0f;
   static constexpr float kRenderScales[] = {0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f};

@@ -107,8 +107,11 @@ void App::draw_frame(const render::Frame& frame) {
     crt_pass.set_ramp(pause_on, tint);
     crt_pass.end(ctx, frame);
   }
-  // RDE's feature icons over the picture, under the pause screen's bars.
-  if (feature_icons_ok && !game::free_cam().hide_overlays()) {
+  // RDE's feature icons over the picture, under the pause screen's bars. They belong to play: the boot logo, the movies, the title
+  // scene and its slot list / name entry do not show them.
+  const bool before_play = movie_open || boot_logo || title_hold ||
+                           (flow_ready && flow_enabled && flow.state() != game::FlowState::Opening && flow.state() != game::FlowState::Field);
+  if (feature_icons_ok && !before_play && !game::free_cam().hide_overlays()) {
     const bool locked = speed_locked();
     const ui::FeatureIcons::Active active{config.cheats.auto_battle, config.cheats.battle_boost, config.cheats.no_encounters,
                                           config.slow_mode && !locked, config.fast_mode && !locked};

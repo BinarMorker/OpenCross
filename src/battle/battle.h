@@ -213,6 +213,10 @@ struct ActionEvent {
   std::array<int, 3> ring{-1, -1, -1};
   // The cast repaints the whole ring when it ends (modes 6 / 37 / 47) instead of pushing its colour.
   bool ring_repaint = false;
+  // The colour this cast entered in the colour history (0..5, 6 = colourless, -1 = none) and the history's first seven entries after it
+  // (colour + 1, 0 = empty): the Chrono Cross colour row shows them when the action ends.
+  int seq_colour = -1;
+  std::array<u8, 7> colour_seq{};
   // The log line the rules wrote for this effect (shown when the hit is presented).
   std::string text;
   // Scripted action: Event::seq of the queue_attack that made it; the view starts the hit once its script cursor passed it.
@@ -291,6 +295,8 @@ class EnemyBrain {
   virtual void on_attacked(Battle&, int /*unit*/, Rng&, std::vector<EnemyAction>& /*out*/) {}
   // Any attack about to resolve (kind 0 weapon / 1 element; id = weapon class or element id): scripts read it as vars 0x20..0x36.
   virtual void on_attack(Battle&, int /*actor*/, int /*kind*/, int /*id*/, int /*target*/) {}
+  // The first seven entries of the cast colour history (colour + 1, 0 = empty).
+  virtual std::array<u8, 7> colour_sequence() const { return {}; }
   // Script control of the end of battle.
   // Op 81 off suspends the victory / defeat test.
   virtual bool end_check_enabled() const { return true; }
@@ -381,6 +387,11 @@ class Battle {
   void evolve(int unit, int form);
   // Element colour (pgdat +5) as the battle sees it: Pip's 18 techs take Pip's innate colour, Vary Innate its last caster's.
   u8 element_colour(int id) const;
+  // The colour an element cast enters in the colour history: 0..5, 6 for a colourless element, -1 for none (no colour byte, or record byte
+  // 0 bit 0x80: death casts, form changes). PC and enemy casts alike.
+  int seq_colour(int element_id) const;
+  // A party member's grid holds the Chrono Cross element: the HUD shows the colour history as a row of seven dots.
+  bool colour_row_shown() const { return colour_row_; }
   void set_cast_bit(int unit, bool on) {
     if (unit >= 0 && unit < kUnits) cast_mask_ = on ? cast_mask_ | (1u << unit) : cast_mask_ & ~(1u << unit);
   }
@@ -559,6 +570,7 @@ class Battle {
   std::array<int, 3> ring_repaint_{-1, -1, -1};
   // Vary Innate's colour: the element takes its caster's innate colour mask when it is cast and keeps it for the rest of the battle (0 = its own).
   u8 vary_innate_colour_ = 0;
+  bool colour_row_ = false;
   // The last cast hit the other side's element trap.
   bool fizzled_ = false;
 };

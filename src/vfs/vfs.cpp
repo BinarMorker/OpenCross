@@ -119,7 +119,9 @@ bool Vfs::open(const std::filesystem::path& game_dir) {
 void Vfs::set_overlay(Overlay overlay) {
   auto next = std::make_shared<const Overlay>(std::move(overlay));
   std::lock_guard lock(impl_->mutex);
-  if (next->files != impl_->overlay->files || next->archives != impl_->overlay->archives || next->textures != impl_->overlay->textures) ++generation_;
+  if (next->files != impl_->overlay->files || next->archives != impl_->overlay->archives || next->textures != impl_->overlay->textures ||
+      next->enhance != impl_->overlay->enhance)
+    ++generation_;
   impl_->overlay = std::move(next);
 }
 
@@ -226,6 +228,8 @@ std::optional<std::filesystem::path> Vfs::loose_file(std::string_view path) cons
 }
 
 bool Vfs::has_textures() const { return !overlay()->textures.empty(); }
+
+bool Vfs::enhanced() const { return overlay()->enhance; }
 
 std::optional<std::filesystem::path> Vfs::texture_file(std::string_view canonical_path) const {
   auto ov = overlay();

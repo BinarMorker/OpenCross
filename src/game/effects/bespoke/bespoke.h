@@ -220,6 +220,8 @@ struct FxModels {
   // Unset = the stock lists. The overlay restores them at its exit (the host drops the override when the effect ends).
   bool caster_override = false, target_override = false;
   std::vector<int> caster_list, target_list;
+  // An overlay hung the pack's rigid mesh `mount_mesh` on mount record 0 of the pack's model `mount_model` (seint: the angel's spear).
+  std::string mount_model, mount_mesh;
   std::function<bool(int unit, FxSkinnedModel& out)> skin;
   // Host: the WORLD position (PS1 axes) of attach point `point` (S3 table) of the posed unit model.
   std::function<bool(int unit, int point, Vec3& out)> attach;

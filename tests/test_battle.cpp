@@ -693,6 +693,21 @@ void test_field_ring_writes() {
     CHECK_EQ(fixture.battle.ring()[2], 3);
   }
   {
+    // the colour history takes every element cast (PC or enemy): colourless 0xFC = 6, no colour byte or record byte 0 bit 0x80 = none
+    Fixture fixture;
+    elem(fixture, 0x01, 0, 0x20);
+    CHECK_EQ(fixture.battle.seq_colour(4), 3);
+    fixture.battle.do_element(3, 4, 0, 0);
+    CHECK(!fixture.battle.events().empty());
+    if (!fixture.battle.events().empty()) CHECK_EQ(fixture.battle.events().back().seq_colour, 3);
+    elem(fixture, 0x01, 0, 0xFC);
+    CHECK_EQ(fixture.battle.seq_colour(4), 6);
+    elem(fixture, 0x01, 0, 0x00);
+    CHECK_EQ(fixture.battle.seq_colour(4), -1);
+    elem(fixture, 0x81, 50, 0x20);
+    CHECK_EQ(fixture.battle.seq_colour(4), -1);
+  }
+  {
     // a colour field (mode 6, +0xE & 0xFC) repaints all three slots when the cast ends: every target of the cast still sees the old ring
     Fixture fixture;
     const std::array<int, 3> ring0 = fixture.battle.ring();

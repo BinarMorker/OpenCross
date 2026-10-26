@@ -1,6 +1,6 @@
 #pragma once
 // "Dump all textures": loads every texture that is not a whole file in the archives headlessly (battle stages, the title, battle effect packs,
-// every room's effect sheets / mesh effects / room models, every battle and field model) and writes it through render::texture_registry::dump_forced.
+// every room's effect sheets / mesh effects / room models, every battle and field model, every weapon pack part) and writes it through render::texture_registry::dump_forced.
 // No GPU: it only needs decoded images, so it runs on a worker thread
 // (TextureDumpJob, started by the Mods tab button) or blocking from `occ dump-textures`. It reads the shipped archives through its own Vfs (no mods).
 #include <atomic>
@@ -16,10 +16,13 @@
 namespace oc::game {
 
 // kDumpRaw (debug): also the raw (mode, CLUT) atlases of stages / title / room meshes under raw/.
-enum DumpSet : unsigned { kDumpStages = 1, kDumpTitle = 2, kDumpEffects = 4, kDumpRooms = 8, kDumpModels = 16, kDumpAll = 31, kDumpRaw = 32 };
+enum DumpSet : unsigned {
+  kDumpStages = 1, kDumpTitle = 2, kDumpEffects = 4, kDumpRooms = 8, kDumpModels = 16, kDumpRaw = 32, kDumpWeapons = 64,
+  kDumpAll = kDumpStages | kDumpTitle | kDumpEffects | kDumpRooms | kDumpModels | kDumpWeapons
+};
 
 struct TextureDumpProgress {
-  // done / total: items of the current phase (stages / packs / rooms / models).
+  // done / total: items of the current phase (stages / packs / rooms / models / weapon packs).
   std::atomic<u32> done{0}, total{0};
   // PNG files written so far (all phases).
   std::atomic<u32> files{0};

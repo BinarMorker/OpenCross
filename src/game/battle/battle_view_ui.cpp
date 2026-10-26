@@ -1170,16 +1170,18 @@ void BattleView::build_command_ui() {
     if (pc >= 0) add_img(eplate_[static_cast<size_t>(pc * 10 + 2)], 8 * kPs1Px, y * kRowScale, 120 * kPs1Px, 16 * kRowScale);
   };
   const bool act_hdr = act_.phase != Act::Phase::None && !act_.ev.empty() && act_.ev.front().kind == battle::ActionEvent::Kind::Element && act_.actor >= 0;
-  // Any unit: the action covers PCs and enemies.
+  // Any unit: the action covers PCs and enemies. An element with record byte 0 bit 0x80 (death casts, form changes, boss moves such as the
+  // Dragon God's dive) shows no header; one without a colour byte shows no title.
   if (act_hdr) {
     // The action start hands the same plate over, fixed at (8, 22).
     hdr_on_ = false;
     const int id = act_.ev.front().element;
-    if (id > 0 && static_cast<size_t>(id) < tables_->elements.size()) {
+    if (id > 0 && static_cast<size_t>(id) < tables_->elements.size() && !(tables_->elements[static_cast<size_t>(id)].b(0) & 0x80)) {
       header_plate(tables_->elements[static_cast<size_t>(id)], 22);
       // Header: title text x 0x44, y = plate + 3: name + "%+d".
-      btext(0x81, import::utf8_to_u32(elem_label(tables_->element_name(id), tables_->elements[static_cast<size_t>(id)], act_.ev.front().row)),
-            0x44, 22 + 3, 0x757575);
+      if (battle_state.element_colour(id) & 0xFC)
+        btext(0x81, import::utf8_to_u32(elem_label(tables_->element_name(id), tables_->elements[static_cast<size_t>(id)], act_.ev.front().row)),
+              0x44, 22 + 3, 0x757575);
     }
   } else if (hdr_on_ && hdr_cell_ >= 0 && hdr_cell_ < data::kGridCells && active_pc_ >= 0) {
     // Cast header float: from the confirm in the list the chosen plate floats to (8, 22) and stays through the

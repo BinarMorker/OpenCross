@@ -58,7 +58,7 @@ void draw_dump_block(platform::Config& cfg, bool* settings_dirty) {
   if (g_dump_hooks.start) {
     const bool running = g_dump_hooks.running && g_dump_hooks.running();
     const unsigned mask = (cfg.dump_stages ? 1u : 0u) | (cfg.dump_title ? 2u : 0u) | (cfg.dump_effects ? 4u : 0u) | (cfg.dump_rooms ? 8u : 0u) |
-                          (cfg.dump_models ? 16u : 0u);
+                          (cfg.dump_models ? 16u : 0u) | (cfg.dump_weapons ? 64u : 0u);
     ImGui::BeginDisabled(running || mask == 0);
     if (ImGui::Button("Dump all textures")) g_dump_hooks.start(mask);
     ImGui::EndDisabled();
@@ -79,6 +79,9 @@ void draw_dump_block(platform::Config& cfg, bool* settings_dirty) {
     ImGui::SameLine();
     settings |= ImGui::Checkbox("Models", &cfg.dump_models);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) render::ImGuiLayer::tooltip("Include the character and monster models. Part of what Dump all textures writes.");
+    ImGui::SameLine();
+    settings |= ImGui::Checkbox("Weapons", &cfg.dump_weapons);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) render::ImGuiLayer::tooltip("Include the battle weapons (every part of every weapon pack, the characters' and the monsters'). Part of what Dump all textures writes.");
     ImGui::SameLine();
     settings |= ImGui::Checkbox("Effects (sheets + meshes)", &cfg.dump_effects);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled)) render::ImGuiLayer::tooltip("Include the effect sprite sheets and effect meshes. Part of what Dump all textures writes.");

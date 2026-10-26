@@ -193,6 +193,7 @@ bool Config::load(const std::filesystem::path& file) {
   dump_title = parse_bool(ini.get("Mods", "DumpTitle"), dump_title);
   dump_rooms = parse_bool(ini.get("Mods", "DumpRooms"), dump_rooms);
   dump_models = parse_bool(ini.get("Mods", "DumpModels"), dump_models);
+  dump_weapons = parse_bool(ini.get("Mods", "DumpWeapons"), dump_weapons);
   dump_effects = parse_bool(ini.get("Mods", "DumpEffects"), dump_effects);
   for (const auto& [name, value] : ini.entries("Mods")) {
     const bool is_setting = name == "DumpTextures" || name == "ReplaceTextures" || name == "DumpStages" || name == "DumpTitle" ||
@@ -323,6 +324,7 @@ bool Config::save(const std::filesystem::path& file) const {
   ini.set("Mods", "DumpTitle", on_off(dump_title));
   ini.set("Mods", "DumpRooms", on_off(dump_rooms));
   ini.set("Mods", "DumpModels", on_off(dump_models));
+  ini.set("Mods", "DumpWeapons", on_off(dump_weapons));
   ini.set("Mods", "DumpEffects", on_off(dump_effects));
   for (const ModSetting& mod : mods) ini.set("Mods", mod.name, std::string(mod.enabled ? "1," : "0,") + mod.load_on);
   ini.set("Video", "Ps1Res", on_off(ps1_res));

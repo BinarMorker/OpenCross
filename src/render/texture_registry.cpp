@@ -8,6 +8,7 @@
 #include <set>
 
 #include "core/log.h"
+#include "import/tim.h"
 #include "render/texture.h"
 #include "vfs/vfs.h"
 
@@ -90,7 +91,45 @@ TextureKey raw_atlas_key(const std::string& group, int index, int mode, int clut
 
 TextureKey model_texture_key(const std::string& source, size_t index, size_t main_count, u32 w, u32 h, const u8* rgba) {
   if (!source.empty() && source[0] == '@') return {source.substr(1), "", -1, texture_content_tag(w, h, rgba)};
+  // A weapon pack part has one texture: battle/wepon/<pack>/part<n> -> model/battle/wepon/<pack>/part<n>.png.
+  if (source.starts_with("battle/wepon/")) {
+    const size_t slash = source.find_last_of('/');
+    return {"model", source.substr(0, slash), -1, source.substr(slash + 1)};
+  }
   return {"model", source, -1, index < main_count ? "clut" + std::to_string(index) : "overlay" + std::to_string(index - main_count + 1)};
+}
+
+namespace {
+// Alpha of a texel: 0 = transparent, below the 0xBF / 0xFF midpoint = STP set (mesh.frag's rule).
+bool stp_alpha(u8 alpha) { return alpha < 0xDF; }
+}  // namespace
+
+std::vector<u8> model_file_pixels(u32 w, u32 h, const u8* rgba) {
+  std::vector<u8> out(rgba, rgba + size_t(w) * h * 4);
+  for (size_t i = 3; i < out.size(); i += 4) out[i] = out[i] ? u8{0xFF} : u8{0};
+  return out;
+}
+
+void model_restore_stp(u32 original_w, u32 original_h, const u8* original, u32 w, u32 h, std::vector<u8>& rgba) {
+  size_t stp = 0, plain = 0;
+  for (size_t i = 3; i < size_t(original_w) * original_h * 4; i += 4)
+    if (original[i]) ++(stp_alpha(original[i]) ? stp : plain);
+  // Where the original texel is transparent (art painted past the old edge), the more common flag.
+  const bool common = stp >= plain, uniform = stp == 0 || plain == 0;
+  for (u32 y = 0; y < h; ++y)
+    for (u32 x = 0; x < w; ++x) {
+      u8& alpha = rgba[(size_t(y) * w + x) * 4 + 3];
+      if (alpha < 0x80) {
+        alpha = 0;
+        continue;
+      }
+      bool flag = common;
+      if (!uniform) {
+        const u8 under = original[(size_t(y * original_h / h) * original_w + x * original_w / w) * 4 + 3];
+        if (under) flag = stp_alpha(under);
+      }
+      alpha = flag ? import::kStpAlpha : u8{0xFF};
+    }
 }
 
 std::string texture_content_tag(u32 w, u32 h, const u8* rgba) {
@@ -125,6 +164,11 @@ void bind(const vfs::Vfs* vfs) {
   std::lock_guard lock(state().mutex);
   state().vfs = vfs;
   if (vfs && state().dump_root.empty()) state().dump_root = vfs->game_dir() / "dump" / "textures";
+}
+
+const vfs::Vfs* bound_vfs() {
+  std::lock_guard lock(state().mutex);
+  return state().vfs;
 }
 
 bool active() {
@@ -260,6 +304,12 @@ Stats stats() {
   std::lock_guard lock(state().mutex);
   return {static_cast<u32>(state().dumped.size()), static_cast<u32>(state().replaced.size()), state().failed};
 }
+void begin_dump() {
+  std::lock_guard lock(state().mutex);
+  state().dumped.clear();
+  state().dumped_text.clear();
+}
+
 void reset_stats() {
   std::lock_guard lock(state().mutex);
   state().dumped.clear();

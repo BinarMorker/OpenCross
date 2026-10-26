@@ -462,8 +462,9 @@ void FieldWorld::place_party_spawn(int slot) {
     z = lp.z;
     tri = walk.find_triangle(x, z, 0.0f);
   }
-  if (tri < 0 && !walk.empty()) {
-    // No usable entrance: the walk-mesh vertex nearest the mesh centre.
+  // An entrance record is written as it stands, even where the walk mesh has no floor (a party that walks in from outside the mesh).
+  if (tri < 0 && !have && !walk.empty()) {
+    // No entrance record: the walk-mesh vertex nearest the mesh centre.
     float cx = 0, cz = 0;
     const auto& verts = walk.mesh().vertices;
     for (const auto& vertex : verts) {
@@ -479,7 +480,7 @@ void FieldWorld::place_party_spawn(int slot) {
     }
     // Cutscene rooms carry no entrance table at all (their scripts place the party later); only a missing record in a
     // room that has a table is worth a warning. Once per load, not once per party slot.
-    if (!have && slot == 0) {
+    if (slot == 0) {
       if (pos.empty())
         log::debug("field: {} has no entrance table (cutscene room), party spawns at the mesh centre", view_.room_name());
       else
