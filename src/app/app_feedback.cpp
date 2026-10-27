@@ -41,11 +41,13 @@ void App::composite_scene(const SceneFrame& sf) {
   // outset is what is shown: the scene, or the feed-back output of the encounter's 3E / 40 pass.
   render::TexRef outset = *sf.sset;
   bool fb_done = false;
+  if (sf.jolt.on) keep_jolt_picture(sf);
   if (sf.jolt.post) feedback_pass(sf, outset, fb_done);
   sprites.begin(frame, vw, vh, true);
   sprites.set_blend(render::BlendMode::Add);
-  // Above 1x the Box filter averages the area under each window pixel (supersampling); below 1x the bilinear sampler of scene_set.
-  if (sf.rscale > 1.0f) sprites.set_filter(render::SpriteFilter::Box);
+  // Above 1x the Box filter averages the area under each window pixel (supersampling); below 1x the bilinear sampler of scene_set. The
+  // feed-back output is already window-sized.
+  if (sf.rscale > 1.0f && !fb_done) sprites.set_filter(render::SpriteFilter::Box);
   sprites.draw(outset, 0.0f, 0.0f, vw, vh);
   sprites.set_filter(render::SpriteFilter::Sampler);
   sprites.set_blend(render::BlendMode::Alpha);
@@ -53,11 +55,58 @@ void App::composite_scene(const SceneFrame& sf) {
   sprites.end();
 }
 
-// The true feed-back: the pass of this game tick into fb_rt[fb_cur], the previous output in the other target.
+// The window-sized targets of the jolt and the feed-back passes. Made while the field is shown (App::begin_scene_target), so the first frame of
+// an encounter's swirl allocates nothing; a new size (window change) remakes them and drops what they held.
+bool App::ensure_transition_targets(u32 w, u32 h) {
+  bool ok = true;
+  for (int i = 0; i < 2; ++i) {
+    if (!jolt_rt[i].valid() || jolt_rt[i].width() != w || jolt_rt[i].height() != h) {
+      jolt_have = false;
+      ok = ensure_target(jolt_rt[i], jolt_set[i], w, h, linear) && ok;
+    }
+    if (fb_rt[i].valid() && fb_rt[i].width() == w && fb_rt[i].height() == h && fb_set[i]) continue;
+    fb_set[i] = {};
+    fb_have = false;
+    if (fb_rt[i].create(ctx, w, h)) fb_set[i] = fb_rt[i].ref(linear);
+    ok = ok && static_cast<bool>(fb_set[i]);
+  }
+  if (!fb_frozen.valid() || fb_frozen.width() != w || fb_frozen.height() != h || !fb_frozen_set) {
+    fb_frozen_set = {};
+    fb_frozen_have = false;
+    if (fb_frozen.create(ctx, w, h)) fb_frozen_set = fb_frozen.ref(linear);
+  }
+  return ok;
+}
+
+// This frame's picture into jolt_rt[jolt_cur] at window size (the scene target area-filtered down above 1x): the next tick's previous picture.
+void App::keep_jolt_picture(const SceneFrame& sf) {
+  const u32 tw = sf.frame.extent.width, th = sf.frame.extent.height;
+  if (!ensure_target(jolt_rt[jolt_cur], jolt_set[jolt_cur], tw, th, linear)) {
+    jolt_have = false;
+    return;
+  }
+  render::Frame jf;
+  ctx.begin_target(jolt_rt[jolt_cur], sf.frame, jf);
+  draw_scene_copy(sf, jf, *sf.sset);
+  ctx.end_target(jolt_rt[jolt_cur]);
+}
+
+// `scene` (the scene target, or a window-sized copy of it) over the whole of `target`, which was cleared black: Add is a plain copy.
+void App::draw_scene_copy(const SceneFrame& sf, const render::Frame& target, const render::TexRef& scene) {
+  const float tw = static_cast<float>(target.extent.width), th = static_cast<float>(target.extent.height);
+  sprites.begin(target, tw, th, true);
+  sprites.set_blend(render::BlendMode::Add);
+  if (sf.rscale > 1.0f && scene == *sf.sset) sprites.set_filter(render::SpriteFilter::Box);
+  sprites.draw(scene, 0.0f, 0.0f, tw, th);
+  sprites.set_filter(render::SpriteFilter::Sampler);
+  sprites.set_blend(render::BlendMode::Alpha);
+  sprites.end();
+}
+
+// The true feed-back: the pass of this game tick into fb_rt[fb_cur], the previous output in the other target. The targets are window-sized.
 void App::feedback_pass(const SceneFrame& sf, render::TexRef& outset, bool& fb_done) {
   const render::Frame& frame = sf.frame;
   const float vw = sf.vw, vh = sf.vh;
-  const render::RenderTarget& srt = *sf.srt;
   const render::TexRef sset = *sf.sset;
   const game::FieldWorld::JoltView& jolt = sf.jolt;
   const game::FieldWorld::TransitionStrips ts = world.transition_strips();
@@ -71,20 +120,8 @@ void App::feedback_pass(const SceneFrame& sf, render::TexRef& outset, bool& fb_d
     }
     fb_last_n = jolt.n;
   }
-  const u32 tw = srt.width(), th = srt.height();
-  bool ok = true;
-  for (int i = 0; i < 2 && ok; ++i) {
-    if (fb_rt[i].valid() && fb_rt[i].width() == tw && fb_rt[i].height() == th && fb_set[i]) continue;
-    fb_set[i] = {};
-    fb_have = false;
-    if (fb_rt[i].create(ctx, tw, th)) fb_set[i] = fb_rt[i].ref(linear);
-    ok = static_cast<bool>(fb_set[i]);
-  }
-  if (ok && (!fb_frozen.valid() || fb_frozen.width() != tw || fb_frozen.height() != th || !fb_frozen_set)) {
-    fb_frozen_set = {};
-    fb_frozen_have = false;
-    if (fb_frozen.create(ctx, tw, th)) fb_frozen_set = fb_frozen.ref(linear);
-  }
+  const u32 tw = frame.extent.width, th = frame.extent.height;
+  const bool ok = ensure_transition_targets(tw, th);
   const render::Letterbox lb = world.view().letterbox(vw, vh);
   float ssx = 0, ssy = 0;
   world.view().scroll_at(step.alpha, ssx, ssy);
@@ -114,11 +151,7 @@ void App::feedback_pass(const SceneFrame& sf, render::TexRef& outset, bool& fb_d
   if ((world.transition_prefreeze() || white_now) && !fb_frozen_have && fb_frozen_set) {
     render::Frame fz;
     ctx.begin_target(fb_frozen, frame, fz);
-    sprites.begin(fz, static_cast<float>(tw), static_cast<float>(th), true);
-    sprites.set_blend(render::BlendMode::Add);
-    sprites.draw(fb_have ? fb_set[1 - fb_cur] : sset, 0.0f, 0.0f, static_cast<float>(tw), static_cast<float>(th));
-    sprites.set_blend(render::BlendMode::Alpha);
-    sprites.end();
+    draw_scene_copy(sf, fz, fb_have ? fb_set[1 - fb_cur] : sset);
     ctx.end_target(fb_frozen);
     fb_frozen_have = true;
   }
@@ -175,11 +208,13 @@ void App::feedback_hold_pass(const SceneFrame& sf, const FeedbackRect& rect, con
     const float den = std::max(0.05f, 1.0f - 0.5f * bp.gain(k));
     sc[k] *= 0.5f * (1.0f - std::pow(0.5f * bp.gain(k), ue)) / den / (1.0f - static_cast<float>(static_cast<u8>(wq * 255.0f + 0.5f)) / 255.0f);
   }
+  if (sf.rscale > 1.0f && scene_src == sset) sprites.set_filter(render::SpriteFilter::Box);
   for (float off = 0.0f; std::max({sc[0], sc[1], sc[2]}) - off > 0.001f; off += 1.0f) {
     u8 c3[3];
     for (int k = 0; k < 3; ++k) c3[k] = static_cast<u8>(std::clamp(sc[k] - off, 0.0f, 1.0f) * 255.0f + 0.5f);
     sprites.draw(scene_src, 0.0f, 0.0f, tw, th, 0, 0, 1, 1, render::pack_rgba(c3[0], c3[1], c3[2], 255));
   }
+  sprites.set_filter(render::SpriteFilter::Sampler);
   sprites.end();
   const render::Rect prt{static_cast<s32>(rect.px0 * rect.fx), static_cast<s32>(rect.py0 * rect.fy),
                          static_cast<u32>(rect.pw * rect.fx) + 1, static_cast<u32>(rect.ph * rect.fy) + 1};
@@ -223,11 +258,7 @@ void App::feedback_field_pass(const SceneFrame& sf, const FeedbackRect& rect) {
   const float dx = rect.cx + (rect.px0 - rect.cx) * js + jtx * rect.lb.scale, dy = rect.cy + (rect.py0 - rect.cy) * js + jty * rect.lb.scale_y;
   render::Frame ff;
   ctx.begin_target(fb_rt[fb_cur], sf.frame, ff);
-  sprites.begin(ff, tw, th, true);
-  // The target is cleared black: Add is a plain copy of this tick's picture.
-  sprites.set_blend(render::BlendMode::Add);
-  sprites.draw(sset, 0.0f, 0.0f, tw, th, 0, 0, 1, 1);
-  sprites.end();
+  draw_scene_copy(sf, ff, sset);
   const render::Rect prt{static_cast<s32>(rect.px0 * rect.fx), static_cast<s32>(rect.py0 * rect.fy),
                          static_cast<u32>(rect.pw * rect.fx) + 1, static_cast<u32>(rect.ph * rect.fy) + 1};
   ff.set_scissor(prt);

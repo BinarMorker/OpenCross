@@ -51,6 +51,8 @@ void FieldWorld::bind_party_entity(int slot) {
   ent_state.char_id = party_chars_[static_cast<size_t>(slot)];
   ent_state.char_model = model_byte(ent_state.char_id);
   if (auto model = character_model(ent_state.char_model)) ent_state.actor.set_model(model);
+  // In another body: the character's own model is made ready for the switch back.
+  if (ent_state.char_model != ent_state.char_id) prefetch_character_model(ent_state.char_id);
   // Solid; bit 22 marks the player class that attr 4 / 5 walls block.
   ve.flags38 |= 0x400100;
 }

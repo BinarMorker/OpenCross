@@ -48,11 +48,13 @@ class Texture {
   // The GPU image alone (no pixels yet).
   bool create_image(GpuContext& ctx, u32 width, u32 height, TextureFormat format, bool mips);
 
+  GpuContext* ctx_ = nullptr;
   SDL_GPUDevice* device_ = nullptr;
   SDL_GPUTexture* texture_ = nullptr;
   SDL_GPUTransferBuffer* staging_ = nullptr;
   u32 width_ = 0, height_ = 0;
   u32 bytes_per_pixel_ = 4;
+  u64 bytes_ = 0;
 };
 
 class Sampler {

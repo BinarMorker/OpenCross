@@ -100,6 +100,13 @@ struct MeshModel {
 // from the active texture mods, so every user of the asset's pixels (the GPU copy, eye blinks, effect fades) draws the replacement. Call before create_model.
 void resolve_model_textures(assets::ModelAsset& asset);
 
+// The images create_model uploads, their transparent texels bled (bleed_transparent): per asset texture the drawn image and the 4x one
+// (empty without), then the two eye-blink frames and their 4x ones (empty without). CPU only: any thread, after resolve_model_textures.
+struct ModelUploads {
+  std::vector<std::vector<u8>> main, hd, eye, hd_eye;
+};
+ModelUploads prepare_model_uploads(const assets::ModelAsset& asset);
+
 class MeshPipeline {
  public:
   static constexpr u32 kMaxJoints = 64;
@@ -114,7 +121,8 @@ class MeshPipeline {
   bool init(GpuContext& ctx);
   void destroy();
 
-  std::unique_ptr<MeshModel> create_model(const assets::ModelAsset& asset);
+  // `uploads`: prepare_model_uploads(asset) made ahead (on a worker); null = made here.
+  std::unique_ptr<MeshModel> create_model(const assets::ModelAsset& asset, const ModelUploads* uploads = nullptr);
 
   // Binds the pipeline and restricts drawing to a scissor rectangle (the 4:3 game area); end() restores the full window.
   void begin(const Frame& frame, Rect scissor);

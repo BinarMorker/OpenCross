@@ -3,6 +3,7 @@
 #include "game/battle/model_table.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 
 #include "battle/battle.h"
@@ -11,6 +12,7 @@
 #include "import/model.h"
 #include "import/room_effects.h"
 #include "render/mesh_pipeline.h"
+#include "render/texture_registry.h"
 #include "vfs/vfs.h"
 namespace oc::game {
 
@@ -35,6 +37,44 @@ void ModelCache::clear() {
   models.clear();
   weapons.clear();
   scripts.clear();
+  if (prefetch_job_.valid()) prefetch_job_.wait();
+  prefetch_job_ = {};
+  prefetched_ = {};
+}
+
+void ModelCache::prefetch(const vfs::Vfs& vfs, std::vector<std::string> stems, std::vector<std::pair<std::string, int>> weapon_parts) {
+  if (prefetch_job_.valid()) prefetch_job_.wait();
+  std::erase_if(stems, [&](const std::string& stem) { return stem.empty() || models.contains(stem); });
+  std::erase_if(weapon_parts, [&](const auto& part) { return part.first.empty() || weapons.contains(part.first + "#" + std::to_string(part.second)); });
+  prefetch_job_ = std::async(std::launch::async, [&vfs, stems = std::move(stems), weapon_parts = std::move(weapon_parts)] {
+    Prefetched out;
+    out.generation = render::texture_registry::generation();
+    auto add = [](std::map<std::string, PrefetchedModel>& to, const std::string& key, assets::ModelAsset asset) {
+      render::ModelUploads uploads = render::prepare_model_uploads(asset);
+      to.emplace(key, PrefetchedModel{std::move(asset), std::move(uploads)});
+    };
+    for (const std::string& stem : stems)
+      if (auto asset = read_model(vfs, stem, nullptr)) add(out.models, stem, std::move(*asset));
+    for (const auto& [bin, part] : weapon_parts)
+      if (auto asset = read_weapon(vfs, bin, part)) add(out.weapons, bin + "#" + std::to_string(part), std::move(*asset));
+    return out;
+  });
+}
+
+bool ModelCache::prefetch_ready() const {
+  return !prefetch_job_.valid() || prefetch_job_.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+}
+
+// The GPU half of a prefetched load; null when it was not prefetched (or the texture mods changed since).
+std::shared_ptr<ModelHandle> ModelCache::make_prefetched(render::MeshPipeline& meshes, bool weapon, const std::string& key) {
+  if (prefetch_job_.valid()) prefetched_ = prefetch_job_.get();
+  auto& from = weapon ? prefetched_.weapons : prefetched_.models;
+  const auto it = from.find(key);
+  if (it == from.end()) return nullptr;
+  PrefetchedModel entry = std::move(it->second);
+  from.erase(it);
+  if (prefetched_.generation != render::texture_registry::generation()) return nullptr;
+  return Actor::make_resolved_model(meshes, std::move(entry.asset), &entry.uploads);
 }
 
 std::string ModelCache::player_model(const vfs::Vfs& vfs, int char_id) {
@@ -53,21 +93,29 @@ std::string ModelCache::monster_model(const data::GameTables* tables, int monste
   return model < kBattleModels.size() ? std::string(kBattleModels[model]) : std::string{};
 }
 
-std::shared_ptr<ModelHandle> ModelCache::load_model_for(const vfs::Vfs& vfs, render::MeshPipeline& meshes, const std::string& stem) {
-  if (stem.empty()) return nullptr;
-  if (auto it = models.find(stem); it != models.end()) return it->second;
+std::optional<assets::ModelAsset> ModelCache::read_model(const vfs::Vfs& vfs, const std::string& stem, std::string* err) {
   auto read = [&](const std::string& path) { return vfs.read("cdrom/" + path).value_or(Bytes{}); };
   const Bytes obj = read(stem + ".obj");
   Bytes tex = read(stem + ".ltd");
   if (tex.empty()) tex = read(stem + ".ltc");
   const Bytes at0 = read(stem.substr(0, stem.find_last_of('/')) + "/at0.prd");
-  std::string err;
-  std::shared_ptr<ModelHandle> handle;
-  if (auto asset = import::load_model(obj, tex, at0, &err)) {
-    // The source stem names the texture dump / replacement (model/<stem>/clut<row>.png).
-    asset->source = stem;
-    handle = Actor::make_model(meshes, std::move(*asset));
-  } else log::warn("battle: model {}: {}", stem, err);
+  auto asset = import::load_model(obj, tex, at0, err);
+  if (!asset) return std::nullopt;
+  // The source stem names the texture dump / replacement (model/<stem>/clut<row>.png).
+  asset->source = stem;
+  render::resolve_model_textures(*asset);
+  return asset;
+}
+
+std::shared_ptr<ModelHandle> ModelCache::load_model_for(const vfs::Vfs& vfs, render::MeshPipeline& meshes, const std::string& stem) {
+  if (stem.empty()) return nullptr;
+  if (auto it = models.find(stem); it != models.end()) return it->second;
+  std::shared_ptr<ModelHandle> handle = make_prefetched(meshes, false, stem);
+  if (!handle) {
+    std::string err;
+    if (std::optional<assets::ModelAsset> asset = read_model(vfs, stem, &err)) handle = Actor::make_resolved_model(meshes, std::move(*asset));
+    else log::warn("battle: model {}: {}", stem, err);
+  }
   models[stem] = handle;
   return handle;
 }
@@ -87,9 +135,17 @@ int ModelCache::weapon_digit(const data::GameTables* tables, const battle::Unit&
   return gear ? (gear->tier() & 0xF) : 0;
 }
 
+std::string ModelCache::player_weapon_bin(int char_id) {
+  return char_id < 0 || char_id >= 44 ? std::string{} : std::string("battle/wepon/") + kWeaponPacks[char_id] + ".bin";
+}
+
+std::string ModelCache::enemy_weapon_bin(int model) {
+  return model < 0 || static_cast<size_t>(model) >= kBattleWeaponBins.size() ? std::string{} : std::string(kBattleWeaponBins[static_cast<size_t>(model)]);
+}
+
 std::shared_ptr<ModelHandle> ModelCache::load_weapon(const vfs::Vfs& vfs, render::MeshPipeline& meshes, int char_id, int part) {
   if (char_id < 0 || char_id >= 44 || part < 0) return nullptr;
-  return weapon_part(vfs, meshes, std::string("battle/wepon/") + kWeaponPacks[char_id] + ".bin", part);
+  return weapon_part(vfs, meshes, player_weapon_bin(char_id), part);
 }
 
 // A monster's weapon, present when its weapon item and weapon model are both non-zero. The texture and the
@@ -99,29 +155,35 @@ std::shared_ptr<ModelHandle> ModelCache::load_weapon(const vfs::Vfs& vfs, render
 // hung on the model's two mount records.
 std::shared_ptr<ModelHandle> ModelCache::load_enemy_weapon(const vfs::Vfs& vfs, render::MeshPipeline& meshes, int model, int part) {
   if (model < 0 || static_cast<size_t>(model) >= kBattleWeaponBins.size() || part < 0) return nullptr;
-  const std::string_view bin = kBattleWeaponBins[static_cast<size_t>(model)];
+  const std::string bin = enemy_weapon_bin(model);
   if (bin.empty()) {
     log::warn("battle: enemy weapon: model {} has no weapon .bin", model);
     return nullptr;
   }
-  return weapon_part(vfs, meshes, std::string(bin), part);
+  return weapon_part(vfs, meshes, bin, part);
 }
 
 std::shared_ptr<ModelHandle> ModelCache::weapon_part(const vfs::Vfs& vfs, render::MeshPipeline& meshes, const std::string& bin, int part) {
   const std::string key = bin + "#" + std::to_string(part);
   if (auto it = weapons.find(key); it != weapons.end()) return it->second;
-  std::shared_ptr<ModelHandle> handle = build_weapon(vfs, meshes, bin, part);
+  std::shared_ptr<ModelHandle> handle = make_prefetched(meshes, true, key);
+  if (!handle) handle = build_weapon(vfs, meshes, bin, part);
   weapons[key] = handle;
   return handle;
 }
 
 std::shared_ptr<ModelHandle> ModelCache::build_weapon(const vfs::Vfs& vfs, render::MeshPipeline& meshes, const std::string& bin, int part) {
+  std::optional<assets::ModelAsset> asset = read_weapon(vfs, bin, part);
+  return asset ? Actor::make_resolved_model(meshes, std::move(*asset)) : nullptr;
+}
+
+std::optional<assets::ModelAsset> ModelCache::read_weapon(const vfs::Vfs& vfs, const std::string& bin, int part) {
   std::string err;
   const auto raw = vfs.read("cdrom/" + bin);
   const auto pack = raw ? import::load_weapon_pack(*raw, &err) : std::nullopt;
   if (!pack || part >= static_cast<int>(pack->parts.size())) {
     log::warn("battle: weapon {}#{}: {}", bin, part, !raw ? "file not found" : err.empty() ? "no such part" : err);
-    return nullptr;
+    return std::nullopt;
   }
   const assets::WeaponPart& weapon = pack->parts[static_cast<size_t>(part)];
   assets::ModelAsset weapon_asset;
@@ -132,7 +194,8 @@ std::shared_ptr<ModelHandle> ModelCache::build_weapon(const vfs::Vfs& vfs, rende
   weapon_asset.main_texture_count = 1;
   weapon_asset.meshes.push_back(weapon.mesh);
   log::info("battle: weapon {} part {} (texture {}x{})", bin, part, weapon.texture.width, weapon.texture.height);
-  return Actor::make_model(meshes, std::move(weapon_asset));
+  render::resolve_model_textures(weapon_asset);
+  return weapon_asset;
 }
 
 void ModelCache::reload_weapons(const vfs::Vfs& vfs, render::MeshPipeline& meshes) {

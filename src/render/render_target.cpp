@@ -107,9 +107,7 @@ bool RenderTarget::prepare_samples(GpuContext& ctx) {
   const SDL_GPUSampleCount wanted = multisampled_ ? ctx.sample_count_for(width_, height_) : SDL_GPU_SAMPLECOUNT_1;
   if (depth_ && wanted == samples_) return true;
   for (const SDL_GPUSampleCount samples : {wanted, SDL_GPU_SAMPLECOUNT_1}) {
-    if (msaa_color_) SDL_ReleaseGPUTexture(device_, msaa_color_);
-    if (depth_) SDL_ReleaseGPUTexture(device_, depth_);
-    msaa_color_ = depth_ = nullptr;
+    release_samples();
     samples_ = samples;
     SDL_GPUTextureCreateInfo info{};
     info.type = SDL_GPU_TEXTURETYPE_2D;
@@ -133,18 +131,17 @@ bool RenderTarget::prepare_samples(GpuContext& ctx) {
 }
 
 void RenderTarget::release_samples() {
-  if (!device_) return;
-  if (msaa_color_) SDL_ReleaseGPUTexture(device_, msaa_color_);
-  if (depth_) SDL_ReleaseGPUTexture(device_, depth_);
+  if (!ctx_) return;
+  const u64 bytes = u64{width_} * height_ * 4 * (1u << static_cast<u32>(samples_));
+  ctx_->release_texture(msaa_color_, bytes);
+  ctx_->release_texture(depth_, bytes);
   msaa_color_ = depth_ = nullptr;
 }
 
 void RenderTarget::destroy() {
   if (ctx_ && multisampled_) ctx_->track_multisampled(this, false);
-  if (device_) {
-    for (SDL_GPUTexture* image : {color_, msaa_color_, depth_})
-      if (image) SDL_ReleaseGPUTexture(device_, image);
-  }
+  if (ctx_) ctx_->release_texture(color_, u64{width_} * height_ * 4);
+  release_samples();
   color_ = msaa_color_ = depth_ = nullptr;
   samples_ = SDL_GPU_SAMPLECOUNT_1;
   multisampled_ = false;

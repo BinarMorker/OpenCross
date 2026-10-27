@@ -1,9 +1,13 @@
 #pragma once
 // ModelCache: the battle's loaded unit models, weapon models and per-model script blocks, keyed by model folder stem, plus the
 // file lookups that name them (character / monster model folders, weapon packs).
+#include <future>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "assets/room_effects.h"
 #include "core/types.h"
@@ -46,8 +50,24 @@ struct ModelCache {
   // Used when a model has no 'atk' table.
   bseq::Table fallback_atk;
 
-  // Drops every loaded model, weapon and script block (the fallback table stays).
+  // Drops every loaded model, weapon and script block and the prefetch (the fallback table stays).
   void clear();
+
+  // The CPU half of the model loads a battle is about to make (files, import, the texture mods' decode, the bled uploads), run on a
+  // worker from the battle setup on, so the load steps only create the GPU objects. Keyed like `models` / `weapons`; not used when the
+  // texture mods changed meanwhile.
+  struct PrefetchedModel {
+    assets::ModelAsset asset;
+    render::ModelUploads uploads;
+  };
+  struct Prefetched {
+    unsigned generation = 0;
+    std::map<std::string, PrefetchedModel> models, weapons;
+  };
+  // Starts the worker for the model stems and weapon pack parts ("battle/wepon/sword.bin", 3) not loaded yet.
+  void prefetch(const vfs::Vfs& vfs, std::vector<std::string> stems, std::vector<std::pair<std::string, int>> weapon_parts);
+  // False while the worker runs (a load step taking from it would wait).
+  bool prefetch_ready() const;
 
   static std::string player_model(const vfs::Vfs& vfs, int char_id);
   static std::string monster_model(const data::GameTables* tables, int monster_id);
@@ -56,6 +76,12 @@ struct ModelCache {
   // The hit-sound / hit-emitter group digit of a unit: the equipped weapon's material tier & 0xF (the same byte as the weapon model part;
   // NOT the crit class), -1 for monsters (their "_s00" entries are not renamed).
   static int weapon_digit(const data::GameTables* tables, const battle::Unit& unit);
+  // The weapon pack of a character id / of a monster model ("" = none).
+  static std::string player_weapon_bin(int char_id);
+  static std::string enemy_weapon_bin(int model);
+  // The CPU half of a load (texture mods resolved): any thread.
+  static std::optional<assets::ModelAsset> read_model(const vfs::Vfs& vfs, const std::string& stem, std::string* err);
+  static std::optional<assets::ModelAsset> read_weapon(const vfs::Vfs& vfs, const std::string& bin, int part);
 
   std::shared_ptr<ModelHandle> load_model_for(const vfs::Vfs& vfs, render::MeshPipeline& meshes, const std::string& dir_stem);
   std::shared_ptr<ModelHandle> load_weapon(const vfs::Vfs& vfs, render::MeshPipeline& meshes, int char_id, int part);
@@ -66,6 +92,12 @@ struct ModelCache {
   // A texture mod switched on / off: every loaded weapon is built again through the VFS and swapped INTO its handle (the units keep pointing at it).
   void reload_weapons(const vfs::Vfs& vfs, render::MeshPipeline& meshes);
   std::shared_ptr<ModelScripts> load_scripts_for(const vfs::Vfs& vfs, const CamBank* bank, const std::string& dir_stem);
+
+ private:
+  std::shared_ptr<ModelHandle> make_prefetched(render::MeshPipeline& meshes, bool weapon, const std::string& key);
+
+  std::future<Prefetched> prefetch_job_;
+  Prefetched prefetched_;
 };
 
 }  // namespace oc::game

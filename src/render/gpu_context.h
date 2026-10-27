@@ -156,6 +156,13 @@ class GpuContext {
   void set_scissor(const Rect& rect);
   void wait_idle();
 
+  // Releases a texture of `bytes` once the frames using it are done, a share per frame (end_frame): unloading a battle frees hundreds of
+  // textures and megabytes, and the driver's cost grows with both (~0.7 ms per texture), so one frame would stall. Any thread; ignored
+  // after shutdown.
+  void release_texture(SDL_GPUTexture* texture, u64 bytes);
+  static constexpr u64 kReleaseBytesPerFrame = 64ull << 20;
+  static constexpr size_t kReleaseTexturesPerFrame = 16;
+
   // A 1x1 opaque white texture (solid-colour quads through the sprite batch).
   TexRef white() const { return white_; }
 
@@ -210,6 +217,8 @@ class GpuContext {
   void unregister_sampler(SDL_GPUSampler* sampler);
   void release_anisotropic_samplers();
   void track_multisampled(RenderTarget* target, bool tracked);
+  // Releases queued textures: at least one, then up to `bytes` bytes and `count` textures.
+  void release_queued(u64 bytes, size_t count);
   // A colour-only pass that resolves the multisampled image of `images` (no-op when single-sampled).
   void resolve(const PassImages& images);
   void encode(SDL_GPUCommandBuffer* cmd, std::span<const UploadOp> ops);
@@ -244,6 +253,12 @@ class GpuContext {
   SDL_GPUSampleCount pass_samples_ = SDL_GPU_SAMPLECOUNT_1;
   u32 msaa_ = 1;
   std::vector<RenderTarget*> multisampled_targets_;
+  struct QueuedRelease {
+    SDL_GPUTexture* texture = nullptr;
+    u64 bytes = 0;
+  };
+  std::mutex release_mutex_;
+  std::vector<QueuedRelease> release_queue_;
   u32 anisotropy_ = 1;
   std::mutex samplers_mutex_;
   std::unordered_map<SDL_GPUSampler*, LinearSampler> linear_samplers_;

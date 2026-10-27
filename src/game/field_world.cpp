@@ -19,6 +19,7 @@
 #include "import/room_effects.h"
 #include "import/tim.h"
 #include "render/texture.h"
+#include "render/texture_registry.h"
 
 namespace oc::game {
 
@@ -77,6 +78,7 @@ void FieldWorld::shutdown() {
   ents_.clear();
   room_models_.clear();
   char_models_.clear();
+  drop_character_prefetches();
   free_status_icons();
   white_set_ = {};
   capture_.set = {};
@@ -93,6 +95,8 @@ void FieldWorld::set_art_mode(bool hd, bool force) {
   // A pure rendering swap: the room is NOT reloaded (that would re-run INIT / the entrance and could change story flags). Only
   // the art is rebuilt from the other file set; script VM, entities, poses, clips, variables, timers, camera, scroll and effect state stay.
   if (changed && initialised_) {
+    // A worker reads the file set of the mode it started in.
+    drop_character_prefetches();
     if (view_.loaded()) swap_art();
     else char_models_.clear();
   }
@@ -132,6 +136,9 @@ void FieldWorld::swap_art() {
     else ++kept;
   }
   if (kept) log::warn("field: art swap: {} actors keep their old model (skeleton / clip count differs between the file sets)", kept);
+  // The party's own models went with the unused entries: made ready again for a switch back.
+  for (const Ent& ent_state : ents_)
+    if (ent_state.char_id >= 0 && ent_state.char_model != ent_state.char_id) prefetch_character_model(ent_state.char_id);
   // Effect atlases from the swapped sprite pixels.
   if (particles_ok_ && effects_gpu_) gpu_fx_.load(bank_);
   ++art_swaps_;
@@ -188,42 +195,80 @@ std::shared_ptr<ModelHandle> FieldWorld::room_model(int index) {
   return room_models_[i];
 }
 
+namespace {
+
+// The field model of a player folder (fieldobj/player/<folder>), its texture mods resolved. Any thread.
+std::optional<assets::ModelAsset> read_character_model(const vfs::Vfs& files, const std::string& folder) {
+  const std::string dir = "cdrom/fieldobj/player/" + folder + "/" + folder;
+  auto obj = files.read(dir + ".obj");
+  auto tim = files.read(dir + ".tim");
+  // The HD file is a 4x texture.
+  auto hd_tim = files.read("hd/fieldobj/player/" + folder + "/" + folder + ".tim");
+  auto ex = files.read("cdrom/fieldobj/ex/" + folder + ".bin");
+  if (!obj || !tim) {
+    log::warn("player model {}: files not found", folder);
+    return std::nullopt;
+  }
+  std::string err;
+  auto asset = import::load_field_model(*obj, *tim, ex ? ByteSpan(*ex) : ByteSpan{}, &err, hd_tim ? ByteSpan(*hd_tim) : ByteSpan{});
+  if (!asset) {
+    log::warn("player model {}: {}", folder, err);
+    return std::nullopt;
+  }
+  // Texture dump / replace path: model/<stem>/clut<row>.png
+  asset->source = "fieldobj/player/" + folder + "/" + folder;
+  std::string list;
+  for (const auto& clip : asset->clips) list += std::format(" {}:{}", clip.name, clip.frame_count);
+  log::debug("field: character model {} texture {}x{} hd x{} clips{}", folder, asset->textures.empty() ? 0 : asset->textures[0].width,
+             asset->textures.empty() ? 0 : asset->textures[0].height, asset->hd_textures.empty() ? 0 : asset->hd_scale, list);
+  render::resolve_model_textures(*asset);
+  return asset;
+}
+
+}  // namespace
+
 // `char_id` is a character MODEL BYTE (see model_byte(); normally the character id).
 std::shared_ptr<ModelHandle> FieldWorld::character_model(int char_id) {
   if (char_id < 0 || char_id >= 0x100) return nullptr;
   if (auto it = char_models_.find(char_id); it != char_models_.end()) return it->second;
   std::shared_ptr<ModelHandle> handle;
-  ScopedTimer model_timer("field: character model load (first use)");
-  const std::string folder = model_folder(char_id);
-  if (folder.empty()) {
-    char_models_[char_id] = nullptr;
-    return nullptr;
+  if (auto it = char_prefetch_.find(char_id); it != char_prefetch_.end()) {
+    ScopedTimer model_timer("field: character model load (prefetched)");
+    std::optional<PrefetchedCharacter> prefetched = it->second.get();
+    char_prefetch_.erase(it);
+    if (prefetched && prefetched->generation == render::texture_registry::generation())
+      handle = Actor::make_resolved_model(*meshes_, std::move(prefetched->asset), &prefetched->uploads);
   }
-  const std::string dir = "cdrom/fieldobj/player/" + folder + "/" + folder;
-  auto obj = files_->read(dir + ".obj");
-  auto tim = files_->read(dir + ".tim");
-  // The HD file is a 4x texture.
-  auto hd_tim = files_->read("hd/fieldobj/player/" + folder + "/" + folder + ".tim");
-  auto ex = files_->read("cdrom/fieldobj/ex/" + folder + ".bin");
-  if (obj && tim) {
-    std::string err;
-    auto asset = import::load_field_model(*obj, *tim, ex ? ByteSpan(*ex) : ByteSpan{}, &err, hd_tim ? ByteSpan(*hd_tim) : ByteSpan{});
-    if (asset) {
-      // Texture dump / replace path: model/<stem>/clut<row>.png
-      asset->source = "fieldobj/player/" + folder + "/" + folder;
-      std::string list;
-      for (const auto& clip : asset->clips) list += std::format(" {}:{}", clip.name, clip.frame_count);
-      log::debug("field: character model {} texture {}x{} hd x{} clips{}", folder, asset->textures.empty() ? 0 : asset->textures[0].width,
-                 asset->textures.empty() ? 0 : asset->textures[0].height, asset->hd_textures.empty() ? 0 : asset->hd_scale, list);
-      handle = Actor::make_model(*meshes_, std::move(*asset));
+  if (!handle) {
+    ScopedTimer model_timer("field: character model load (first use)");
+    const std::string folder = model_folder(char_id);
+    if (folder.empty()) {
+      char_models_[char_id] = nullptr;
+      return nullptr;
     }
-    else
-      log::warn("player model {}: {}", folder, err);
-  } else {
-    log::warn("player model {}: files not found", folder);
+    if (std::optional<assets::ModelAsset> asset = read_character_model(*files_, folder)) handle = Actor::make_resolved_model(*meshes_, std::move(*asset));
   }
   char_models_[char_id] = handle;
   return handle;
+}
+
+void FieldWorld::prefetch_character_model(int model_byte) {
+  if (model_byte < 0 || model_byte >= 0x100 || !files_ || char_models_.contains(model_byte) || char_prefetch_.contains(model_byte)) return;
+  std::string folder = model_folder(model_byte);
+  if (folder.empty()) return;
+  char_prefetch_[model_byte] = std::async(std::launch::async, [files = files_, folder = std::move(folder)]() -> std::optional<PrefetchedCharacter> {
+    const unsigned generation = render::texture_registry::generation();
+    std::optional<assets::ModelAsset> asset = read_character_model(*files, folder);
+    if (!asset) return std::nullopt;
+    render::ModelUploads uploads = render::prepare_model_uploads(*asset);
+    return PrefetchedCharacter{std::move(*asset), std::move(uploads), generation};
+  });
+}
+
+void FieldWorld::drop_character_prefetches() {
+  for (auto& [model_byte, job] : char_prefetch_)
+    if (job.valid()) job.wait();
+  char_prefetch_.clear();
 }
 
 // ------------------------------------------------------------------------------------------------ room loading

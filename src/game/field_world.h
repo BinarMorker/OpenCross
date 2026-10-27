@@ -15,6 +15,7 @@
 //   SET_ANIMATION n -> s4 clip n (n < 0x80) or ex clip n - 0x80.
 #include <array>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
@@ -625,6 +626,10 @@ class FieldWorld final : public script::FieldHost {
   // set_art_mode on a loaded room: art from the other file set, simulation state untouched
   void swap_art();
   std::shared_ptr<ModelHandle> character_model(int char_id);
+  // The CPU half of character_model (files, import, texture mods, bled uploads) for a model byte not loaded yet, on a worker: a party
+  // member shown in another body (Viper Manor's uniforms) gets its own model ready for the script that switches it back.
+  void prefetch_character_model(int model_byte);
+  void drop_character_prefetches();
   void bind_party_entity(int slot);
   void rebind_party();
   void place_party_spawn(int slot);
@@ -728,6 +733,13 @@ class FieldWorld final : public script::FieldHost {
   std::vector<bool> room_model_tried_;
   // by character id, kept across rooms
   std::map<int, std::shared_ptr<ModelHandle>> char_models_;
+  struct PrefetchedCharacter {
+    assets::ModelAsset asset;
+    render::ModelUploads uploads;
+    unsigned generation = 0;
+  };
+  // by model byte: prefetch_character_model's workers, taken by character_model
+  std::map<int, std::future<std::optional<PrefetchedCharacter>>> char_prefetch_;
   std::array<int, 3> party_ent_{-1, -1, -1};
   // character id per party slot (cache of gs_->party())
   std::vector<int> party_chars_{0};

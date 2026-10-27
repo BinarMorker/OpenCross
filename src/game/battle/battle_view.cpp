@@ -396,6 +396,7 @@ void BattleView::run_load_step(LoadJob& job) {
   if (const char* env = std::getenv("OC_BATTLE_FIELD"); env && *env) bg = std::atoi(env);
   const std::string base = std::format("battle/bg/bg_{:02d}", bg);
   log::info("battle: scene {} stage bg_{:02d} (operand {}, scene default bg_{:02d})", scene_id, bg, opt.battlefield, scene_bg);
+    prefetch_unit_models();
     job.base = base;
     return;
   }
@@ -472,6 +473,10 @@ void BattleView::run_load_step(LoadJob& job) {
     return;
   }
   if (job.step >= kUnits0 && job.step < kFonts) {
+    if (!job.block && !model_cache_.prefetch_ready()) {
+      job.wait = true;
+      return;
+    }
     const int unit_id = job.step - kUnits0;
     const battle::Unit& unit = battle_->unit(unit_id);
     Visual& visual = vis_[static_cast<size_t>(unit_id)];
@@ -496,6 +501,27 @@ void BattleView::run_load_step(LoadJob& job) {
   }
   fonts_.prepare(slot, face == 0 ? U"●" : face == 1 ? U"♂♀" : U"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÉé ");
   if (face == 2) job.done = true;
+}
+
+// The models and weapons bind_unit_model will load for the battle's units, read and decoded on a worker while the stage loads.
+void BattleView::prefetch_unit_models() {
+  std::vector<std::string> stems;
+  std::vector<std::pair<std::string, int>> weapon_parts;
+  for (int unit_id = 0; unit_id < battle::kUnits; ++unit_id) {
+    const battle::Unit& unit = battle_->unit(unit_id);
+    if (!unit.present) continue;
+    stems.push_back(unit_model_stem(unit));
+    if (unit.pc && unit.form < 0) {
+      if (const data::GearRec* gear = tables_->gear_rec(unit.eq.weapon_id)) weapon_parts.emplace_back(ModelCache::player_weapon_bin(unit.src_id), gear->tier() & 0xF);
+      continue;
+    }
+    const data::StatRec& er = tables_->enemies[static_cast<size_t>(unit.form >= 0 ? unit.form : unit.src_id)];
+    if (er.weapon() != 0 && er.weapon_model() != 0) {
+      const data::GearRec* wg = tables_->gear_rec(er.weapon());
+      weapon_parts.emplace_back(ModelCache::enemy_weapon_bin(static_cast<int>(er.model())), wg ? (wg->tier() & 0x7F) : 0);
+    }
+  }
+  model_cache_.prefetch(*vfs_, std::move(stems), std::move(weapon_parts));
 }
 
 // One unit's model, scripts, sound group, weapon mesh and extents from its Unit record: the load step, and a Dopplegang form change.

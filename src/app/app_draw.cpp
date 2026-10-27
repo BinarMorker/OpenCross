@@ -240,12 +240,6 @@ void App::begin_scene_target(SceneFrame& sf) {
   const float vw = sf.vw, vh = sf.vh;
   const float rscale = config.render_scale;
   sf.rscale = rscale;
-  // w x h times rscale, at most 16384 on a side (the usual GPU limit).
-  auto scaled_extent = [&](float w, float h, u32& tw, u32& th) {
-    const float fit_scale = std::min({rscale, 16384.0f / std::max(w, 1.0f), 16384.0f / std::max(h, 1.0f)});
-    tw = static_cast<u32>(std::max(1.0f, std::round(w * fit_scale)));
-    th = static_cast<u32>(std::max(1.0f, std::round(h * fit_scale)));
-  };
   // The frame the 3D pictures are drawn into: the window, or scene_rt.
   sf.pf = frame;
   sf.pw = vw;
@@ -253,6 +247,12 @@ void App::begin_scene_target(SceneFrame& sf) {
   // The jolt / encounter feed-back passes work on the finished picture: with Ps1Res the PS1-resolution field is scaled up into the target.
   const game::FieldWorld::JoltView jolt = sf.field_shown && !sf.title_sea ? world.jolt_view() : game::FieldWorld::JoltView{};
   sf.jolt = jolt;
+  // Made ahead once per window size (a failed creation is not retried every frame; the passes try again when they run).
+  if (sf.field_shown && !sf.title_sea && (frame.extent.width != transition_w || frame.extent.height != transition_h)) {
+    transition_w = frame.extent.width;
+    transition_h = frame.extent.height;
+    ensure_transition_targets(transition_w, transition_h);
+  }
   if (!jolt.on) {
     jolt_have = false;
     jolt_last_n = -1;
@@ -264,14 +264,14 @@ void App::begin_scene_target(SceneFrame& sf) {
     jolt_have = jolt_last_n >= 0;
     jolt_last_n = jolt.n;
   }
-  render::RenderTarget& srt = jolt.on ? jolt_rt[jolt_cur] : scene_rt;
-  render::TexRef& sset = jolt.on ? jolt_set[jolt_cur] : scene_set;
+  render::RenderTarget& srt = scene_rt;
+  render::TexRef& sset = scene_set;
   sf.srt = &srt;
   sf.sset = &sset;
   bool scene_scaled = jolt.on || (rscale != 1.0f && ((sf.title_sea && !sf.title_lowres) || (sf.field_shown && !sf.field_lowres) || (sf.battle_3d && !sf.battle_lowres)));
   if (scene_scaled) {
     u32 tw = 0, th = 0;
-    scaled_extent(vw, vh, tw, th);
+    scene_extent(vw, vh, tw, th);
     scene_scaled = jolt.on || (tw != frame.extent.width || th != frame.extent.height);
     if (scene_scaled && (!srt.valid() || srt.width() != tw || srt.height() != th || !sset)) {
       sset = {};
@@ -289,6 +289,13 @@ void App::begin_scene_target(SceneFrame& sf) {
     }
   }
   sf.scene_scaled = scene_scaled;
+}
+
+// w x h times the render scale, at most 16384 on a side (the usual GPU limit): the scene target's size.
+void App::scene_extent(float w, float h, u32& tw, u32& th) const {
+  const float fit_scale = std::min({config.render_scale, 16384.0f / std::max(w, 1.0f), 16384.0f / std::max(h, 1.0f)});
+  tw = static_cast<u32>(std::max(1.0f, std::round(w * fit_scale)));
+  th = static_cast<u32>(std::max(1.0f, std::round(h * fit_scale)));
 }
 
 void App::draw_battle_picture(const SceneFrame& sf) {

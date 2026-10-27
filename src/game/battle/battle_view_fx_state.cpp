@@ -371,33 +371,51 @@ bool BattleView::fx_warp_begin(const render::Frame& frame) {
     hand_carry_ = {};
   }
   if ((!fx_warp_.on && !rde_hand_) || !ctx_ || frame.extent.width == 0 || frame.extent.height == 0) return false;
-  if (!fx_warp_rt_.valid() || fx_warp_rt_.width() != frame.extent.width || fx_warp_rt_.height() != frame.extent.height) {
-    if (fx_warp_rt_.valid()) {
-      fx_warp_set_ = {};
-      fx_warp_rt_.destroy();
-    }
-    if (!fx_warp_rt_.create(*ctx_, frame.extent.width, frame.extent.height)) return false;
-    fx_warp_set_ = fx_warp_rt_.ref(nearest_);
-    if (!fx_warp_set_) {
-      fx_warp_rt_.destroy();
-      return false;
-    }
-  }
+  if (!fx_warp_ensure(frame.extent.width, frame.extent.height)) return false;
   ctx_->begin_target(fx_warp_rt_, frame, fx_warp_frame_);
+  return true;
+}
+
+bool BattleView::fx_warp_ensure(u32 w, u32 h) {
+  if (fx_warp_rt_.valid() && fx_warp_rt_.width() == w && fx_warp_rt_.height() == h) return true;
+  if (fx_warp_rt_.valid()) {
+    fx_warp_set_ = {};
+    fx_warp_rt_.destroy();
+  }
+  if (!fx_warp_rt_.create(*ctx_, w, h)) return false;
+  fx_warp_set_ = fx_warp_rt_.ref(nearest_);
+  if (!fx_warp_set_) {
+    fx_warp_rt_.destroy();
+    return false;
+  }
   return true;
 }
 
 // The two feed-back targets (frame size, bilinear: the zoom resamples the previous output). False = no feed-back (the strips then sample the scene).
 bool BattleView::fx_acc_ensure(const render::Frame& frame) {
-  for (int i = 0; i < 2; ++i) {
-    if (fx_acc_rt_[i].valid() && fx_acc_rt_[i].width() == frame.extent.width && fx_acc_rt_[i].height() == frame.extent.height && fx_acc_set_[i]) continue;
-    fx_acc_set_[i] = {};
-    fx_acc_have_ = false;
-    fx_acc_rt_[i].destroy();
-    if (!fx_acc_rt_[i].create(*ctx_, frame.extent.width, frame.extent.height)) return false;
-    fx_acc_set_[i] = fx_acc_rt_[i].ref(linear_);
-    if (!fx_acc_set_[i]) return false;
-  }
+  for (int i = 0; i < 2; ++i)
+    if (!fx_acc_ensure_one(i, frame.extent.width, frame.extent.height)) return false;
+  return true;
+}
+
+bool BattleView::fx_acc_ensure_one(int i, u32 w, u32 h) {
+  if (fx_acc_rt_[i].valid() && fx_acc_rt_[i].width() == w && fx_acc_rt_[i].height() == h && fx_acc_set_[i]) return true;
+  fx_acc_set_[i] = {};
+  fx_acc_have_ = false;
+  fx_acc_rt_[i].destroy();
+  if (!fx_acc_rt_[i].create(*ctx_, w, h)) return false;
+  fx_acc_set_[i] = fx_acc_rt_[i].ref(linear_);
+  return static_cast<bool>(fx_acc_set_[i]);
+}
+
+// Makes one missing warp / feed-back target of the battle picture's size per call (each is a full-size colour + depth image): run behind
+// the encounter's white hold, the hand-over's first frame then allocates nothing. True when they are all there (or one cannot be made).
+bool BattleView::prepare_fx_targets(u32 w, u32 h) {
+  if (!ctx_ || w == 0 || h == 0) return true;
+  const auto matches = [&](const render::RenderTarget& rt) { return rt.valid() && rt.width() == w && rt.height() == h; };
+  if (!matches(fx_warp_rt_)) return !fx_warp_ensure(w, h);
+  for (int i = 0; i < 2; ++i)
+    if (!matches(fx_acc_rt_[i])) return !fx_acc_ensure_one(i, w, h);
   return true;
 }
 

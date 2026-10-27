@@ -87,7 +87,7 @@ struct SceneFrame {
   float pw = 0, ph = 0;
   // [Video] RenderScale.
   float rscale = 1.0f;
-  // The scene target of this frame when scene_scaled: the jolt ping-pong target or scene_rt.
+  // The scene target of this frame when scene_scaled (scene_rt).
   bool scene_scaled = false;
   render::RenderTarget* srt = nullptr;
   render::TexRef* sset = nullptr;
@@ -202,6 +202,10 @@ class App {
   void feedback_hold_pass(const SceneFrame& sf, const FeedbackRect& rect, const game::FieldWorld::TransitionStrips& ts);
   void feedback_field_pass(const SceneFrame& sf, const FeedbackRect& rect);
   void jolt_paste(const SceneFrame& sf);
+  void keep_jolt_picture(const SceneFrame& sf);
+  bool ensure_transition_targets(u32 w, u32 h);
+  void scene_extent(float w, float h, u32& tw, u32& th) const;
+  void draw_scene_copy(const SceneFrame& sf, const render::Frame& target, const render::TexRef& scene);
 
   // ---- the session ------------------------------------------------------------------------------------------------------------
   std::filesystem::path exe;
@@ -246,10 +250,13 @@ class App {
   // [Video] RenderScale: the window-resolution 3D pictures at the scale x the window size (created on first use, follows the size).
   render::RenderTarget scene_rt;
   render::TexRef scene_set;
-  // Damage-floor blur (FieldWorld::jolt_view): while it runs the field picture is drawn into one of two window-sized targets and the
-  // other one (the previous picture) is blended over it at 50 %. jolt_rt[1 - jolt_cur] holds the previous picture when jolt_have is set.
+  // Damage-floor blur (FieldWorld::jolt_view): while it runs the field picture (scene_rt) is also kept in one of two window-sized
+  // targets, and the other one (the previous picture) is blended over it at 50 %. jolt_rt[1 - jolt_cur] holds the previous picture when
+  // jolt_have is set. Window-sized, whatever the render scale: the transitions allocate nothing of the scene target's size.
   render::RenderTarget jolt_rt[2];
   render::TexRef jolt_set[2] = {};
+  // The window size ensure_transition_targets last ran for ahead of a transition.
+  u32 transition_w = 0, transition_h = 0;
   int jolt_cur = 0;
   bool jolt_have = false;
   int jolt_last_n = -1;

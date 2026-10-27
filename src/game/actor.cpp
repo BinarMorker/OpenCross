@@ -70,10 +70,14 @@ int exp_blend_ticks() {
 }  // namespace
 
 std::shared_ptr<ModelHandle> Actor::make_model(render::MeshPipeline& pipeline, assets::ModelAsset asset) {
+  render::resolve_model_textures(asset);
+  return make_resolved_model(pipeline, std::move(asset));
+}
+
+std::shared_ptr<ModelHandle> Actor::make_resolved_model(render::MeshPipeline& pipeline, assets::ModelAsset asset, const render::ModelUploads* uploads) {
   auto handle = std::make_shared<ModelHandle>();
   handle->asset = std::move(asset);
-  render::resolve_model_textures(handle->asset);
-  handle->gpu = pipeline.create_model(handle->asset);
+  handle->gpu = pipeline.create_model(handle->asset, uploads);
   if (!handle->gpu) return nullptr;
   return handle;
 }

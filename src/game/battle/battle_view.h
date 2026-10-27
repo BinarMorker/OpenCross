@@ -104,6 +104,7 @@ class BattleView {
   bool begin_load(int scene_id, std::vector<battle::PartyMember> party, const StartOptions& opt);
   // True when the load is complete.
   bool load_step(double budget_ms);
+  bool prepare_fx_targets(u32 w, u32 h);
   bool load_complete() const { return !load_ || load_->done; }
   bool loading() const { return load_ && !load_->done; }
   void prefetch_fonts();
@@ -355,6 +356,7 @@ class BattleView {
 
   // setup
   std::shared_ptr<ModelHandle> load_model_for(const std::string& dir_stem) { return model_cache_.load_model_for(*vfs_, *meshes_, dir_stem); }
+  void prefetch_unit_models();
   std::shared_ptr<ModelHandle> load_weapon(int char_id, int part) { return model_cache_.load_weapon(*vfs_, *meshes_, char_id, part); }
   std::shared_ptr<ModelHandle> load_enemy_weapon(int model, int part) { return model_cache_.load_enemy_weapon(*vfs_, *meshes_, model, part); }
   int weapon_digit(const battle::Unit& unit) const { return ModelCache::weapon_digit(tables_, unit); }
@@ -1181,6 +1183,7 @@ class BattleView {
   void fx_warp_tick();
   // The scene goes into fx_warp_rt_ (false = warp off); fx_warp_end: the copy + the warped strips onto `frame`.
   bool fx_warp_begin(const render::Frame& frame);
+  bool fx_warp_ensure(u32 w, u32 h);
   void fx_warp_end(const render::Frame& frame, const render::Letterbox& lb);
   render::RenderTarget fx_warp_rt_;
   render::TexRef fx_warp_set_;
@@ -1192,6 +1195,7 @@ class BattleView {
   int fx_acc_cur_ = 0, fx_acc_tick_ = -1;
   bool fx_acc_have_ = false;
   bool fx_acc_ensure(const render::Frame& frame);
+  bool fx_acc_ensure_one(int i, u32 w, u32 h);
   // The field's last output (host-owned); the previous output of the hand-over ticks. hand_tick_ = ticks since the battle became visible, -1
   // = no hand-over blend; kHandTicks = length of the field -> battle blend (fx_warp_end).
   render::TexRef hand_carry_;

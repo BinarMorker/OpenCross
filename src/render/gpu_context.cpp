@@ -199,6 +199,24 @@ void GpuContext::track_multisampled(RenderTarget* target, bool tracked) {
   if (tracked) multisampled_targets_.push_back(target);
 }
 
+void GpuContext::release_texture(SDL_GPUTexture* texture, u64 bytes) {
+  if (!texture || !device_) return;
+  std::lock_guard lock(release_mutex_);
+  release_queue_.push_back({texture, bytes});
+}
+
+void GpuContext::release_queued(u64 bytes, size_t count) {
+  std::lock_guard lock(release_mutex_);
+  u64 freed = 0;
+  size_t released = 0;
+  while (released < release_queue_.size() && (released == 0 || (released < count && freed + release_queue_[released].bytes <= bytes))) {
+    SDL_ReleaseGPUTexture(device_, release_queue_[released].texture);
+    freed += release_queue_[released].bytes;
+    ++released;
+  }
+  release_queue_.erase(release_queue_.begin(), release_queue_.begin() + static_cast<std::ptrdiff_t>(released));
+}
+
 void GpuContext::resolve(const PassImages& images) {
   if (!images.resolve) return;
   SDL_GPUColorTargetInfo color_info{};
@@ -519,11 +537,13 @@ void GpuContext::end_frame() {
   cmd_ = nullptr;
   swapchain_image_ = nullptr;
   frame_index_ = (frame_index_ + 1) % kFramesInFlight;
+  release_queued(kReleaseBytesPerFrame, kReleaseTexturesPerFrame);
 }
 
 void GpuContext::shutdown() {
   if (!device_) return;
   SDL_WaitForGPUIdle(device_);
+  release_queued(~0ull, ~size_t{0});
   if (upload_cmd_) SDL_CancelGPUCommandBuffer(upload_cmd_);
   upload_cmd_ = nullptr;
   if (band_staging_) SDL_ReleaseGPUTransferBuffer(device_, band_staging_);

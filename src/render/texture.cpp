@@ -46,6 +46,7 @@ bool decode_image(ByteSpan file, DecodedImage& out) {
 
 bool Texture::create_image(GpuContext& ctx, u32 width, u32 height, TextureFormat format, bool mips) {
   destroy();
+  ctx_ = &ctx;
   device_ = ctx.device();
   width_ = width;
   height_ = height;
@@ -60,6 +61,7 @@ bool Texture::create_image(GpuContext& ctx, u32 width, u32 height, TextureFormat
   info.num_levels = mips ? static_cast<u32>(std::bit_width(std::max(width, height))) : 1;
   info.sample_count = SDL_GPU_SAMPLECOUNT_1;
   texture_ = SDL_CreateGPUTexture(device_, &info);
+  bytes_ = u64{width} * height * bytes_per_pixel_ * (mips ? 4 : 3) / 3;
   if (!texture_) {
     log::error("texture {}x{}: SDL_CreateGPUTexture: {}", width, height, SDL_GetError());
     destroy();
@@ -180,14 +182,14 @@ bool Texture::update(GpuContext& ctx, const void* pixels) {
 }
 
 void Texture::destroy() {
-  if (device_) {
-    if (staging_) SDL_ReleaseGPUTransferBuffer(device_, staging_);
-    if (texture_) SDL_ReleaseGPUTexture(device_, texture_);
-  }
+  if (device_ && staging_) SDL_ReleaseGPUTransferBuffer(device_, staging_);
+  if (ctx_ && texture_) ctx_->release_texture(texture_, bytes_);
   staging_ = nullptr;
   texture_ = nullptr;
   device_ = nullptr;
+  ctx_ = nullptr;
   width_ = height_ = 0;
+  bytes_ = 0;
 }
 
 bool Sampler::create(GpuContext& ctx, bool linear, bool repeat) {
