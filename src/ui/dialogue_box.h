@@ -100,6 +100,15 @@ class DialogueBox {
   static std::vector<int> guest_choice_lines(const import::Message& ps1);
   static int map_choice_line(int translated_first, int guest_first, int row);
   void set_guest_choice_lines(std::vector<int> lines) { guest_lines_ = std::move(lines); }
+  // Number entry ({input(n)}): n digit glyphs of the message, leftmost first. start_digits fills them with the last n decimal digits
+  // of `value` and puts the cursor on the rightmost one (no-op for a message without an entry). The entry takes input once its first
+  // digit is shown; move_digit adds `step` to the cursor digit (wrapping 9 <-> 0) and moves the cursor by `shift` (wrapping at both
+  // ends). The cursor digit is drawn in colour 6 (orange). digit_value = the digits read as a decimal number.
+  void start_digits(int value);
+  bool digit_entry() const;
+  void move_digit(int step, int shift);
+  int digit_value() const;
+  int digit_cursor() const { return digit_cursor_; }
   // choice_line() while the list is up and takes the pick, else -1.
   int picking_line() const;
   // The translated line the hand / highlight sits on now (line_first + cursor, mapped).
@@ -199,6 +208,9 @@ class DialogueBox {
   std::vector<int> guest_lines_;
   // E1 seen for this message: choice-indent layout.
   bool choice_mode_ = false;
+  // Number entry: one value 0..9 per digit glyph (empty: the message has none) and the cursor digit.
+  std::vector<int> digits_;
+  int digit_cursor_ = 0;
 };
 
 // Self-contained dialogue viewer: loads fonts and tables, shows (room, message) pairs. Wire-up in the app (app/app.h):
@@ -240,6 +252,10 @@ class DialogueDemo {
   int chosen() const;
   // The message line the hand is on while a choice list takes the pick (-1 none).
   int picking_line() const;
+  // Number entry ({input(n)}) of the open message, started from script variable 0x18 (the digit-entry result) at show(); while it takes
+  // input, update() writes its value back to that variable every frame. See DialogueBox::start_digits.
+  bool digit_entry() const;
+  void move_digit(int step, int shift);
   void set_portrait(int id);
   void set_portrait_flags(bool on, bool left);
   void set_skin_byte(int config_byte);

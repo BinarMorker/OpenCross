@@ -245,8 +245,11 @@ bool Battle::start(std::vector<PartyMember> party, int scene, const BattleOption
   outcome_ = Outcome::Ongoing;
   result_code_ = -1;
   attacked_.clear();
+  kill_script_run_ = {};
   field_state_ = 0;
   trap_ = {};
+  trap_state_ = 0;
+  trap_before_ = {};
   ring_repainted_ = fizzled_ = false;
   vary_innate_colour_ = 0;
   rewards_ = {};
@@ -497,7 +500,7 @@ int Battle::seq_colour(int element_id) const {
   if (element_id < 0 || element_id >= static_cast<int>(tables_.elements.size())) return -1;
   if (tables_.elements[static_cast<size_t>(element_id)].b(0) & 0x80) return -1;
   const u8 colour_mask = element_colour(element_id) & 0xFC;
-  if (colour_mask == 0) return -1;
+  if (colour_mask == 0) return 0;
   if (colour_mask == 0xFC) return 6;
   return data::colour_index_of_bit(colour_mask);
 }
@@ -522,13 +525,31 @@ void Battle::kill(int unit_index) {
   victim.guard = false;
   victim.defending = false;
   say(std::format("  {} is knocked out", victim.name));
-  if (!victim.pc) {
-    std::vector<EnemyAction> plan;
-    brain_.on_killed(*this, unit_index, rng_, plan);
-    if (!plan.empty()) {
-      death_plans_.emplace_back(unit_index, std::move(plan));
-      death_pending_[static_cast<size_t>(unit_index)] = true;
+  if (!victim.pc) run_kill_script(unit_index);
+}
+
+void Battle::run_kill_script(int unit_index) {
+  kill_script_run_[static_cast<size_t>(unit_index)] = true;
+  std::vector<EnemyAction> plan;
+  brain_.on_killed(*this, unit_index, rng_, plan);
+  if (!plan.empty()) {
+    death_plans_.emplace_back(unit_index, std::move(plan));
+    death_pending_[static_cast<size_t>(unit_index)] = true;
+  }
+}
+
+// The kill script starts for every enemy at HP 0 (or KO'd), however it got there: a battle script can write the HP to 0 itself.
+void Battle::scan_kills() {
+  for (int i = kPcSlots; i < kUnits && outcome_ == Outcome::Ongoing; ++i) {
+    const Unit& unit = units_[static_cast<size_t>(i)];
+    if (!unit.present) continue;
+    if (unit.hp > 0 && !(unit.lo & st::kKO)) {
+      kill_script_run_[static_cast<size_t>(i)] = false;
+      continue;
     }
+    if (kill_script_run_[static_cast<size_t>(i)]) continue;
+    say(std::format("  {} is knocked out", unit.name));
+    run_kill_script(i);
   }
 }
 
@@ -565,6 +586,7 @@ void Battle::damage_unit(int actor, int target, int value, int code) {
 // its script ends, so the plan runs without the actor's alive test and the unit keeps blocking the victory test (death_pending_) until
 // it has been cast.
 void Battle::run_death_plans() {
+  scan_kills();
   for (int guard = 0; guard < 16 && !death_plans_.empty() && outcome_ == Outcome::Ongoing; ++guard) {
     auto [unit, plan] = std::move(death_plans_.front());
     death_plans_.erase(death_plans_.begin());
@@ -1010,7 +1032,11 @@ void Battle::do_element(int actor, int element_id, int row, int target, bool pus
       break;
     }
     case 5: {  // element trap; the caster's side waits for element record +0xE cast by the other side
-      trap_[caster.pc ? 0 : 1] = element.rd16(0xE);
+      int& trap = trap_[caster.pc ? 0 : 1];
+      if (trap != element.rd16(0xE)) {
+        trap = element.rd16(0xE);
+        trap_state_ = 2;
+      }
       say(std::format("{} sets an element trap for {}", caster.name, element.rd16(0xE)));
       code_override = 0;
       break;
@@ -1277,7 +1303,7 @@ void Battle::do_element(int actor, int element_id, int row, int target, bool pus
   if (log_.size() > log0) ev.text = log_[log0];
   note_event(ev);
   if (ring_done) ring_repainted_ = true;
-  if (push_ring) finish_ring(element, ce);
+  if (push_ring) finish_ring(element, ring_colour_of(element_colour(element_id)));
 }
 
 void Battle::cast_element(int actor, int element_id, int row, int target) {
@@ -1292,8 +1318,8 @@ void Battle::cast_element(int actor, int element_id, int row, int target) {
     Unit& caster = units_[static_cast<size_t>(actor)];
     int& trap = trap_[caster.pc ? 1 : 0];
     if (trap != 0 && trap == element_id) {
-      trap = 0;
       fizzled_ = true;
+      trap_state_ = caster.pc ? 4 : 3;
       if (caster.pc) say(std::format("{} casts {}: caught in the element trap, the element is lost", caster.name, tables_.element_name(element_id)));
       else {
         // The PC side's trap takes the element into the stock.
@@ -1311,6 +1337,7 @@ void Battle::cast_element(int actor, int element_id, int row, int target) {
       ev.hp_before = ev.hp_after = units_[static_cast<size_t>(target)].hp;
       ev.text = log_.back();
       note_event(ev);
+      trap = 0;
       return;
     }
   }
@@ -1338,7 +1365,7 @@ void Battle::cast_element(int actor, int element_id, int row, int target) {
     do_element(actor, element_id, row, target, true);
     return;
   }
-  finish_ring(element, data::colour_index_of_bit(element_colour(element_id)));
+  finish_ring(element, ring_colour_of(element_colour(element_id)));
 }
 
 // ------------------------------------------------------------------------------------------------ per-action upkeep

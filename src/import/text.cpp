@@ -464,7 +464,6 @@ Message flatten(const Message& message, const TextContext& ctx) {
       case TokKind::HideName: hide = true; break;
       case TokKind::Suffix:
       case TokKind::Accent:
-      case TokKind::Input:
         // No display form.
         break;
       default: builder.push(token.kind, token.arg, token.arg2); break;

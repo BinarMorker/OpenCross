@@ -1,0 +1,29 @@
+# El Nido Triangle by boat: Home World kur_a01f (443, entered from wld_a00 ent 20 with SET_NEXT_ROOM 443, 0), Another
+# World kur_b01f (444, from wld_b00). The PCs are attached (D6) to ent 4, the boat, whose UPDATE follows the leader
+# (44 0 LEADER): the leader walks by the stick and the boat chases it. Attaching must not pin the leader's own
+# position to the boat, or neither ever moves.
+0 wait idle 600
+- request party_add 1
+- request party_add 2
+- load kur_a01f 0
+- wait room kur_a01f 300
+- wait idle 600
+- mark ent 4
+- key down up
+- wait 90
+- key up up
+- wait 30
+- assert moved 4 150
+- screenshot triangle_boat_home.png
+- wait 5
+- load kur_b01f 0
+- wait room kur_b01f 300
+- wait idle 600
+- mark ent 4
+- key down up
+- wait 90
+- key up up
+- wait 30
+- assert moved 4 150
+- dump
+- quit

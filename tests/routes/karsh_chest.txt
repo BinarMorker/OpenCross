@@ -1,0 +1,27 @@
+# Karsh's chest (jac_b09i entity 5, scenario <= 52): each action runs Karsh's comment script (RUN_SCRIPT_BLOCKING ent4 0x24..)
+# and counts $room[1] (var 0x402): from 7 the count is shown through {num(0)} (var 0x1A); at 20 Karsh gives the chest up (it opens
+# and hides itself with SET_VISIBLE 0 inside its own ON_ACTION); the last wait idle needs the controls back.
+0 wait 5
+- load jac_b09i 0
+- wait room jac_b09i 300
+- wait idle 600
+- wait 30
+- walk_ent 5 140 3000
+- put 0 895
+- wait 10
+- tap up 2
+- wait 10
+- set var 0x402 19
+- action
+- wait text 19 times
+- skip
+- wait idle 600
+- action
+- wait text take it
+- skip
+- wait text found
+- skip
+- wait idle 900
+- assert var 0x402 20
+- assert ent 5 shown 0
+- quit

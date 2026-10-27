@@ -421,7 +421,11 @@ bool Route::run(const Cmd& cmd, const RouteState& st, platform::Input&, RouteOut
     }
     // Phase 2: confirm until the dialogue closes.
     hold(SDL_SCANCODE_DOWN, false);
-    if (!st.dialogue) return true;
+    // The confirm key is released on the way out, so the next command's press is an edge again.
+    if (!st.dialogue) {
+      hold(SDL_SCANCODE_RETURN, false);
+      return true;
+    }
     if (st.tick - aux_ >= 12) {
       hold(SDL_SCANCODE_RETURN, true);
       aux_ = st.tick;

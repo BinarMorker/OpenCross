@@ -213,7 +213,8 @@ class Vm {
   void set_skip_delays(bool skip) { skip_delays_ = skip; }
   // Virtual time (ticks of the 2D delay counter) and the settle pass: after a slot run every entity's idle loop (slot 1: the other units'
   // reactions to what the slot just did, e.g. the Boxer Boys' var 0x84 -> dialogue) is ticked until all entities are back at the start of
-  // their idle script with nothing armed, or `max_ticks`. False = still busy at the cap.
+  // their idle script with nothing armed, or `max_ticks`. False = still busy at the cap. A tick in which an entity changed a var that an
+  // earlier entity had already read in that tick does not settle: the reader sees the new value only on the next tick.
   u32 vtime() const { return vtime_; }
   bool quiescent() const;
   bool settle(int max_ticks = 1500);
@@ -292,6 +293,12 @@ class Vm {
   const Module& mod_;
   Host& host_;
   std::vector<u16> vars_;
+  // Per var: the tick of its last script read and the lowest entity that read it in that tick; the script writes of the op being run
+  // (var index, value before); set when a write changed a var an earlier entity read this tick.
+  std::vector<u32> read_tick_;
+  std::vector<u8> read_entity_;
+  std::vector<std::pair<size_t, u16>> writes_;
+  bool stale_read_ = false;
   std::vector<Ctx> ctx_;
   std::array<std::vector<QueuedAttack>, kUnits> queue_{};
   // Filled by a type-2 queue_attack, kept until the next.

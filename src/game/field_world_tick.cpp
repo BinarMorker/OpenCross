@@ -223,11 +223,6 @@ void FieldWorld::step_visuals() {
     ent_state.actor.local_yaw = static_cast<float>(script_ent.axis[1]);
     ent_state.actor.roll = static_cast<float>(script_ent.axis[2]);
     ent_state.actor.anim_rate = script_ent.v10e ? static_cast<float>(static_cast<s16>(script_ent.v10e)) / 4096.0f : 1.0f;
-    if (ent_state.attach_to >= 0 && ent_state.attach_to < static_cast<int>(ents_.size())) {
-      const ActorPose& parent_pose = ents_[static_cast<size_t>(ent_state.attach_to)].actor.current();
-      ent_state.actor.set_position(walk, parent_pose.x, parent_pose.z, false, true);
-      ent_state.actor.set_height(parent_pose.y, false);
-    }
     {
       const bool idle_ok = ent_state.pc_slot >= 0 && !ent_state.motion.active && (i == player ? controls_free() : ent_state.updating);
       if (idle_ok && !ent_state.actor.auto_idle) ent_state.actor.seed_rng(static_cast<u32>(tick_count_) + static_cast<u32>(i) * 977u);
@@ -364,7 +359,10 @@ void FieldWorld::sweep_talk(int ticks) {
           reload = true;
         }
       }
-      if (!reload && pass == 0 && (vm_.entity(ent).flags270 & script::flag270::kActionRunning)) {
+      const auto& records = vm_.entity(ent).rec;
+      const bool action_live =
+          std::any_of(records.begin(), records.end(), [](const script::ScriptRecord& record) { return record.id == 2 && record.state != script::kRecIdle; });
+      if (!reload && pass == 0 && action_live) {
         ++unfinished;
         log::info("sweep talk: room {} ent {} ON_ACTION still running after {} ticks:\n{}", room, ent, ticks, vm_.describe_records());
       }
@@ -541,7 +539,10 @@ std::string FieldWorld::layer_report(std::string* notes) const {
 void FieldWorld::update(const platform::Input& in, int ticks) {
   if (!initialised_) return;
   // ---- input snapshot
-  auto [confirm, up, down] = input_.sample(in);
+  auto [confirm, up, down, left, right, repeat] = input_.sample(in, ticks);
+  // Number entry: up / down step the cursor digit, left / right move the cursor; a held direction auto-repeats.
+  const auto stepping = [&](bool pressed, u32 bit) { return pressed || (repeat & bit) != 0 ? 1 : 0; };
+  const int digit_step = stepping(up, 1) - stepping(down, 4), digit_shift = stepping(right, 2) - stepping(left, 8);
 
   if (debug_.auto_walk && debug_.auto_confirm > 0 && any_window_open() && tick_count_ % static_cast<u64>(debug_.auto_confirm) < static_cast<u64>(std::max(ticks, 1))) confirm = true;
   if (modal_window_open()) {
@@ -549,12 +550,14 @@ void FieldWorld::update(const platform::Input& in, int ticks) {
     if (dialogue_.is_open() && !label_) {
       if (up) dialogue_.move_choice(-1);
       if (down) dialogue_.move_choice(1);
+      if (dialogue_.digit_entry() && (digit_step != 0 || digit_shift != 0)) dialogue_.move_digit(digit_step, digit_shift);
       if (confirm) dialogue_.confirm();
     }
     for (auto& window : extra_win_) {
       if (!window.box || !window.box->is_open() || window.label) continue;
       if (up) window.box->move_choice(-1);
       if (down) window.box->move_choice(1);
+      if (window.box->digit_entry() && (digit_step != 0 || digit_shift != 0)) window.box->move_digit(digit_step, digit_shift);
       if (confirm) window.box->confirm();
     }
     input_.action_pending = false;

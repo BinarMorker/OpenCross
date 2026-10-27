@@ -1,0 +1,33 @@
+# Two-digit number entry: the Termina churro vendor (tel_b02f entity 6, before scenario 152). "Too much" leads to
+# "How much would you charge for it? 00G"; the cursor starts on the right digit, left moves it to the tens, up x6 gives 60
+# (variable 0x18 = 60) and 50..89 is answered with "OK, then I'll lower the price".
+0 wait 5
+- load tel_b02f 0
+- wait room tel_b02f 300
+- wait idle 600
+- wait 30
+- walk_ent 6 120 3000
+- wait 10
+- action
+- choose 0
+- wait text Just as I thought
+- wait 150
+- action
+- wait text How much would you charge
+- wait 60
+- tap left
+- tap up
+- tap up
+- tap up
+- tap up
+- tap up
+- tap up
+- wait 10
+- assert var 0x18 60
+- screenshot dc_01_price60.png
+- action
+- wait text lower the
+- skip
+- wait idle 600
+- assert var 0x18 60
+- quit

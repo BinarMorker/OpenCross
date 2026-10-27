@@ -73,7 +73,7 @@ std::vector<ScriptExtent> Module::scripts() const {
 }
 
 // ------------------------------------------------------------------------------------------------ vm
-Vm::Vm(const Module& module, Host& host) : mod_(module), host_(host), vars_(0x8000, 0) {
+Vm::Vm(const Module& module, Host& host) : mod_(module), host_(host), vars_(0x8000, 0), read_tick_(0x8000, 0), read_entity_(0x8000, 0) {
   ctx_.resize(static_cast<size_t>(module.entities));
   for (int entity = 0; entity < module.entities; ++entity) {
     Ctx& ctx = ctx_[static_cast<size_t>(entity)];
@@ -231,6 +231,7 @@ bool Vm::run_slot(int unit, int slot, std::vector<QueuedAttack>& out, int max_ti
 
 void Vm::tick() {
   ++vtime_;
+  stale_read_ = false;
   refresh_reserved();
   for (int entity = 0; entity < mod_.entities; ++entity)
     if (!ctx_[static_cast<size_t>(entity)].dropped) interpret(entity);
@@ -256,7 +257,7 @@ bool Vm::settle(int max_ticks) {
       Ctx& ctx = ctx_[static_cast<size_t>(entity)];
       if (ctx.a4_wait && !ctx.dropped && ctx.unit >= 0 && ctx.unit < kUnits && !queue_[static_cast<size_t>(ctx.unit)].empty()) queue_[static_cast<size_t>(ctx.unit)].clear();
     }
-    if (quiescent()) return true;
+    if (quiescent() && !stale_read_) return true;
   }
   return false;
 }
@@ -281,7 +282,10 @@ void Vm::do_halt(int entity) {
 void Vm::interpret(int entity) {
   Ctx& ctx = ctx_[static_cast<size_t>(entity)];
   budget_ = 0x40;
-  while (budget_ > 0 && !ctx.dropped) {
+  // Ops 59 / 67 reload the budget, so a loop through one of them only ends at a halt, a block or a stop; retail has no other limit, the
+  // step cap only keeps a runaway script from hanging the engine.
+  int steps = 0;
+  while (budget_ > 0 && !ctx.dropped && ++steps <= 0x10000) {
     --budget_;
     Frame& frame = ctx.frames.back();
     if (frame.pc == 0xFFFF) break;
@@ -305,7 +309,10 @@ void Vm::interpret(int entity) {
     ++op_counts_[op];
     if (oi.conf == '?') unimplemented_.insert(op);
     const Step result = exec(entity, frame, op, adv);
-    if (op == 0x59 || op == 0x66 || op == 0x2C || op == 0x67) budget_ = std::min(budget_, 0x20);
+    for (const auto& [index, before] : writes_)
+      if (vars_[index] != before && read_tick_[index] == vtime_ && read_entity_[index] < entity) stale_read_ = true;
+    writes_.clear();
+    if (op == 0x59 || op == 0x67) budget_ = 0x1F;
     if (result == Step::Next) ctx.frames.back().pc = static_cast<u16>(ctx.frames.back().pc + adv);
     else if (result == Step::Block || result == Step::Stop) break;
   }
@@ -433,7 +440,14 @@ Vm::Step Vm::exec(int entity, Frame& frame, u8 op, int& adv) {
   if (pac_trace) std::fprintf(stderr, "pac: ent %d unit %d slot %d pc %04X op %02X\n", entity, ctx.unit, static_cast<int>(frame.slot), pc, op);
   const u8 spec = mod_.at(pc + static_cast<u32>(op == 0x02 ? 5 : len - 1));
   auto r16 = [&](int off) -> u16 { return static_cast<u16>(mod_.at(pc + static_cast<u32>(off)) | (mod_.at(pc + static_cast<u32>(off) + 1) << 8)); };
-  auto vr = [&](u16 raw) -> int { return static_cast<s16>(vars_[static_cast<size_t>(raw & 0xFFFE) >> 1]); };
+  auto vr = [&](u16 raw) -> int {
+    const size_t index = static_cast<size_t>(raw & 0xFFFE) >> 1;
+    if (read_tick_[index] != vtime_ || read_entity_[index] > entity) {
+      read_tick_[index] = vtime_;
+      read_entity_[index] = static_cast<u8>(entity);
+    }
+    return static_cast<s16>(vars_[index]);
+  };
   // S-mode operand k.
   auto operand_s = [&](int k) -> int {
     const u16 raw = r16(1 + 2 * k);
@@ -444,7 +458,11 @@ Vm::Step Vm::exec(int entity, Frame& frame, u8 op, int& adv) {
     const u16 raw = r16(off);
     return raw & 0x8000 ? raw & 0x7FFF : vr(raw);
   };
-  auto dst = [&](int off) -> u16& { return vars_[static_cast<size_t>(r16(off) & 0xFFFE) >> 1]; };
+  auto dst = [&](int off) -> u16& {
+    const size_t index = static_cast<size_t>(r16(off) & 0xFFFE) >> 1;
+    writes_.emplace_back(index, vars_[index]);
+    return vars_[index];
+  };
   auto b8 = [&](int off) -> int { return mod_.at(pc + static_cast<u32>(off)); };
   const int self = ctx.unit;
   // E0..E8 -> 0..8, E9 -> self; plain 0..8 accepted.
@@ -1239,7 +1257,7 @@ void ScriptedBrain::on_attack(Battle& battle, int actor, int kind, int id, int t
       last_cast_ = cast;
       const u8 colour_mask = battle.element_colour(id) & 0xFC;
       const int colour = colour_mask == 0xFC ? 6 : data::colour_index_of_bit(colour_mask);
-      if (battle.seq_colour(id) >= 0) vm_->note_cast_colour(colour);
+      if (const int entry = battle.seq_colour(id); entry >= 0) vm_->note_cast_colour(entry);
       else if (colour >= 0) vm_->set_var(0x52, colour);
     }
   }

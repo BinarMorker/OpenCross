@@ -13,6 +13,8 @@ struct LayoutGlyph {
   float x = 0, y = 0;
   u8 color = 0;
   bool italic = false;
+  // Number entry ({input(n)}): the glyph shows digit `digit` (0 = leftmost) of the entry; -1 = an ordinary glyph.
+  int digit = -1;
 };
 
 struct PageEvent {

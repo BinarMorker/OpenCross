@@ -171,6 +171,13 @@ struct Rewards {
   std::vector<std::array<int, 7>> bench_gains;
 };
 
+// The HUD's element-trap block: shown or not, and the element id each side has trapped (0 none).
+struct TrapHud {
+  bool shown = false;
+  int pc = 0, enemy = 0;
+  bool operator==(const TrapHud&) const = default;
+};
+
 // One resolved effect on one target, in the order the rules produced it (the presentation replays them).
 // `action` numbers the player command / enemy turn they belong to; hit_index counts the events of one actor inside one action.
 struct ActionEvent {
@@ -213,6 +220,8 @@ struct ActionEvent {
   std::array<int, 3> ring{-1, -1, -1};
   // The cast repaints the whole ring when it ends (modes 6 / 37 / 47) instead of pushing its colour.
   bool ring_repaint = false;
+  // The element-trap block while this event's action runs, and as it stood before the action began.
+  TrapHud trap, trap_before;
   // The colour this cast entered in the colour history (0..5, 6 = colourless, -1 = none) and the history's first seven entries after it
   // (colour + 1, 0 = empty): the Chrono Cross colour row shows them when the action ends.
   int seq_colour = -1;
@@ -352,6 +361,9 @@ class Battle {
   const Unit& unit(int index) const { return units_[static_cast<size_t>(index)]; }
   Unit& unit_mut(int index) { return units_[static_cast<size_t>(index)]; }
   const std::array<int, 3>& ring() const { return ring_; }
+  // The element-trap block once the running action has ended: a trap set by it shows, a trap that sprang during it hides the whole block
+  // (even while the other side's trap stays armed).
+  TrapHud trap_hud() const { return {trap_state_ == 1 || trap_state_ == 2, trap_[0], trap_[1]}; }
   Outcome outcome() const { return outcome_; }
   // The Outcome value, or the script's code for Outcome::Scripted.
   int result_code() const { return result_code_; }
@@ -387,8 +399,8 @@ class Battle {
   void evolve(int unit, int form);
   // Element colour (pgdat +5) as the battle sees it: Pip's 18 techs take Pip's innate colour, Vary Innate its last caster's.
   u8 element_colour(int id) const;
-  // The colour an element cast enters in the colour history: 0..5, 6 for a colourless element, -1 for none (no colour byte, or record byte
-  // 0 bit 0x80: death casts, form changes). PC and enemy casts alike.
+  // The colour an element cast enters in the colour history: 0..5 (an element without a colour byte enters as 0), 6 for the all-colour
+  // element, -1 for none (record byte 0 bit 0x80: death casts, form changes). PC and enemy casts alike.
   int seq_colour(int element_id) const;
   // A party member's grid holds the Chrono Cross element: the HUD shows the colour history as a row of seven dots.
   bool colour_row_shown() const { return colour_row_; }
@@ -464,7 +476,12 @@ class Battle {
 
  private:
   void say(std::string line) { log_.push_back(std::move(line)); }
-  void begin_action() { ++action_id_; hit_counter_ = 0; }
+  void begin_action() {
+    ++action_id_;
+    hit_counter_ = 0;
+    trap_state_ = trap_hud().shown ? 1 : 0;
+    trap_before_ = trap_hud();
+  }
   void reset_chain() { chain_actor_ = chain_target_ = -1; chain_hits_ = 0; }
   void note_event(ActionEvent event) {
     if ((event.kind == ActionEvent::Kind::Weapon || event.kind == ActionEvent::Kind::Element) && event.target >= 0 &&
@@ -475,6 +492,8 @@ class Battle {
     event.group = cur_group_;
     event.hit_index = hit_counter_++;
     event.ring = ring_;
+    event.trap = {trap_state_ == 1 || trap_state_ == 3 || trap_state_ == 4, trap_[0], trap_[1]};
+    event.trap_before = trap_before_;
     events_.push_back(event);
   }
   WeaponIn weapon_in(const Unit& attacker, const Unit& target_unit, int mult, int strength) const;
@@ -483,6 +502,10 @@ class Battle {
   void cast_element(int actor, int element_id, int row, int target);
   void damage_unit(int actor, int target, int value, int code);
   void kill(int unit);
+  // Runs the kill script (slot 3) of a dead enemy once and parks the death cast it queued.
+  void run_kill_script(int unit);
+  // Every enemy whose HP is 0 or that is KO'd without its kill script having run (a script wrote its HP to 0) gets that script now.
+  void scan_kills();
   // True when any roll landed.
   bool apply_status(int target, const data::ElemRec& rec);
   bool apply_status_bits(int target, u32 lo, u32 hi, int chance, u8 colour_bit = 0);
@@ -531,6 +554,8 @@ class Battle {
   bool in_death_cast_ = false;
   // A kill script queued attacks that have not run yet: the unit still owes its death (check_end).
   std::array<bool, kUnits> death_pending_{};
+  // The unit's kill script has run since it last had HP.
+  std::array<bool, kUnits> kill_script_run_{};
   int action_id_ = 0, hit_counter_ = 0;
   // The executing scripted entry's / dev cast's caster group (ActionEvent::group).
   std::array<u8, 6> cur_group_{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -564,6 +589,10 @@ class Battle {
   int field_state_ = 0;
   // Mode 5: element id the PC side / the enemy side has trapped (0 none).
   std::array<int, 2> trap_{};
+  // The element-trap block: 0 hidden, 1 shown, 2 a trap set by the running action (shown once it ends), 3 / 4 the PC / enemy side's trap
+  // sprang during the running action (shown until it ends, then the block hides). trap_before_ = the block as the running action began.
+  int trap_state_ = 0;
+  TrapHud trap_before_;
   // The running cast repaints the ring (modes 6 / 37 / 47) with ring_repaint_ when it ends instead of pushing its colour; the targets of the
   // cast all see the ring as it was.
   bool ring_repainted_ = false;

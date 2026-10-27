@@ -4,6 +4,7 @@
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_scancode.h>
 
+#include <algorithm>
 #include <cmath>
 
 #include "platform/keymap.h"
@@ -14,16 +15,19 @@ namespace {
 
 // PS1-style key word (op 50 / 51 masks): bit 5 circle (confirm), 6 cross, 12 up, 13 right, 14 down, 15 left.
 constexpr u16 kKeyCircle = 0x20, kKeyCross = 0x40, kKeyUp = 0x1000, kKeyRight = 0x2000, kKeyDown = 0x4000, kKeyLeft = 0x8000;
+// A held direction repeats once it has been down for more than this many ticks, then every tick.
+constexpr int kRepeatDelay = 21;
 
 }  // namespace
 
 void FieldInput::reset() {
   held_mask = 0;
+  held_ticks = {};
   action_pending = false;
   input_mask = 0xFFFF;
 }
 
-FieldInput::Edges FieldInput::sample(const platform::Input& in) {
+FieldInput::Edges FieldInput::sample(const platform::Input& in, int ticks) {
   using platform::Action;
   int mask = 0;
   if (platform::action_down(in, Action::Up)) mask |= 1;
@@ -34,6 +38,7 @@ FieldInput::Edges FieldInput::sample(const platform::Input& in) {
   run_held = platform::action_down(in, Action::Cancel);
   bool confirm = platform::action_pressed(in, Action::Ok);
   bool up = platform::action_pressed(in, Action::Up), down = platform::action_pressed(in, Action::Down);
+  bool left = platform::action_pressed(in, Action::Left), right = platform::action_pressed(in, Action::Right);
   pad_analog = false;
   pad_rstick = false;
   if (in.pad_connected) {
@@ -46,6 +51,8 @@ FieldInput::Edges FieldInput::sample(const platform::Input& in) {
     confirm = confirm || in.pad_pressed[SDL_GAMEPAD_BUTTON_SOUTH];
     up = up || in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_UP];
     down = down || in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN];
+    left = left || in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_LEFT];
+    right = right || in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_RIGHT];
     // ay: up positive. Outside the 0x4C..0xB4 dead zone the stick counts as analog.
     const float ax = in.pad_axis[SDL_GAMEPAD_AXIS_LEFTX], ay = -in.pad_axis[SDL_GAMEPAD_AXIS_LEFTY];
     if (std::fabs(ax) * 127.0f > 52.0f || std::fabs(ay) * 127.0f > 52.0f) {
@@ -63,6 +70,12 @@ FieldInput::Edges FieldInput::sample(const platform::Input& in) {
     }
   }
   held_mask = static_cast<u32>(mask);
+  u32 repeat = 0;
+  for (int dir = 0; dir < 4; ++dir) {
+    int& held = held_ticks[static_cast<size_t>(dir)];
+    held = (mask >> dir & 1) ? held + std::max(ticks, 1) : 0;
+    if (held > kRepeatDelay) repeat |= 1u << dir;
+  }
   pad_word = 0;
   if (mask & 1) pad_word |= kKeyUp;
   if (mask & 2) pad_word |= kKeyRight;
@@ -75,7 +88,7 @@ FieldInput::Edges FieldInput::sample(const platform::Input& in) {
   // Start bit.
   if (in.key_down[SDL_SCANCODE_RETURN] || in.key_down[SDL_SCANCODE_KP_ENTER] || in.pad_down[SDL_GAMEPAD_BUTTON_START]) pad_word |= 0x0800;
   key_latch |= static_cast<u16>(pad_word & ~0u);
-  return {confirm, up, down};
+  return {confirm, up, down, left, right, repeat};
 }
 
 }  // namespace oc::game

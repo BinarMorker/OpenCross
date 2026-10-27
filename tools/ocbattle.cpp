@@ -547,10 +547,17 @@ int comp_colour(int ci, int ce, const std::array<int, 3>& ring, int ct, int base
 // `actor` at `target` as the Debug tab does, finish the action, print the target's status words and (for a PC) which grid cells the seal greys.
 int cmd_cast(const data::GameTables& tables, const vfs::Vfs& vfs, const std::vector<std::string>& args) {
   if (args.size() < 4) {
-    std::fprintf(stderr, "usage: ocbattle cast <scene> <actor> <element> <target> [seeds]\n");
+    std::fprintf(stderr, "usage: ocbattle cast <scene> <actor> <element[,element...]> <target> [seeds]\n");
     return 2;
   }
-  const int scene = std::stoi(args[0]), actor = std::stoi(args[1]), el = std::stoi(args[2]), target = std::stoi(args[3]);
+  const int scene = std::stoi(args[0]), actor = std::stoi(args[1]), target = std::stoi(args[3]);
+  std::vector<int> casts;
+  for (size_t from = 0; from < args[2].size();) {
+    const size_t comma = std::min(args[2].find(',', from), args[2].size());
+    casts.push_back(std::stoi(args[2].substr(from, comma - from)));
+    from = comma + 1;
+  }
+  const int el = casts.back();
   const int seeds = args.size() > 4 ? std::stoi(args[4]) : 1;
   for (int seed = 1; seed <= seeds; ++seed) {
     GameRng rng(static_cast<u32>(seed) * 7919u + static_cast<u32>(scene), tables.rng_table);
@@ -565,9 +572,15 @@ int cmd_cast(const data::GameTables& tables, const vfs::Vfs& vfs, const std::vec
     }
     const Unit& tu = battle.unit(target);
     const u32 lo0 = tu.lo, hi0 = tu.hi;
-    battle.do_element(actor, el, 0, target);
-    battle.finish_external_action();
-    std::printf("seed %d: %s casts %d at %s: lo %08x -> %08x, hi %08x -> %08x\n", seed, battle.unit(actor).name.c_str(), el, tu.name.c_str(), lo0, tu.lo, hi0, tu.hi);
+    for (const int cast : casts) {
+      if (battle.outcome() != Outcome::Ongoing) break;
+      battle.do_element(actor, cast, 0, target);
+      battle.finish_external_action();
+    }
+    if (casts.size() > 1)
+      for (const std::string& line : battle.drain_log()) std::printf("   %s\n", line.c_str());
+    std::printf("seed %d: %s casts %d at %s: lo %08x -> %08x, hi %08x -> %08x, outcome %d result %d\n", seed, battle.unit(actor).name.c_str(), el, tu.name.c_str(),
+                lo0, tu.lo, hi0, tu.hi, static_cast<int>(battle.outcome()), battle.result_code());
     if (tu.pc) {
       int sealed = 0, filled = 0;
       for (int cell = 0; cell < data::kGridCells; ++cell) {
@@ -833,8 +846,8 @@ int cmd_elements(const data::GameTables& tables) {
     const std::string& name = tables.element_name(static_cast<int>(i));
     std::string txt;
     for (unsigned char ch : name) txt += ch < 0x80 ? std::string(1, static_cast<char>(ch)) : std::format("<{:02X}>", ch);
-    std::printf("%3zu %-26s col=%-6s lv=%d mode=%2d b0=%02X b1=%02X b4=%02X\n", i, txt.c_str(), data::colour_name(data::colour_index_of_bit(element.colour_bit())),
-                element.level(), element.mode(), element.b(0), element.b(1), element.b(4));
+    std::printf("%3zu %-26s col=%-6s lv=%d mode=%2d b0=%02X b1=%02X b4=%02X b5=%02X\n", i, txt.c_str(), data::colour_name(data::colour_index_of_bit(element.colour_bit())),
+                element.level(), element.mode(), element.b(0), element.b(1), element.b(4), element.b(5));
   }
   return 0;
 }

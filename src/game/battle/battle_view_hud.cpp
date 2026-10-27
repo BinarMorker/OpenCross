@@ -9,6 +9,9 @@
 #include <format>
 
 #include "core/log.h"
+#include "import/container.h"
+#include "import/lzss.h"
+#include "import/room_effects.h"
 #include "import/text.h"
 #include "import/tim.h"
 namespace oc::game {
@@ -34,6 +37,28 @@ bool decode_bmp_mask(ByteSpan data, std::vector<u8>& out, int w, int h) {
       const u8 idx = data[off + static_cast<size_t>(sy) * rs + static_cast<size_t>(x)];
       const size_t entry = 54 + 4 * static_cast<size_t>(idx);
       out[static_cast<size_t>(y) * w + x] = static_cast<u8>((data[entry] + data[entry + 1] + data[entry + 2]) / 3);
+    }
+  }
+  return true;
+}
+
+// 24-bit BMP -> RGB rows, top row first.
+bool decode_bmp_rgb(ByteSpan data, std::vector<u8>& out, int w, int h) {
+  if (data.size() < 54 || data[0] != 'B' || data[1] != 'M') return false;
+  auto rd32 = [&](size_t offset) { return static_cast<u32>(data[offset]) | static_cast<u32>(data[offset + 1]) << 8 | static_cast<u32>(data[offset + 2]) << 16 | static_cast<u32>(data[offset + 3]) << 24; };
+  const u32 off = rd32(10);
+  const int bw = static_cast<int>(rd32(18)), bh = static_cast<int>(rd32(22));
+  if (bw != w || std::abs(bh) != h || data[28] != 24) return false;
+  const size_t rs = (static_cast<size_t>(w) * 3 + 3) & ~size_t{3};
+  if (off + rs * static_cast<size_t>(h) > data.size()) return false;
+  out.assign(static_cast<size_t>(w) * h * 3, 0);
+  for (int y = 0; y < h; ++y) {
+    const int sy = bh > 0 ? h - 1 - y : y;
+    for (int x = 0; x < w; ++x) {
+      const size_t from = off + static_cast<size_t>(sy) * rs + static_cast<size_t>(x) * 3, to = (static_cast<size_t>(y) * w + x) * 3;
+      out[to] = data[from + 2];
+      out[to + 1] = data[from + 1];
+      out[to + 2] = data[from];
     }
   }
   return true;
@@ -93,6 +118,25 @@ bool decode_dds_dxt5(ByteSpan data, render::DecodedImage& img) {
         }
     }
   return true;
+}
+
+// Every TIM of a drp and of its nested drps onto `vram`, in registration order.
+void blit_drp_tims(ByteSpan data, import::Vram& vram, int depth = 0) {
+  auto drp = import::parse_drp(data);
+  if (!drp) return;
+  for (const auto& entry : drp->entries) {
+    if (entry.type == 1 && depth < 4 && import::is_drp(entry.data)) blit_drp_tims(entry.data, vram, depth + 1);
+    if (entry.type != 4) continue;
+    ByteSpan raw = entry.data;
+    Bytes decoded;
+    if (import::is_lzss(raw)) {
+      auto unpacked = import::lzss_decode(raw);
+      if (!unpacked) continue;
+      decoded = std::move(*unpacked);
+      raw = decoded;
+    }
+    if (auto tim = import::parse_tim(raw)) vram.blit_tim(*tim);
+  }
 }
 
 }  // namespace
@@ -226,6 +270,40 @@ void BattleView::load_hud_art(const vfs::Vfs& vfs) {
     }
     std::copy(mask.begin(), mask.end(), ring_masks_.begin() + static_cast<ptrdiff_t>(i) * 208 * 112);
   }
+  ring_rainbow_.clear();
+  auto rainbow = vfs.read("hd/battle/elementfield/battle_88.bmp");
+  if (!rainbow || !decode_bmp_rgb(*rainbow, ring_rainbow_, 208, 112)) {
+    ring_rainbow_.clear();
+    log::warn("battle: field ring picture battle_88.bmp missing");
+  }
+  // Element-trap colour marks, both art modes: the disc's battle sprite sheet 'etra' (battle.prd > nested pack 'tana'), groups 3..8 = red,
+  // green, blue, yellow, white, black, one 5 x 5 part each, cut from the battle VRAM.
+  for (Tex& mark : trap_marks_) {
+    mark.set = {};
+    mark.tex.destroy();
+  }
+  if (auto prd = vfs.read("cdrom/battle/battle.prd")) {
+    import::Vram vram;
+    blit_drp_tims(*prd, vram);
+    const Bytes tana = import::nested_pack(*prd, "tana");
+    const assets::RoomEffects pack = import::load_battle_effects(tana, {}, vram);
+    static constexpr std::array<int, 6> kTrapMarkGroup = {4, 7, 8, 3, 6, 5};
+    for (const assets::SpriteSheet& sheet : pack.sheets) {
+      if (std::string_view(sheet.name.c_str()) != "etra") continue;
+      for (size_t colour = 0; colour < kTrapMarkGroup.size(); ++colour) {
+        const size_t group = static_cast<size_t>(kTrapMarkGroup[colour]) - 1;
+        if (group >= sheet.frames.size() || sheet.frames[group].empty()) continue;
+        const assets::EffectSprite& part = sheet.frames[group][0];
+        if (part.rgba.size() != static_cast<size_t>(part.w) * part.h * 4) continue;
+        Tex& mark = trap_marks_[colour];
+        if (!mark.tex.create(*ctx_, part.w, part.h, render::TextureFormat::Rgba8, part.rgba.data())) continue;
+        mark.set = render::TexRef(mark.tex, nearest_);
+        mark.w = static_cast<float>(part.w);
+        mark.h = static_cast<float>(part.h);
+      }
+    }
+  }
+  if (!trap_marks_[0].set) log::warn("battle: element trap sheet 'etra' missing");
 }
 
 // The ring the HUD walks toward: the one before the action being presented (or the next queued one), else the rules' ring once the replay has
@@ -245,7 +323,6 @@ void BattleView::step_ring() {
   for (int cell = 0; cell < 12; ++cell) want[static_cast<size_t>(cell)] = target[static_cast<size_t>(cell / 4)];
   if (!ring_cells_set_ || ui_ == Ui::Intro) {
     ring_cells_ = want;
-    ring_drawn_.fill(-1);
     ring_key_.fill(-2);
     ring_cells_set_ = true;
     ring_feed_count_ = 0;
@@ -293,19 +370,17 @@ void BattleView::rebuild_ring() {
   ring_tex.tex.destroy();
   if (ring_masks_.size() != 12u * 208 * 112) return;
   // Cells 0..11 in order, 4 crescent shells per ellipse (a01..a04 outer, a05..a08 middle, a09..a12 inner). A cell with a colour
-  // OVERWRITES its mask (m >= 0x80: colour at alpha 0x80; 0 < m < 0x80: rgb += (C - rgb) * m / 128, alpha = max(m, alpha)); a cell with no colour punches
-  // its mask out of what was drawn before. Colours: green, white, "black" (drawn as a near-black fill), red, yellow, blue. A slot without a colour
-  // (a cast with no colour byte) is never drawn, so its cells keep the colour they last showed in this battle; only a cell that never had
-  // one is punched out.
+  // OVERWRITES its mask (m >= 0x80: colour at alpha 0x80; 0 < m < 0x80: rgb += (C - rgb) * m / 128 over a covered texel, C over a clear one,
+  // alpha = max(m, alpha)); a cell with no colour (a cast with no colour byte) punches its mask out of what was drawn before. Colours: green,
+  // white, "black" (drawn as a near-black fill), red, yellow, blue; an all-colours slot takes each texel's colour from battle_88.bmp.
   static const Rgb kRing[6] = {{0, 255, 0}, {255, 255, 255}, {16, 12, 16}, {255, 0, 0}, {255, 255, 0}, {0, 0, 255}};
   std::vector<u8> px(208 * 112 * 4, 0);
   bool any = false;
   for (int cell = 0; cell < 12; ++cell) {
-    int colour = ring_cells_[static_cast<size_t>(cell)];
-    if (colour >= 0 && colour < 6) ring_drawn_[static_cast<size_t>(cell)] = colour;
-    else colour = ring_drawn_[static_cast<size_t>(cell)];
+    const int colour = ring_cells_[static_cast<size_t>(cell)];
+    const bool rainbow = colour == battle::kRingAllColours && !ring_rainbow_.empty();
     const u8* mask = &ring_masks_[static_cast<size_t>(cell) * 208 * 112];
-    if (colour < 0 || colour >= 6) {
+    if ((colour < 0 || colour >= 6) && !rainbow) {
       if (!any) continue;
       for (int i = 0; i < 208 * 112; ++i) {
         if (mask[i] == 0) continue;
@@ -315,13 +390,19 @@ void BattleView::rebuild_ring() {
       }
       continue;
     }
-    const Rgb rgb = kRing[colour];
     any = true;
     for (int i = 0; i < 208 * 112; ++i) {
       if (mask[i] == 0) continue;
       u8* texel = &px[static_cast<size_t>(i) * 4];
+      Rgb rgb = rainbow ? Rgb{} : kRing[colour];
+      if (rainbow) {
+        const u8* picture = &ring_rainbow_[static_cast<size_t>(i) * 3];
+        rgb.r = picture[0], rgb.g = picture[1], rgb.b = picture[2];
+      }
       if (mask[i] >= 0x80) {
         texel[0] = rgb.r, texel[1] = rgb.g, texel[2] = rgb.b, texel[3] = 0x80;
+      } else if (texel[3] == 0) {
+        texel[0] = rgb.r, texel[1] = rgb.g, texel[2] = rgb.b, texel[3] = mask[i];
       } else {
         texel[0] = static_cast<u8>(texel[0] + (rgb.r - texel[0]) * mask[i] / 128);
         texel[1] = static_cast<u8>(texel[1] + (rgb.g - texel[1]) * mask[i] / 128);
@@ -471,6 +552,37 @@ void BattleView::build_field_ring() {
   // 240-line units.
   static const char32_t* kCaption[6] = {U"FIELD EFFECT", U"EFFET DE CHAMP", U"EFFETTO DI CAMPO", U"FELDEFFEKT", U"AMBIENTE ELEMENTAL", U"FiELD EFFECT"};
   btext(0x20086, kCaption[std::clamp(static_cast<int>(lang_), 0, 5)], 60, 23 * kPs1Px / (kCanvasH / 216.0f), 0x757575);
+  build_element_trap();
+}
+
+// The element-trap block of the presented action: the one before it while it is queued, its own while it runs, else the rules' block.
+battle::TrapHud BattleView::presented_trap() const {
+  if (act_.phase != Act::Phase::None && !act_.ev.empty()) return act_.ev[std::min(act_.hit, act_.ev.size() - 1)].trap;
+  if (!queue_.empty() && !queue_.front().empty()) return queue_.front().front().trap_before;
+  return battle_->trap_hud();
+}
+
+// Element-trap block under the field ring, drawn from PS1 (8, 24) like the ring: "ELEMENT TRAP" at (16, 43); "PLAYER-" at (62, 39) with the
+// colour mark of the element the party trapped (or "NO") at (88, 39); "ENEMY-" at (62, 46) with "?" while the enemies hold a trap (or
+// "NO") at (88, 46). Texts per language from cmnmes (style 3, colour 0x757575); the two row labels move left 8 px in Italian, 4 in Spanish.
+void BattleView::build_element_trap() {
+  const battle::TrapHud trap = presented_trap();
+  if (!trap.shown) return;
+  constexpr int kStyle = 0x20003;
+  constexpr u32 kColour = 0x757575;
+  float label_x = 62;
+  if (lang_ == import::Lang::It) label_x -= 8;
+  else if (lang_ == import::Lang::Es) label_x -= 4;
+  btext(kStyle, xlat("ELEMENT TRAP", U"ELEMENT TRAP"), 16, 43, kColour);
+  btext(kStyle, xlat("PLAYER-", U"PLAYER-"), label_x, 39, kColour);
+  btext(kStyle, xlat("ENEMY-", U"ENEMY-"), label_x, 46, kColour);
+  if (trap.pc == 0) {
+    btext(kStyle, xlat("NO", U"NO"), 88, 39, kColour);
+  } else if (trap.pc > 0 && static_cast<size_t>(trap.pc) < tables_->elements.size()) {
+    const int colour = data::colour_index_of_bit(static_cast<u8>(tables_->elements[static_cast<size_t>(trap.pc)].b(5) & 0xFC));
+    if (colour >= 0) add_img(trap_marks_[static_cast<size_t>(colour)], 88 * kPs1Px, 39 * kCanvasH / 216.0f, 5 * kPs1Px, 5 * kCanvasH / 216.0f);
+  }
+  btext(kStyle, trap.enemy != 0 ? xlat("?", U"?") : xlat("NO", U"NO"), 88, 46, kColour);
 }
 
 // Chrono Cross colour row: while a party grid holds the Chrono Cross, the last seven cast colours as 16 x 16 dots at PS1 (0x68 + 16 i, 0x10).

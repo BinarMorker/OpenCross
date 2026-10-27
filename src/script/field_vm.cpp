@@ -195,6 +195,9 @@ void FieldVM::run_entity(int ent) {
     entity.rec[0].id = 1;
     rec_index = 0;
   }
+  // The action flag only covers the wait for the ON_ACTION record: it drops as soon as that record is picked to run. An entity that
+  // goes inactive inside its own ON_ACTION (a chest hiding itself) is never run again and must not keep the controls taken.
+  if (entity.rec[static_cast<size_t>(rec_index)].id == 2) entity.flags270 &= ~flag270::kActionRunning;
   dispatch(ent, rec_index, false);
 }
 

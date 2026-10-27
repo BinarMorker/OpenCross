@@ -52,7 +52,7 @@ enum class TokKind : u8 {
   HideName,    // {HIDE}: suppress the next name
   FWait,       // arg = event ({fwait(n)}, PS1 16)
   FSet,        // arg = flag ({fset(n)}, PS1 17)
-  Input,       // arg = placeholder count ({input(n)}, PS1 10; debug rooms)
+  Input,       // arg = digit count n of a number entry; the next n glyphs are its digits ({input(n)}, PS1 10)
   Accent,      // arg = grammar form (PS1 12, 1F)
 };
 

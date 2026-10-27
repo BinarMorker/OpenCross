@@ -693,7 +693,29 @@ void test_field_ring_writes() {
     CHECK_EQ(fixture.battle.ring()[2], 3);
   }
   {
-    // the colour history takes every element cast (PC or enemy): colourless 0xFC = 6, no colour byte or record byte 0 bit 0x80 = none
+    // the ring slot of a colour byte: one bit -> its colour, all six (the Chrono Cross) -> the all-colours slot, none -> no colour
+    CHECK_EQ(ring_colour_of(0x04), 0);
+    CHECK_EQ(ring_colour_of(0x80), 5);
+    CHECK_EQ(ring_colour_of(0x22), 3);
+    CHECK_EQ(ring_colour_of(0xFC), kRingAllColours);
+    CHECK_EQ(ring_colour_of(0x00), -1);
+    CHECK_EQ(ring_colour_of(0x0C), -1);
+    // an all-colour cast enters the ring as the all-colours slot (enemy caster or PC alike), which no colour multiplier counts
+    Fixture fixture;
+    elem(fixture, 0x01, 0, 0xFC);
+    fixture.battle.do_element(3, 4, 0, 0);
+    CHECK_EQ(fixture.battle.ring()[2], kRingAllColours);
+    fixture.battle.do_element(0, 4, 0, 3);
+    CHECK_EQ(fixture.battle.ring()[1], kRingAllColours);
+    CHECK_EQ(fixture.battle.ring()[2], kRingAllColours);
+    CHECK_EQ(colour_multiplier(3, 3, {kRingAllColours, kRingAllColours, kRingAllColours}, -1), colour_multiplier(3, 3, {-1, -1, -1}, -1));
+    // a colourless enemy skill leaves an empty slot
+    elem(fixture, 0x01, 0, 0x00);
+    fixture.battle.do_element(3, 4, 0, 0);
+    CHECK_EQ(fixture.battle.ring()[2], -1);
+  }
+  {
+    // the colour history takes every element cast (PC or enemy): all colours 0xFC = 6, no colour byte = 0, record byte 0 bit 0x80 = none
     Fixture fixture;
     elem(fixture, 0x01, 0, 0x20);
     CHECK_EQ(fixture.battle.seq_colour(4), 3);
@@ -703,7 +725,7 @@ void test_field_ring_writes() {
     elem(fixture, 0x01, 0, 0xFC);
     CHECK_EQ(fixture.battle.seq_colour(4), 6);
     elem(fixture, 0x01, 0, 0x00);
-    CHECK_EQ(fixture.battle.seq_colour(4), -1);
+    CHECK_EQ(fixture.battle.seq_colour(4), 0);
     elem(fixture, 0x81, 50, 0x20);
     CHECK_EQ(fixture.battle.seq_colour(4), -1);
   }
@@ -752,6 +774,67 @@ void test_field_ring_writes() {
     CHECK_EQ(fixture.battle.unit(3).hp, hp0);
     if (!fixture.battle.events().empty()) CHECK_EQ(fixture.battle.events().back().code, 2);
   }
+}
+
+// The enemy casts one element at unit 0 on every turn.
+struct CastBrain final : EnemyBrain {
+  int element = 0;
+  EnemyAction choose(const Battle&, int, Rng&) override {
+    EnemyAction action;
+    action.kind = EnemyAction::Kind::Element;
+    action.element = element;
+    action.target = 0;
+    return action;
+  }
+};
+
+// The element-trap HUD block: hidden while the trap cast runs, shown from its end; the action that springs the trap still shows it, and
+// the block is hidden once that action has ended.
+void test_trap_hud() {
+  data::GameTables tables = make_tables();
+  tables.elements.resize(5);
+  data::ElemRec& trap_rec = tables.elements[4];
+  trap_rec.raw[5] = 0x20, trap_rec.raw[6] = 1, trap_rec.raw[7] = 5, trap_rec.raw[8] = 12, trap_rec.raw[0xC] = 20, trap_rec.raw[0xE] = 2;
+  ScriptedRng rng{Lo::Fallback::Lo};
+  CastBrain brain;
+  brain.element = 2;
+  Battle battle{tables, rng, brain};
+  rng.push(0);
+  rng.push(100);
+  PartyMember trapper = make_member(0, "A");
+  trapper.cells[0] = 0x4004;
+  CHECK(battle.start({trapper, make_member(1, "B"), make_member(2, "C")}, 0));
+  CHECK(battle.trap_hud() == TrapHud{});
+  battle.unit_mut(0).gauge = 2;
+  Command cast;
+  cast.kind = Command::Kind::Element;
+  cast.actor = 0;
+  cast.cell = 0;
+  std::string why;
+  CHECK(battle.apply(cast, &why));
+  CHECK(!battle.events().empty());
+  if (!battle.events().empty()) {
+    CHECK(battle.events().back().trap == (TrapHud{false, 2, 0}));
+    CHECK(battle.events().back().trap_before == TrapHud{});
+  }
+  CHECK(battle.trap_hud() == (TrapHud{true, 2, 0}));
+  // the enemy casts the trapped element: caught, the block shows through that action, then hides
+  battle.unit_mut(0).stamina = 0;
+  battle.unit_mut(1).stamina = 0;
+  battle.unit_mut(2).stamina = 0;
+  battle.unit_mut(3).countdown = 30;
+  const size_t before = battle.events().size();
+  battle.settle();
+  CHECK(battle.events().size() > before);
+  if (battle.events().size() > before) {
+    const ActionEvent& caught = battle.events()[before];
+    CHECK_EQ(caught.element, 2);
+    CHECK_EQ(caught.code, 2);
+    CHECK(caught.trap == (TrapHud{true, 2, 0}));
+    CHECK(caught.trap_before == (TrapHud{true, 2, 0}));
+  }
+  CHECK(battle.trap_hud() == TrapHud{});
+  CHECK_EQ(battle.rewards().trapped.size(), size_t{1});
 }
 
 void test_pilfer() {
@@ -1351,6 +1434,145 @@ void test_pac_script_stream() {
   CHECK_EQ(queued[0].seq, ev[4].seq);
 }
 
+// evt241 (the Tragedienne contestants) in miniature: entity 4's init counts v400 to 40 in a loop (with or without a 59 in it), then sets
+// v80 = 1; entity 0's idle loop answers v80 == 1 with window 11 and v80 = 2.
+Bytes assemble_init_order_pac(bool hint) {
+  Bytes code;
+  auto emit = [&](std::initializer_list<int> bytes) {
+    for (int byte : bytes) code.push_back(static_cast<u8>(byte));
+  };
+  emit({0x00});
+  emit({0x00});
+  const int idle0 = static_cast<int>(code.size());
+  const int idle0_end = idle0 + 8 + 4 + 6;
+  emit({0x02, 0x80, 0x00, 0x01, 0x00, 0x40, idle0_end & 0xFF, idle0_end >> 8});
+  emit({0xE0, 0x0B, 0x00, 0x00});
+  emit({0x10, 0x80, 0x00, 0x02, 0x00, 0x40});
+  emit({0x00});
+  const int init4 = static_cast<int>(code.size());
+  emit({0x0E, 0xE3, 0x80});
+  emit({0x10, 0x00, 0x04, 0x00, 0x00, 0x40});
+  const int loop = static_cast<int>(code.size());
+  if (hint) emit({0x59});
+  emit({0x17, 0x00, 0x04});
+  emit({0x02, 0x00, 0x04, 0x28, 0x00, 0x44, loop & 0xFF, loop >> 8});
+  emit({0x10, 0x80, 0x00, 0x01, 0x00, 0x40});
+  emit({0x00});
+  const size_t ec = 5, base = 0x94 + ec * 0x40;
+  Bytes image(base, 0);
+  auto put32 = [&](size_t offset, u32 value) {
+    for (int i = 0; i < 4; ++i) image[offset + static_cast<size_t>(i)] = static_cast<u8>(value >> (8 * i));
+  };
+  auto put16 = [&](size_t offset, int value) {
+    image[offset] = static_cast<u8>(value);
+    image[offset + 1] = static_cast<u8>(value >> 8);
+  };
+  put32(0, 2), put32(4, 0x10), put32(8, static_cast<u32>(base + code.size())), put32(0xC, static_cast<u32>(base + code.size() + 8));
+  put32(0x90, static_cast<u32>(ec));
+  for (size_t entity = 0; entity < ec; ++entity) put16(0x94 + entity * 0x40 + 2, 1);
+  put16(0x94 + 0 * 0x40 + 2, idle0);
+  put16(0x94 + 4 * 0x40 + 0, init4);
+  image.insert(image.end(), code.begin(), code.end());
+  return image;
+}
+
+void test_pac_init_order() {
+  std::string err;
+  // Op 59 reloads the tick's op budget: the 120-op init loop ends within the first tick.
+  pac::Module hint_module;
+  CHECK(hint_module.parse(assemble_init_order_pac(true), &err));
+  FakeHost hint_host;
+  pac::Vm hint_vm(hint_module, hint_host);
+  hint_vm.tick();
+  CHECK_EQ(hint_vm.var(0x400), 40);
+  CHECK_EQ(hint_vm.var(0x80), 1);
+
+  // Without 59 the 80-op loop runs out of budget (0x40) and sets v80 in the second tick, after entity 0's idle loop has tested it: the
+  // settle pass goes on for one more tick, and the window comes (it settled with v80 == 1 and no window before).
+  pac::Module module;
+  CHECK(module.parse(assemble_init_order_pac(false), &err));
+  FakeHost host;
+  pac::Vm vm(module, host);
+  vm.tick();
+  CHECK_EQ(vm.var(0x80), 0);
+  CHECK(vm.settle());
+  CHECK_EQ(vm.var(0x80), 2);
+  bool window = false;
+  for (const auto& event : vm.drain_events()) window = window || (event.kind == pac::Event::Kind::Dialogue && event.a == 0x0B);
+  CHECK(window);
+}
+
+// The contestants' countdown save / restore in miniature: entities 4..7 (units 3..6) each read their own countdown (field 0x5000) into
+// the SAME var vCE and write 10; entity 7 then sets v80 = 1. Entity 0's idle loop answers v80 == 1 by writing vCE, vD0, vD2, vD4 back to
+// units 3..6 and v80 = 2. Unit 3 so gets the LAST unit's drawn countdown and units 4..6 get 0.
+Bytes assemble_countdown_pac() {
+  Bytes code;
+  auto emit = [&](std::initializer_list<int> bytes) {
+    for (int byte : bytes) code.push_back(static_cast<u8>(byte));
+  };
+  emit({0x00});
+  emit({0x00});
+  const int idle0 = static_cast<int>(code.size());
+  const int idle0_end = idle0 + 8 + 4 * 8 + 6;
+  emit({0x02, 0x80, 0x00, 0x01, 0x00, 0x40, idle0_end & 0xFF, idle0_end >> 8});
+  emit({0x76, 0xCE, 0x00, 0xE3, 0x00, 0x00, 0x50, 0x60});
+  emit({0x76, 0xD0, 0x00, 0xE4, 0x00, 0x00, 0x50, 0x60});
+  emit({0x76, 0xD2, 0x00, 0xE5, 0x00, 0x00, 0x50, 0x60});
+  emit({0x76, 0xD4, 0x00, 0xE6, 0x00, 0x00, 0x50, 0x60});
+  emit({0x10, 0x80, 0x00, 0x02, 0x00, 0x40});
+  emit({0x00});
+  std::array<int, 4> init{};
+  for (int k = 0; k < 4; ++k) {
+    init[static_cast<size_t>(k)] = static_cast<int>(code.size());
+    emit({0x0E, 0xE3 + k, 0x80});
+    emit({0x75, 0xCE, 0x00, 0xE9, 0x00, 0x00, 0x50, 0x60});
+    emit({0x10, 0x4A, 0x04, 0x0A, 0x00, 0x40});
+    emit({0x76, 0x4A, 0x04, 0xE9, 0x00, 0x00, 0x50, 0x60});
+    if (k == 3) emit({0x10, 0x80, 0x00, 0x01, 0x00, 0x40});
+    emit({0x00});
+  }
+  const size_t ec = 8, base = 0x94 + ec * 0x40;
+  Bytes image(base, 0);
+  auto put32 = [&](size_t offset, u32 value) {
+    for (int i = 0; i < 4; ++i) image[offset + static_cast<size_t>(i)] = static_cast<u8>(value >> (8 * i));
+  };
+  auto put16 = [&](size_t offset, int value) {
+    image[offset] = static_cast<u8>(value);
+    image[offset + 1] = static_cast<u8>(value >> 8);
+  };
+  put32(0, 2), put32(4, 0x10), put32(8, static_cast<u32>(base + code.size())), put32(0xC, static_cast<u32>(base + code.size() + 8));
+  put32(0x90, static_cast<u32>(ec));
+  for (size_t entity = 0; entity < ec; ++entity) put16(0x94 + entity * 0x40 + 2, 1);
+  put16(0x94 + 0 * 0x40 + 2, idle0);
+  for (size_t k = 0; k < 4; ++k) put16(0x94 + (4 + k) * 0x40 + 0, init[k]);
+  image.insert(image.end(), code.begin(), code.end());
+  return image;
+}
+
+// Units at countdown 0 act in slot order; a unit still counting down is overtaken by the command menu (no time step while a PC can
+// open its menu). The last unit drew 9: units 4..6 act, unit 3 keeps 9 and the menu comes after three actions. It drew 0: all four act.
+void test_pac_countdown_restore() {
+  for (const int last_draw : {9, 0}) {
+    data::GameTables tables = make_tables();
+    tables.scenes[0].raw[3] = 4;
+    ScriptedRng rng{Lo::Fallback::Lo};
+    pac::ScriptedBrain brain;
+    brain.set_module(0, assemble_countdown_pac());
+    Battle battle{tables, rng, brain};
+    for (const int draw : {30, 40, 50, last_draw}) {
+      rng.push(0);
+      rng.push(draw);
+    }
+    CHECK(battle.start({make_member(0, "A"), make_member(1, "B"), make_member(2, "C")}, 0));
+    CHECK(brain.active());
+    CHECK_EQ(brain.script_var(0x80), 2);
+    CHECK_EQ(brain.script_var(0xCE), last_draw);
+    CHECK_EQ(battle.actions(), last_draw == 0 ? 4 : 3);
+    CHECK_EQ(battle.unit(3).countdown, last_draw == 0 ? 100 : 9);
+    for (int unit = 4; unit < 7; ++unit) CHECK_EQ(battle.unit(unit).countdown, 100);
+  }
+}
+
 // A scripted battle left by running away starts from a clean script state when it is entered again. evt409 (Boxer Boys) in
 // miniature: entity 0 slot 0 = `v84 = 0; AF 1 (menu lock); halt`; slot 1 = `if v84 == 0 { 2C; 2D 60; E0 0; E2; inc v84; AF 0; 38 }` (the window
 // "Which of us do you choose?"). The first entry shows the window, the PC runs, the same ScriptedBrain starts the scene again: the VM, its
@@ -1838,6 +2060,45 @@ void test_end_rules() {
   }
 }
 
+// A battle script that writes an enemy's HP to 0 (the final boss's attacked script after the Chrono Cross order) still starts its kill script
+// once, and the code that script forces ends the fight.
+struct HpWriteBrain final : EnemyBrain {
+  int kills = 0, forced = -1;
+  EnemyAction choose(const Battle&, int, Rng&) override {
+    EnemyAction action;
+    action.kind = EnemyAction::Kind::None;
+    return action;
+  }
+  int forced_result() const override { return forced; }
+  void on_attacked(Battle& battle, int unit, Rng&, std::vector<EnemyAction>&) override {
+    if (unit < kPcSlots) return;
+    battle.unit_mut(unit).hp = 0;
+    battle.unit_mut(unit).lo |= st::kKO;
+  }
+  void on_killed(Battle&, int, Rng&, std::vector<EnemyAction>&) override {
+    ++kills;
+    forced = 4;
+  }
+};
+
+void test_scripted_hp_write_runs_kill_script() {
+  data::GameTables tables = make_tables();
+  HpWriteBrain brain;
+  ScriptedRng rng(Lo::Fallback::Lo);
+  rng.push(0);
+  rng.push(100);
+  Battle battle(tables, rng, brain);
+  CHECK(battle.start({make_member(0, "A"), make_member(1, "B"), make_member(2, "C")}, 0));
+  battle.unit_mut(3).hp = battle.unit_mut(3).max_hp = 9999;
+  battle.do_weapon_attack(0, 3, 0);
+  battle.finish_external_action();
+  CHECK_EQ(brain.kills, 1);
+  CHECK(battle.outcome() == Outcome::Scripted);
+  CHECK_EQ(battle.result_code(), 4);
+  battle.finish_external_action();
+  CHECK_EQ(brain.kills, 1);
+}
+
 // Debug tools: invincible sides and the end test after a primitive called outside the scheduler (Debug tab cast).
 void test_debug_flags() {
   {
@@ -2019,6 +2280,7 @@ int main() {
   test_status_and_poison();
   test_status_message();
   test_field_ring_writes();
+  test_trap_hud();
   test_pilfer();
   test_forced_victory_pays_defeated_only();
   test_victory_and_growth();
@@ -2027,12 +2289,15 @@ int main() {
   test_scripted_brain();
   test_scripted_heal_on_ko_pc();
   test_pac_script_stream();
+  test_pac_init_order();
+  test_pac_countdown_restore();
   test_scripted_battle_reentry();
   test_hp_known_status_applies();
   test_blue_seal_is_not_death();
   test_anti_colour_seals();
   test_pac_resolved_ops();
   test_end_rules();
+  test_scripted_hp_write_runs_kill_script();
   test_hidden_units();
   test_hidden_pair_reveal_one();
   test_debug_flags();

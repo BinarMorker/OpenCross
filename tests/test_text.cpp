@@ -379,6 +379,23 @@ void test_frame_rows() {
   CHECK(skin8_two_lines.second.rows == 3);
 }
 
+// Number entry: {input(n)} survives flatten and marks the next n glyphs (the placeholder digits) as digits 0..n-1; the text after them
+// stays ordinary.
+void test_digit_entry() {
+  ui::LayoutMetrics lm;
+  lm.advance = [](char32_t) { return 10.0f; };
+  lm.line_height = 50;
+  const auto pages =
+      ui::layout_pages(import::flatten(import::parse_markup("Price?\n{speed(255)}   {input(2)}00G{mend}", import::Lang::En), {}), lm);
+  CHECK(pages.size() == 1);
+  if (pages.size() != 1) return;
+  const auto& glyphs = pages[0].glyphs;
+  CHECK(glyphs.size() == 12);
+  if (glyphs.size() != 12) return;
+  CHECK(glyphs[8].digit == -1 && glyphs[9].digit == 0 && glyphs[10].digit == 1 && glyphs[11].digit == -1);
+  CHECK(glyphs[9].ch == U'0' && glyphs[11].ch == U'G' && glyphs[10].x == 40.0f);
+}
+
 }  // namespace
 
 int main() {
@@ -389,6 +406,7 @@ int main() {
   test_typewriter();
   test_choice_lines();
   test_frame_rows();
+  test_digit_entry();
   if (failures) {
     std::printf("%d failure(s)\n", failures);
     return 1;

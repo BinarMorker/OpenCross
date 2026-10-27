@@ -740,6 +740,9 @@ class BattleView {
   bool ring_settled() const;
   void build_party_panels();
   void build_field_ring();
+  // The element-trap block under the field ring, for the presented action (like the ring).
+  battle::TrapHud presented_trap() const;
+  void build_element_trap();
   void build_colour_row();
   void replay(const render::Frame& frame, const render::Letterbox& lb, float alpha);
   // draw_ui is replaying into the PS1-resolution target (replay derives the picture rectangle from `lb`).
@@ -970,8 +973,10 @@ class BattleView {
   // The Chrono Cross colour row as last shown (colour + 1 per dot, 0 = empty).
   std::array<u8, 7> colour_row_{};
   std::array<int, 12> ring_key_{-2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2, -2};
-  // The colour each cell last showed in this battle (-1 none): a cell whose slot has no colour keeps it.
-  std::array<int, 12> ring_drawn_{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+  // The all-colours cell's picture, 208x112 RGB (elementfield/battle_88.bmp); empty when missing.
+  std::vector<u8> ring_rainbow_;
+  // The element-trap block's colour marks (5 x 5 PS1 px, cut from the disc's battle sprite sheet 'etra'), by colour index green .. blue.
+  std::array<Tex, 6> trap_marks_;
   // Damage digit ink ranges in battle_33.tim (HD px) + the "miss!" word as entry 10.
   std::vector<std::pair<int, int>> digit_x_;
   // battle_08_93: the item-like (record type 5) cast-header plate (120 x 16).

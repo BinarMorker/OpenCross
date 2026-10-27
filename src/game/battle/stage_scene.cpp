@@ -516,9 +516,12 @@ void StageScene::draw(render::StagePipeline& pipe, const render::Frame& frame, r
   inst_.clear();
   inst_.reserve(live.size());
   for (const auto& mi : live) {
+    // A zero name word takes the first registered entry of the type: for the ground, the stage's one ground object.
     const auto& table = mi.sprite_type == 19 ? ground_parts_ : parts_;
     const auto pit = table.find(*mi.name);
-    if (pit == table.end()) continue;
+    int part = pit != table.end() ? pit->second : -1;
+    if (part < 0 && mi.sprite_type == 19 && mi.name->empty()) part = ground_part_;
+    if (part < 0) continue;
     // The ground takes the object's colour.
     if (mi.sprite_type == 19) {
       ground_rgb_ = {mi.rgb[0], mi.rgb[1], mi.rgb[2]};
@@ -527,7 +530,7 @@ void StageScene::draw(render::StagePipeline& pipe, const render::Frame& frame, r
     // With skip_stock set the stock draw leaves the ground out.
     if (mi.sprite_type == 19 && ground_.skip_stock) continue;
     render::StageInstance in;
-    in.part = pit->second;
+    in.part = part;
     for (size_t k = 0; k < 9; ++k) in.cam[k] = mi.mat.m[k];
     for (size_t k = 0; k < 3; ++k) in.cam[9 + k] = mi.centre[k];
     for (size_t k = 0; k < 3; ++k) in.rgb[k] = mi.rgb[k];
@@ -571,9 +574,12 @@ void StageScene::draw(render::StagePipeline& pipe, const render::Frame& frame, r
       for (size_t k = 0; k < 9; ++k) in.warp_view[k] = view.rot.m[k];
       for (size_t k = 0; k < 3; ++k) in.warp_view[9 + k] = view.trans[k];
     }
-    // The ground object: its own bias, cued whenever the fog flag is up.
+    // The ground object: its own bias, cued whenever the fog flag is up. The extended-object bits belong to the mesh draw only: the cells
+    // and rim keep the default cull side and never scroll.
     if (mi.sprite_type == 19) {
       in.ground = true;
+      in.cull = 0;
+      in.uv_scroll = false;
       in.bias = ground_.bias;
       in.fixed_slot = false;
       in.depth_cue = true;

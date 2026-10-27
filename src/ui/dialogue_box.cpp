@@ -56,6 +56,9 @@ constexpr float kTW = 61.75f, kTH = 66.5f, kCorner = 2.5f * kTH;
 constexpr float kPadX = 64, kPadY = 44;
 constexpr float kBottomMargin = 36;
 
+// Script variable of the number entry ({input(n)}): read when the message opens, written while the entry takes input.
+constexpr int kDigitEntryVar = 0x18;
+
 // Stem of an RDE face name ("00_seljyu" -> "seljyu"): the PS1 face files cdrom/face/<stem>.tim carry the same names.
 std::string face_stem(const char* name) {
   std::string stem(name);
@@ -232,7 +235,13 @@ void DialogueBox::open(const import::Message& flat, render::FaceId face, float t
   wrap_ = wrap;
   canvas_w_ = canvas_width;
   choice_mode_ = false;
-  tw_.start(layout(face, italic, text_scale));
+  std::vector<TextPage> pages = layout(face, italic, text_scale);
+  int digit_count = 0;
+  for (const TextPage& page : pages)
+    for (const LayoutGlyph& glyph : page.glyphs) digit_count = std::max(digit_count, glyph.digit + 1);
+  digits_.assign(static_cast<size_t>(digit_count), 0);
+  digit_cursor_ = std::max(0, digit_count - 1);
+  tw_.start(std::move(pages));
   open_ = true;
   has_win_ = false;
   time_ = 0;
@@ -240,6 +249,39 @@ void DialogueBox::open(const import::Message& flat, render::FaceId face, float t
   chosen_ = -1;
   line_count_ = 0;
   choice_ = 0;
+}
+
+void DialogueBox::start_digits(int value) {
+  const int count = static_cast<int>(digits_.size());
+  int rest = std::abs(value);
+  for (int i = count - 1; i >= 0; --i) {
+    digits_[static_cast<size_t>(i)] = rest % 10;
+    rest /= 10;
+  }
+  digit_cursor_ = std::max(0, count - 1);
+}
+
+bool DialogueBox::digit_entry() const {
+  if (digits_.empty() || !open_ || tw_.closed()) return false;
+  const TextPage* page = tw_.page();
+  if (!page) return false;
+  for (size_t i = 0; i < page->glyphs.size(); ++i)
+    if (page->glyphs[i].digit >= 0) return tw_.visible() > i;
+  return false;
+}
+
+void DialogueBox::move_digit(int step, int shift) {
+  if (digits_.empty()) return;
+  const int count = static_cast<int>(digits_.size());
+  int& digit = digits_[static_cast<size_t>(digit_cursor_)];
+  digit = ((digit + step) % 10 + 10) % 10;
+  digit_cursor_ = ((digit_cursor_ + shift) % count + count) % count;
+}
+
+int DialogueBox::digit_value() const {
+  int value = 0;
+  for (int digit : digits_) value = value * 10 + digit;
+  return value;
 }
 
 void DialogueBox::swap_faces(render::FaceId face, render::FaceId italic) {
@@ -277,7 +319,7 @@ std::vector<TextPage> DialogueBox::layout(render::FaceId face, render::FaceId it
   std::u32string all;
   for (const auto& tok : flat.tokens)
     if (tok.kind == import::TokKind::Text) all += tok.text;
-  all += U"○×△□";
+  all += U"○×△□0123456789";
   batch->prepare(face, all);
   if (italic != render::kNoFace) batch->prepare(italic, all);
   for (const auto& choice : choices_) batch->prepare(face, choice);
@@ -582,9 +624,15 @@ void DialogueBox::draw(float vw, float vh, const render::CanvasFit* fit) {
     for (render::TextBatch::Pass pass : {render::TextBatch::Pass::Backdrop, render::TextBatch::Pass::Fill}) {
       for (u32 i = 0; i < shown; ++i) {
         const LayoutGlyph& glyph = page->glyphs[i];
-        const bool hl = choosing && line_h_ > 0 && static_cast<int>(std::lround(glyph.y / line_h_)) == hl_line;
+        bool hl = choosing && line_h_ > 0 && static_cast<int>(std::lround(glyph.y / line_h_)) == hl_line;
+        char32_t ch = glyph.ch;
+        // A number-entry digit shows the entry's value; the cursor digit is orange.
+        if (glyph.digit >= 0 && static_cast<size_t>(glyph.digit) < digits_.size()) {
+          ch = static_cast<char32_t>(U'0' + digits_[static_cast<size_t>(glyph.digit)]);
+          hl = hl || glyph.digit == digit_cursor_;
+        }
         const render::FaceId glyph_face = glyph.italic && italic_ != render::kNoFace ? italic_ : face_;
-        text_->draw_glyph(glyph_face, glyph.ch, (tx + glyph.x) * zoom, (ty + glyph.y) * zoom + yo_, text_color(hl ? 6 : glyph.color, a), scale_ * zoom,
+        text_->draw_glyph(glyph_face, ch, (tx + glyph.x) * zoom, (ty + glyph.y) * zoom + yo_, text_color(hl ? 6 : glyph.color, a), scale_ * zoom,
                           pass);
       }
     }
@@ -812,6 +860,7 @@ void DialogueDemo::show(int room_id, int msg_index, int speaker) {
   if (script_var && script_set)
     impl.box.set_field_events([this] { return script_var(0x22); }, [this](int value) { script_set(0x22, value); });
   impl.box.open(flat, face, 0.5f, !jp, impl.canvas_w, italic);
+  if (script_var) impl.box.start_digits(script_var(kDigitEntryVar));
   {
     if (impl.guest_room != room_) {
       impl.guest_room = room_;
@@ -835,6 +884,7 @@ void DialogueDemo::show(int room_id, int msg_index, int speaker) {
 
 void DialogueDemo::update(float dt) {
   impl_->box.update(dt);
+  if (script_set && impl_->box.digit_entry()) script_set(kDigitEntryVar, impl_->box.digit_value());
   voice_sync();
 }
 
@@ -890,6 +940,11 @@ void DialogueDemo::move_choice(int delta) { impl_->box.move_choice(delta); }
 void DialogueDemo::set_line_choice(int first, int last) { impl_->box.set_line_choice(first, last); }
 int DialogueDemo::chosen() const { return impl_->box.chosen(); }
 int DialogueDemo::picking_line() const { return impl_->box.picking_line(); }
+bool DialogueDemo::digit_entry() const { return impl_->box.digit_entry(); }
+void DialogueDemo::move_digit(int step, int shift) {
+  impl_->box.move_digit(step, shift);
+  if (script_set && impl_->box.digit_entry()) script_set(kDigitEntryVar, impl_->box.digit_value());
+}
 void DialogueDemo::set_portrait(int id) { impl_->box.set_portrait(id); }
 void DialogueDemo::set_portrait_flags(bool on, bool left) { impl_->box.set_portrait_flags(on, left); }
 void DialogueDemo::set_skin_byte(int config_byte) { impl_->box.set_skin_byte(config_byte); }

@@ -1,5 +1,7 @@
 #include "battle/rules.h"
 
+#include "data/tables.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -42,6 +44,11 @@ int colour_multiplier(int innate, int attack, const std::array<int, 3>& ring, in
   if (idx < 0) return 500;
   if (idx > 9) idx = 9;
   return kColourMul[static_cast<size_t>(idx)];
+}
+
+int ring_colour_of(u8 colour_byte) {
+  const u8 mask = static_cast<u8>(colour_byte & 0xFC);
+  return mask == 0xFC ? kRingAllColours : data::colour_index_of_bit(mask);
 }
 
 void ring_push(std::array<int, 3>& ring, int colour) {

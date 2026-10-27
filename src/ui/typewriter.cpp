@@ -25,6 +25,9 @@ struct PageBuilder {
   // in_indent: still inside that line's leading space run.
   bool choice_line = false;
   bool in_indent = false;
+  // {input(n)}: the next digits_left glyphs are number-entry digits, the next one being digit_next.
+  int digits_left = 0;
+  int digit_next = 0;
 
   explicit PageBuilder(const LayoutMetrics& layout_metrics) : metrics(layout_metrics) {}
 
@@ -62,6 +65,10 @@ struct PageBuilder {
     glyph.y = y;
     glyph.color = color;
     glyph.italic = italic;
+    if (digits_left > 0) {
+      glyph.digit = digit_next++;
+      --digits_left;
+    }
     cur.glyphs.push_back(glyph);
     if (ch == U' ') last_space = static_cast<int>(cur.glyphs.size()) - 1;
     x += glyph_advance;
@@ -137,6 +144,10 @@ std::vector<TextPage> layout_pages(const import::Message& flat, const LayoutMetr
       case TokKind::Button: builder.add_glyph(button_glyph(token.arg)); break;
       case TokKind::FWait: builder.event(PageEvent::Kind::FWait, token.arg); break;
       case TokKind::FSet: builder.event(PageEvent::Kind::FSet, token.arg); break;
+      case TokKind::Input:
+        builder.digits_left = std::clamp(token.arg, 0, 8);
+        builder.digit_next = 0;
+        break;
       default: break;
     }
   }

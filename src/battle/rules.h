@@ -42,9 +42,13 @@ constexpr int kNoColour = 6;
 constexpr std::array<int, 6> kOpp = {4, 2, 1, 5, 0, 3};
 constexpr std::array<int, 10> kColourMul = {665, 750, 875, 1000, 1125, 1250, 1375, 1500, 1500, 1500};
 // Colour multiplier (per mille) for one attack. `innate` = attacker innate colour (0..5 or kNoColour), `attack` = colour of
-// the attack (weapon: attacker's colour, element: pgdat colour), `ring` the three field-colour slots (0..5 or -1),
+// the attack (weapon: attacker's colour, element: pgdat colour), `ring` the three field-colour slots (0..5, kRingAllColours or -1),
 // `target` = target colour (0..5 or -1).
 int colour_multiplier(int innate, int attack, const std::array<int, 3>& ring, int target);
+// A ring slot holding every colour at once (the Chrono Cross): drawn as the rainbow cell, counted as no colour by the multiplier.
+constexpr int kRingAllColours = 6;
+// The ring slot an element colour byte enters as: one colour bit -> 0..5, all six bits (0xFC) -> kRingAllColours, else -1 (none).
+int ring_colour_of(u8 colour_byte);
 // Field-colour FIFO: the new colour enters, the oldest leaves. `colour` -1 = none.
 void ring_push(std::array<int, 3>& ring, int colour);
 int ring_count(const std::array<int, 3>& ring, int colour);

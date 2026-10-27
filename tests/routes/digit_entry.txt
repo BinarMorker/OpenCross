@@ -1,0 +1,46 @@
+# Number entry ({input(n)}, result in script variable 0x18): the Viper Manor hall dial (jac_b08i entity 4, ON_ACTION needs the
+# leader's rotation in 1540..2550 = facing screen-left). The code is set to 3 right / 5 left (vars 0x10A / 0x10C; 0x108 bit 0x4000 =
+# the code is known); holding up enters 3 (the step on the press, then auto-repeat every tick from 21 ticks later), down x5 wraps 0 -> 9 .. 5. The right code opens the door (SET_BIT 0x10E bit 4 = 16) and the
+# party stays in jac_b08i; a wrong one drops it through the trapdoor (room 167).
+0 wait 5
+- set var 0x108 16384
+- set var 0x10A 3
+- set var 0x10C 5
+- set var 0x10E 0
+- load jac_b08i 0
+- wait room jac_b08i 300
+- wait idle 600
+- wait 30
+- walk -200 800 16 3000
+- put -190 900
+- wait 10
+- tap left 2
+- wait 10
+- assert facing player 2048 500
+- action
+- wait text knob
+- choose 0
+- wait text times to the right
+- wait 20
+- key down up
+- wait 21
+- key up up
+- wait 10
+- assert var 0x18 3
+- screenshot de_01_right3.png
+- action
+- wait text times to the left
+- wait 20
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down
+- wait 10
+- assert var 0x18 5
+- action
+- wait idle 1200
+- wait 60
+- assert room jac_b08i
+- assert var 0x10E 16
+- quit
