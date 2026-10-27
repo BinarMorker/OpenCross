@@ -35,9 +35,20 @@ int key_for(const std::string& name) {
   if (name == "tab" || name == "menu") return platform::action_keys(Action::Menu)[1];
   if (name == "triangle") return first(Action::Menu);
   if (name == "item") return first(Action::Item);
+  if (name == "select") return platform::kSelectKey;
+  if (name == "start" || name == "space") return platform::kStartKey;
   if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z') return SDL_SCANCODE_A + (name[0] - 'a');
   // f1..f9: the hotkeys.
   if (name.size() == 2 && name[0] == 'f' && name[1] >= '1' && name[1] <= '9') return SDL_SCANCODE_F1 + (name[1] - '1');
+  return -1;
+}
+
+int pad_button_for(const std::string& name) {
+  if (name == "a") return SDL_GAMEPAD_BUTTON_SOUTH;
+  if (name == "b") return SDL_GAMEPAD_BUTTON_EAST;
+  if (name == "x") return SDL_GAMEPAD_BUTTON_WEST;
+  if (name == "y") return SDL_GAMEPAD_BUTTON_NORTH;
+  if (name == "start") return SDL_GAMEPAD_BUTTON_START;
   return -1;
 }
 
@@ -116,6 +127,7 @@ bool Route::ready(const Cmd& cmd, const RouteState& st) const {
 
 void Route::step(const RouteState& st, platform::Input& in, RouteOut& out) {
   prev_held_ = held_;
+  pad_prev_held_ = pad_held_;
   if (pc_ >= cmds_.size()) {
     out.done = true;
   } else {
@@ -153,6 +165,13 @@ void Route::step(const RouteState& st, platform::Input& in, RouteOut& out) {
   for (size_t i = 0; i < held_.size(); ++i) {
     in.key_down[i] = held_[i];
     in.key_pressed[i] = held_[i] && !prev_held_[i];
+  }
+  if (pad_on_) {
+    in.pad_connected = true;
+    for (size_t i = 0; i < pad_held_.size(); ++i) {
+      in.pad_down[i] = pad_held_[i];
+      in.pad_pressed[i] = pad_held_[i] && !pad_prev_held_[i];
+    }
   }
   if (stick_on_) {
     in.pad_connected = true;
@@ -202,6 +221,33 @@ bool Route::run(const Cmd& cmd, const RouteState& st, platform::Input&, RouteOut
     if (op == "tap" && args.size() > 2) to_int(args[2], ticks);
     return tap_step(sc, static_cast<u64>(std::max(1, ticks)));
   }
+  if (op == "pad") {
+    if (args.size() < 2) return bad("pad on|off|tap <button>");
+    if (args[1] == "on" || args[1] == "off") {
+      pad_on_ = args[1] == "on";
+      pad_held_.fill(false);
+      return true;
+    }
+    if (args[1] != "tap" || args.size() < 3) return bad("pad on|off|tap <button>");
+    const int button = pad_button_for(args[2]);
+    if (button < 0) return bad("unknown pad button " + args[2]);
+    int ticks = 3;
+    if (args.size() > 3) to_int(args[3], ticks);
+    pad_on_ = true;
+    const size_t index = static_cast<size_t>(button);
+    if (phase_ == 0) {
+      pad_held_[index] = true;
+      aux_ = st.tick;
+      phase_ = 1;
+    } else if (phase_ == 1 && st.tick >= aux_ + static_cast<u64>(std::max(1, ticks))) {
+      pad_held_[index] = false;
+      phase_ = 2;
+      aux_ = st.tick;
+    } else if (phase_ == 2 && st.tick >= aux_ + 3) {
+      return true;
+    }
+    return false;
+  }
   if (op == "wait") {
     if (args.size() < 2) return bad("wait <ticks|room|dialogue|battle|idle>");
     int wait_ticks;
@@ -248,6 +294,13 @@ bool Route::run(const Cmd& cmd, const RouteState& st, platform::Input&, RouteOut
       if (args.size() < 3) return bad("wait flow <state>");
       if (st.flow == args[2] && !st.movie) return true;
       if (timed_out(3)) return bad("timed out waiting for flow state " + args[2] + " (in " + st.flow + ")");
+      return false;
+    }
+    if (args[1] == "guide") {
+      int page;
+      if (args.size() < 3 || !to_int(args[2], page)) return bad("wait guide <0|1|2>");
+      if (st.guide_page == page) return true;
+      if (timed_out(3)) return bad("timed out waiting for guide page " + args[2] + " (on " + std::to_string(st.guide_page) + ")");
       return false;
     }
     if (args[1] == "movie" || args[1] == "menu" || args[1] == "shop") {
@@ -502,6 +555,18 @@ bool Route::run(const Cmd& cmd, const RouteState& st, platform::Input&, RouteOut
               snap.ents.size(), snap.vars.size(), st.room_loads, st.art_swaps - snap.art_swaps, st.title_seq, st.title_plays, bsig);
     return true;
   }
+  // assert frozen: the field simulation and the message typewriters stood still since the `snap`
+  if (op == "assert" && args.size() == 2 && args[1] == "frozen") {
+    if (st.field_ticks != snap_.field_ticks) return bad(std::format("{} field tick(s) ran since the snap", st.field_ticks - snap_.field_ticks));
+    const std::vector<int> now = st.dialogue_progress ? st.dialogue_progress() : std::vector<int>();
+    for (size_t i = 0; i < std::max(now.size(), snap_.dialogue.size()); ++i) {
+      const int was = i < snap_.dialogue.size() ? snap_.dialogue[i] : -1;
+      const int cur = i < now.size() ? now[i] : -1;
+      if (was != cur) return bad(std::format("message window {} moved: {:X} -> {:X}", i, was, cur));
+    }
+    log::info("route: frozen since the snap (field tick {}, windows {})", st.field_ticks, now.size());
+    return true;
+  }
   if (op == "assert") {
     if (args.size() < 3) return bad("assert <what> <value>");
     if (args[1] == "room") {
@@ -723,6 +788,12 @@ bool Route::run(const Cmd& cmd, const RouteState& st, platform::Input&, RouteOut
         return bad("battle events are [" + have + "], expected to start with [" + want + "]");
     } else if (args[1] == "battle") {
       if (st.battle != (args[2] == "active")) return bad("battle is " + std::string(st.battle ? "active" : "inactive"));
+    } else if (args[1] == "guide") {
+      int page;
+      if (!to_int(args[2], page)) return bad("assert guide <0|1|2>");
+      if (st.guide_page != page) return bad("guide page is " + std::to_string(st.guide_page) + ", expected " + args[2]);
+    } else if (args[1] == "pause") {
+      if (st.pause != (args[2] == "open")) return bad(std::string("the pause screen is ") + (st.pause ? "up" : "not up"));
     } else if (args[1] == "flow") {
       if (st.flow != args[2]) return bad("flow is " + st.flow);
     } else if (args[1] == "menu" || args[1] == "shop" || args[1] == "movie") {
@@ -923,6 +994,8 @@ bool Route::run(const Cmd& cmd, const RouteState& st, platform::Input&, RouteOut
     snap.title_seq = st.title_seq;
     snap.battle = st.battle;
     snap.battle_sig = st.battle_sig ? st.battle_sig() : std::string();
+    snap.field_ticks = st.field_ticks;
+    snap.dialogue = st.dialogue_progress ? st.dialogue_progress() : std::vector<int>();
     for (int ent_id = 0; ent_id < 128 && st.room_valid; ++ent_id) {
       Snap::EntState ent;
       ent.ok = st.ent_xz && st.ent_xz(ent_id, ent.x, ent.z);

@@ -396,6 +396,35 @@ void test_digit_entry() {
   CHECK(glyphs[9].ch == U'0' && glyphs[11].ch == U'G' && glyphs[10].x == 40.0f);
 }
 
+// Window opening, one update per 60 Hz tick after the open tick: no text time for the 15 ticks that complete the 16-tick grow, the
+// text from the 16th; drawn from the 17th tick (alpha 1/3, 2/3, 1). Without the grow the text starts on the first tick.
+void test_window_opening() {
+  const float tick = 1.0f / 60.0f;
+  ui::WindowOpening opening;
+  opening.start(true);
+  float text_time = 0;
+  for (int k = 1; k <= 15; ++k) text_time += opening.update(tick);
+  CHECK(text_time < 1e-3f && !opening.growing() && opening.alpha() == 0.0f);
+  CHECK(std::fabs(opening.update(tick) - tick) < 1e-4f);
+  CHECK(opening.alpha() < 1.0f / 255.0f);
+  opening.update(tick);
+  CHECK(std::fabs(opening.alpha() - 1.0f / 3.0f) < 0.01f);
+  opening.update(tick);
+  CHECK(std::fabs(opening.alpha() - 2.0f / 3.0f) < 0.01f);
+  opening.update(tick);
+  CHECK(opening.alpha() == 1.0f);
+
+  ui::WindowOpening grow_in_steps;
+  grow_in_steps.start(true);
+  CHECK(grow_in_steps.growing());
+  CHECK(grow_in_steps.update(14 * tick) == 0.0f && grow_in_steps.growing());
+  CHECK(std::fabs(grow_in_steps.update(2 * tick) - tick) < 1e-4f);
+
+  ui::WindowOpening full_at_once;
+  full_at_once.start(false);
+  CHECK(!full_at_once.growing() && std::fabs(full_at_once.update(tick) - tick) < 1e-6f);
+}
+
 }  // namespace
 
 int main() {
@@ -407,6 +436,7 @@ int main() {
   test_choice_lines();
   test_frame_rows();
   test_digit_entry();
+  test_window_opening();
   if (failures) {
     std::printf("%d failure(s)\n", failures);
     return 1;

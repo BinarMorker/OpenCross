@@ -106,24 +106,29 @@ void App::log_frametime() {
 }
 
 void App::frame_hotkeys() {
-  // The settings window: Esc, or a tap of the pad's Back / View button. The tap opens it on the release; the press closes it. Held past
-  // kSelectHoldMs it never opens and, as RDE's Select, hides the battle overlays during a cast instead.
-  constexpr u64 kSelectHoldMs = 300;
-  const bool select_down = input.pad_connected && input.pad_down[SDL_GAMEPAD_BUTTON_BACK];
-  const bool select_pressed = input.pad_connected && input.pad_pressed[SDL_GAMEPAD_BUTTON_BACK];
+  // The settings window: Esc, or the pad's Start held for kStartHoldMs (it opens while still held); a Start press closes it. A shorter
+  // Start press is RDE's Start: it opens the pause screen on its release (start_tap), so holding never shows the pause first (the keyboard's
+  // Start, Space, opens it on the press). The pad's Back / View and the K key are the PS1 Select: it rotates the party in the field and, held,
+  // hides the battle overlays during a cast.
+  constexpr u64 kStartHoldMs = 500;
+  const bool start_down = input.pad_connected && input.pad_down[SDL_GAMEPAD_BUTTON_START];
+  const bool start_pressed = input.pad_connected && input.pad_pressed[SDL_GAMEPAD_BUTTON_START];
   const u64 now_ms = SDL_GetTicks();
   bool settings_key = input.key_pressed[SDL_SCANCODE_ESCAPE];
-  if (select_pressed) {
+  start_tap = false;
+  if (start_pressed) {
     settings_key = settings_key || ui.options_open;
-    select_tap = !ui.options_open;
-    select_down_ms = now_ms;
-  } else if (select_tap && (ui.options_open || now_ms - select_down_ms >= kSelectHoldMs)) {
-    select_tap = false;
-  } else if (select_tap && !select_down) {
-    select_tap = false;
-    settings_key = input.pad_connected;
+    start_held = !ui.options_open;
+    start_down_ms = now_ms;
+  } else if (start_held && !start_down) {
+    start_held = false;
+    start_tap = input.pad_connected;
+  } else if (start_held && now_ms - start_down_ms >= kStartHoldMs) {
+    start_held = false;
+    settings_key = !ui.options_open;
   }
   if (settings_key && !routing && !replaying) ui.options_open = !ui.options_open;
+  const bool select_down = input.key_down[platform::kSelectKey] || (input.pad_connected && input.pad_down[SDL_GAMEPAD_BUTTON_BACK]);
   battle.set_select_held(select_down && !ui.options_open && !routing && !replaying);
   settings_pad_filter();
   if (input.key_pressed[SDL_SCANCODE_F8]) ui.toggle("Debug");

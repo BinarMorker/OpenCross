@@ -25,6 +25,7 @@ void App::init_route_state() {
   rstate.char_stat = [this](int id, int what) { return world.debug_char_stat(id, what); };
   rstate.set_char_stat = [this](int id, int what, int value) { world.debug_set_char_stat(id, what, value); };
   rstate.dialogue_text = [this] { return world.dialogue_text(); };
+  rstate.dialogue_progress = [this] { return world.dialogue_progress(); };
   rstate.char_name = [this](int id) {
     if (!flow_ready) return std::string();
     const auto& cn = flow.machine().custom_names();
@@ -72,6 +73,9 @@ void App::fill_route_state() {
   rstate.movie = movie_open;
   rstate.menu = (menu_ok && !menu.closed()) || (flow_ready && (flow.rename_active() || flow.party_active() || flow.ng_plus_active())) || (party_ok && party_screen.active());
   rstate.shop = shop_open;
+  rstate.guide_page = flow_ready ? flow.guide_page() : 0;
+  rstate.pause = pause_ok && pause_screen.active();
+  rstate.field_ticks = world_ok ? world.tick_count() : 0;
   rstate.room_loads = world.room_loads();
   rstate.art_swaps = world.art_swaps();
   rstate.battle_starts = battle_starts;

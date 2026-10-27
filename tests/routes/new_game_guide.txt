@@ -1,0 +1,27 @@
+# New Game user guide: title -> New Game -> vibration page -> the two guide pages in order (controller, then keyboard) -> name entry.
+# A virtual pad is connected the whole time with no button held: the controller page must still wait for a press.
+0 pad on
+- wait flow title 300
+- wait movie start 300                # cold boot: the title room plays its logo FMV first
+- tap confirm                         # skip it
+- wait movie end 300
+- wait 150
+- tap confirm                         # any button: the menu
+- wait 60
+- tap confirm                         # New Game
+- wait 20
+- tap confirm                         # the vibration page: On
+- wait guide 1 600                    # page 1: Controller Controls
+- wait 120
+- assert guide 1                      # still waiting for the "next" press
+- screenshot guide_1_controller.png
+- tap confirm                         # keyboard press: cross-fade to page 2
+- wait guide 2 60
+- wait 60
+- assert guide 2
+- screenshot guide_2_keyboard.png
+- pad tap a                           # pad button released: fade out, then the name entry
+- wait guide 0 120
+- assert flow name
+- log user guide showed the controller page, then the keyboard page
+- quit

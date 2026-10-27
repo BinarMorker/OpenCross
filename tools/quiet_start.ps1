@@ -2,6 +2,8 @@
 # Start-Quiet <exe> <argument string> <working dir> [stdout file] [stderr file] -> a process object (WaitForExit / ExitCode).
 # The child's first ShowWindow takes the STARTUPINFO show mode, so a test window (ccx) opens minimised WITHOUT activation
 # (SW_SHOWMINNOACTIVE): it never takes the focus from whatever the user is doing. Start-Process -WindowStyle Minimized activates it.
+# -NoMinimize: shown at its normal size, still without activation (SW_SHOWNOACTIVATE), for runs that need the presented frame
+# (a minimised ccx presents nothing: its screenshots are 8 x 8 and its PC overlays are not drawn).
 if (-not ("OcQuietStart" -as [type])) {
   Add-Type -TypeDefinition @"
 using System;
@@ -28,10 +30,13 @@ public static class OcQuietStart {
   }
   // stdoutPath / stderrPath: optional files for the child's standard output / error ("" = none).
   public static int Start(string exe, string args, string dir, string stdoutPath, string stderrPath) {
+    return Start(exe, args, dir, stdoutPath, stderrPath, false);
+  }
+  public static int Start(string exe, string args, string dir, string stdoutPath, string stderrPath, bool noMinimize) {
     var si = new STARTUPINFO();
     si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
     si.dwFlags = 0x1;        // STARTF_USESHOWWINDOW
-    si.wShowWindow = 7;      // SW_SHOWMINNOACTIVE
+    si.wShowWindow = (short)(noMinimize ? 4 : 7);  // SW_SHOWNOACTIVATE / SW_SHOWMINNOACTIVE
     var outFs = Inheritable(stdoutPath);
     var errFs = Inheritable(stderrPath);
     bool redirect = outFs != null || errFs != null;
@@ -57,8 +62,8 @@ public static class OcQuietStart {
 }
 "@
 }
-function Start-Quiet([string]$Exe, [string]$Arguments, [string]$WorkingDirectory, [string]$StdOut = "", [string]$StdErr = "") {
-  $id = [OcQuietStart]::Start($Exe, $Arguments, $WorkingDirectory, $StdOut, $StdErr)
+function Start-Quiet([string]$Exe, [string]$Arguments, [string]$WorkingDirectory, [string]$StdOut = "", [string]$StdErr = "", [switch]$NoMinimize) {
+  $id = [OcQuietStart]::Start($Exe, $Arguments, $WorkingDirectory, $StdOut, $StdErr, [bool]$NoMinimize)
   $p = Get-Process -Id $id
   # Keep the handle open so ExitCode is readable after the exit.
   $null = $p.Handle

@@ -384,11 +384,13 @@ OptionsChange ImGuiLayer::general_tab(platform::Config& cfg) {
   auto sec_controls = [&] {
   section("Controls");
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-    tooltip("The keyboard shortcuts the game itself listens to (pad buttons follow the RDE layout). Esc opens this window; the others work in "
-            "the field and in battle.");
+    tooltip("The keyboard shortcuts the game itself listens to (pad buttons follow the RDE layout). Esc (or holding the pad's Start) opens "
+            "this window; the others work in the field and in battle.");
   // One key per row.
   if (begin_rows("controls")) {
-    const char* keys[][2] = {{"Esc", "Settings (pad: Back / View)"}, {"F1 / F2", "Slow / Fast mode (pad: LT / RT)"},
+    const char* keys[][2] = {{"Esc", "Settings (pad: hold Start)"},      {"Space", "Start: pause (pad: Start)"},
+                             {"K", "Select: change the lead character; held in battle, hide the overlays (pad: Back / View)"},
+                             {"F1 / F2", "Slow / Fast mode (pad: LT / RT)"},
                              {"F3", "No encounters (pad: L3)"},  {"F4", "Battle boost (pad: R3)"},
                              {"F5", "Auto battle (pad: L3 + R3)"}, {"F6", "Art mode"},
                              {"F7", "Widescreen"},                {"F8", "Debug tab"},

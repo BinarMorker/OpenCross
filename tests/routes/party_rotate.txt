@@ -1,0 +1,45 @@
+# Select rotates the party order in the field; the scripts see the new order in PARTY_MEMBER_0..2 (vars 0C / 0E / 10).
+0 wait idle
+- request party_add 1
+- request party_add 22
+- load alu_a01f 0
+- wait idle 300
+- wait 60
+- assert party 0,1,22
+- assert var C 0
+- tap select
+- wait 10
+- assert party 1,22,0
+- assert var C 1
+- assert var E 22
+- assert var 10 0
+- tap select
+- wait 10
+- assert party 22,0,1
+- assert var C 22
+- tap select
+- wait 10
+- assert party 0,1,22
+- assert gap player p1 0 400
+# The world map (wld_a01) rotates the same way.
+- load wld_a01 0
+- wait idle 300
+- wait 60
+- assert party 0,1,22
+- tap select
+- wait 10
+- assert party 1,22,0
+- assert var C 1
+# Fort Dragonia's pedestal (ryu_a19i entity 4, ON_ACTION) reads the party order from PARTY_MEMBER_0..2 and stores a one-hot code in
+# variable 0x150 for the ring room ryu_a16i: order [1, 22, 0] gives 0x84 (the unrotated [0, 1, 22] gives 0x82).
+- load ryu_a19i 0
+- wait idle 300
+- wait 60
+- assert party 1,22,0
+- approach 4 110 900
+- wait 10
+- action
+- wait dialogue open 300
+- mash until idle x 4000
+- assert var 150 132
+- quit

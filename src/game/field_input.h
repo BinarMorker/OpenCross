@@ -18,6 +18,8 @@ struct FieldInput {
   u16 key_latch = 0;
   // FE 77: ANDed with the pad words; room init 0xFFFF
   u16 input_mask = 0xFFFF;
+  // Ticks after a room load in which Select does not rotate the party (24 field frames)
+  int select_wait = 0;
   float pad_x = 0, pad_y = 0;
   bool pad_analog = false;
   // right stick (up positive), outside the dead zone
@@ -29,12 +31,14 @@ struct FieldInput {
 
   // The menu-style presses of this frame (keyboard or pad). `repeat`: the held directions whose auto-repeat fires this frame (held_mask
   // bits): after a direction has been held past the repeat delay it steps again every tick.
+  // `select`: the PS1 Select press (pad Back / View, keyboard K), already masked by `input_mask`.
   struct Edges {
     bool confirm = false, up = false, down = false, left = false, right = false;
     u32 repeat = 0;
+    bool select = false;
   };
 
-  // Room change: no held direction, no pending action, the key mask open again.
+  // Room change: no held direction, no pending action, the key mask open again, Select held off for 24 field frames.
   void reset();
   // Reads the frame's keyboard and pad state into the snapshot and returns the press edges; `ticks` = game ticks since the last call.
   Edges sample(const platform::Input& in, int ticks);

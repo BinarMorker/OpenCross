@@ -13,10 +13,15 @@ namespace oc::game {
 
 namespace {
 
-// PS1-style key word (op 50 / 51 masks): bit 5 circle (confirm), 6 cross, 12 up, 13 right, 14 down, 15 left.
-constexpr u16 kKeyCircle = 0x20, kKeyCross = 0x40, kKeyUp = 0x1000, kKeyRight = 0x2000, kKeyDown = 0x4000, kKeyLeft = 0x8000;
+// PS1-style key word (op 50 / 51 masks): bit 5 circle (confirm), 6 cross, 8 select, 11 start, 12 up, 13 right, 14 down, 15 left.
+constexpr u16 kKeyCircle = 0x20, kKeyCross = 0x40, kKeySelect = 0x100, kKeyStart = 0x800, kKeyUp = 0x1000, kKeyRight = 0x2000, kKeyDown = 0x4000,
+              kKeyLeft = 0x8000;
 // A held direction repeats once it has been down for more than this many ticks, then every tick.
 constexpr int kRepeatDelay = 21;
+// After a room load Select is ignored for 24 field frames (2 ticks each).
+constexpr int kSelectWait = 48;
+using platform::kSelectKey;
+using platform::kStartKey;
 
 }  // namespace
 
@@ -25,6 +30,7 @@ void FieldInput::reset() {
   held_ticks = {};
   action_pending = false;
   input_mask = 0xFFFF;
+  select_wait = kSelectWait;
 }
 
 FieldInput::Edges FieldInput::sample(const platform::Input& in, int ticks) {
@@ -85,10 +91,11 @@ FieldInput::Edges FieldInput::sample(const platform::Input& in, int ticks) {
   const bool pad_a = in.pad_connected && in.pad_down[SDL_GAMEPAD_BUTTON_SOUTH], pad_b = in.pad_connected && in.pad_down[SDL_GAMEPAD_BUTTON_EAST];
   if (platform::action_down(in, Action::Ok) || pad_a) pad_word |= kKeyCircle;
   if (platform::action_down(in, Action::Cancel) || pad_b) pad_word |= kKeyCross;
-  // Start bit.
-  if (in.key_down[SDL_SCANCODE_RETURN] || in.key_down[SDL_SCANCODE_KP_ENTER] || in.pad_down[SDL_GAMEPAD_BUTTON_START]) pad_word |= 0x0800;
+  if (in.key_down[kStartKey] || (in.pad_connected && in.pad_down[SDL_GAMEPAD_BUTTON_START])) pad_word |= kKeyStart;
+  if (in.key_down[kSelectKey] || (in.pad_connected && in.pad_down[SDL_GAMEPAD_BUTTON_BACK])) pad_word |= kKeySelect;
   key_latch |= static_cast<u16>(pad_word & ~0u);
-  return {confirm, up, down, left, right, repeat};
+  const bool select = (in.key_pressed[kSelectKey] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_BACK])) && (input_mask & kKeySelect);
+  return {confirm, up, down, left, right, repeat, select};
 }
 
 }  // namespace oc::game

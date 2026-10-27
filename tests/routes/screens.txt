@@ -17,7 +17,7 @@
 - tap confirm
 - wait 90
 - wait 20
-- tap tab                             # Start: accept "Serge"
+- tap start                             # Start: accept "Serge"
 - wait room opn_a01i 900
 - load alu_a01f 0
 - wait room alu_a01f 300
@@ -30,7 +30,7 @@
 - tap e
 - tap e                             # R1 x2: the position moves onto the 'd'
 - tap cancel                          # backspace blanks it: "Kid" -> "Ki"
-- tap tab                             # Start: accept
+- tap start                             # Start: accept
 - wait menu closed 120
 - assert name 1 Ki
 # ---- FE 5B: party screen: Serge's slot is locked (new game), Kid <-> the third member

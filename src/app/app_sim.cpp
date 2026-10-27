@@ -202,11 +202,12 @@ void App::apply_flow_action(const game::FlowAction& action) {
   }
 }
 
-// Start / P (RDE) over a running battle or an FMV, and the pause screen's modal input (all contexts). RDE's pause is process-wide: a
-// battle allows pausing for the whole fight (the field allows it per frame), and pausing stops the sound thread and the movie player.
+// Start (RDE: pad Start, keyboard Space) over a running battle or an FMV, and the pause screen's modal input (all contexts). A battle allows
+// pausing for the whole fight (the field allows it per frame, FieldWorld::pause_allowed); pausing an FMV is our addition (RDE never does).
+// The pad's Start opens it on the release of a short press (a long one opens the settings window) and closes it on the press.
 bool App::pause_modal(const platform::Input& in) {
   if (!pause_ok) return false;
-  const bool start_edge = in.key_pressed[SDL_SCANCODE_P] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_START]);
+  const bool start_edge = in.key_pressed[platform::kStartKey] || start_tap;
   if (!pause_screen.active()) {
     const bool over_battle = (battle_ok || battle_in_field) && !battle.transition_active();
     if (start_edge && (over_battle || movie_open)) {
@@ -221,9 +222,11 @@ bool App::pause_modal(const platform::Input& in) {
   const int dy = (platform::action_pressed(in, platform::Action::Down) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_DOWN])) -
                  (platform::action_pressed(in, platform::Action::Up) || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_DPAD_UP]));
   // Start again or B closes.
-  const bool close = in.key_pressed[SDL_SCANCODE_P] || platform::action_pressed(in, platform::Action::Cancel) ||
+  const bool close = in.key_pressed[platform::kStartKey] || platform::action_pressed(in, platform::Action::Cancel) ||
                      (in.pad_connected && (in.pad_pressed[SDL_GAMEPAD_BUTTON_START] || in.pad_pressed[SDL_GAMEPAD_BUTTON_EAST]));
   if (const int sfx = pause_screen.input(dx, dy, confirm_edge(in), close)) ui_sfx(sfx);
+  // The Start press that closed it neither reopens it on its release nor opens the settings window when held.
+  if (close && !pause_screen.active()) start_held = false;
   // Switching vibration on gives a test pulse.
   if (pause_screen.vibration() && !world.game_state().option(ui::opt::kVibration)) platform::Rumble::instance().pulse();
   // The vibration option is saved with the game.
@@ -451,9 +454,9 @@ void App::advance(const platform::Input& in, double dt, int ticks) {
     key_popup.open_list(std::move(list));
     return;
   }
-  // Start / P (RDE): the pause screen over the frozen field / world map.
-  if (pause_ok && world_ok && world.view().loaded() && !world.menu_active() && !world.battle_active() && world.idle() && menu.closed() &&
-      (in.key_pressed[SDL_SCANCODE_P] || (in.pad_connected && in.pad_pressed[SDL_GAMEPAD_BUTTON_START]))) {
+  // Start (RDE: pad Start, keyboard Space): the pause screen over the frozen field / world map, message windows and cutscenes included.
+  if (pause_ok && world_ok && world.view().loaded() && world.pause_allowed() && menu.closed() &&
+      (in.key_pressed[platform::kStartKey] || start_tap)) {
     open_pause();
     log::info("pause: opened (vibration {}, world names row {})", pause_screen.vibration(), pause_screen.world_row());
     return;

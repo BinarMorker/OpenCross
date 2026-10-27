@@ -12,6 +12,8 @@
 //   key down|up <name>            hold / release a key (up down left right confirm cancel run menu triangle item: RDE's keys,
 //                                 platform/keymap.h; or an SDL-style letter)
 //   tap <name> [ticks]            press and release (default 3 ticks held, then 3 ticks free)
+//   pad on|off                    a virtual pad is connected (no button held) from now on / not any more
+//   pad tap <a|b|x|y|start> [ticks]   press and release a button of the virtual pad (connects it)
 //   action                        = tap confirm
 //   walk <x> <z> [tol] [timeout]  steer the stick until the player is within tol (default 24) of the world point
 //   walk_ent <ent> [tol] [timeout]  same, towards entity <ent> of the room
@@ -24,6 +26,7 @@
 //   wait idle [timeout]           controls free again (no dialogue, no fade, no transition)
 //   wait flow <title|name|slots|opening|field> [timeout]   the game flow reached that state
 //   wait movie start|end [timeout]   an FMV is playing / has finished
+//   wait guide <0|1|2> [timeout]  the user guide shows that page (1 controller, 2 keyboard, 0 closed)
 //   wait menu open|closed [timeout]  the main menu / a shop / the rename screen is up / gone
 //   wait shop open|closed [timeout]  a shop screen (FE 5E / 68) is up / gone
 //   skip [timeout]                confirm every 10 ticks until a dialogue that is open has closed (30 quiet ticks end it)
@@ -34,7 +37,7 @@
 //   screenshot <file.png>         capture the next rendered frame (relative names go to the exe folder's shots/)
 //   assert room <name> | assert var <hexid> <value> | assert dialogue open|closed | assert battle active|inactive | assert battle events <w1|a|w2 ...> (the window / action order starts with these tokens) |
 //   assert result <n>             (BATTLE_RESULT)       assert flow <state> | assert menu open|closed | assert shop open|closed |
-//   assert movie playing|idle
+//   assert movie playing|idle      assert guide <0|1|2>     assert pause open|closed (the RDE pause screen)
 //   assert text <words...>        the open dialogue's message contains the words
 //   assert choiceline <n>         the choice hand / highlight is on message line n of the open list (translated numbering, DialogueBox::choice_line)
 //   assert notext <words...>      a dialogue is open and its message does not contain the words
@@ -68,6 +71,7 @@
 //   snap [hexvar...]              remember the simulation state: room, flow, room-load / battle-start / title-sequence counters, the
 //                                 battle signature, every entity's position / facing / model yaw and the listed script variables
 //   assert same [tol]             nothing of the `snap` state changed (positions within tol world units, default 0)
+//   assert frozen                 no field tick ran and no message window's typewriter moved since `snap`
 //   assert swaps <n>              exactly n in-place art swaps of the field room since `snap`
 //   log <text...>                 message in the log
 //   quit                          end the run
@@ -117,6 +121,14 @@ struct RouteState {
   // The main menu (or a save screen / rename) is up.
   bool menu = false;
   bool shop = false;
+  // User guide page on screen: 1 controller, 2 keyboard, 0 none.
+  int guide_page = 0;
+  // The pause screen is up.
+  bool pause = false;
+  // Field simulation ticks so far.
+  u64 field_ticks = 0;
+  // Typewriter position of every field message window (FieldWorld::dialogue_progress).
+  std::function<std::vector<int>()> dialogue_progress;
   // Controls free.
   bool field_idle = false;
   // BATTLE_RESULT script variable.
@@ -228,6 +240,10 @@ class Route {
   std::array<bool, platform::Input::kKeys> prev_held_{};
   float stick_x_ = 0, stick_y_ = 0;
   bool stick_on_ = false;
+  // `pad`: the virtual pad is connected; its held buttons this tick and the last.
+  bool pad_on_ = false;
+  std::array<bool, platform::Input::kButtons> pad_held_{};
+  std::array<bool, platform::Input::kButtons> pad_prev_held_{};
   int quiet_ = 0;
   u64 stuck_tick_ = 0;
   float stuck_x_ = 0, stuck_z_ = 0;
@@ -239,7 +255,8 @@ class Route {
   // `snap` / `assert same`.
   struct Snap {
     std::string room, flow, title_seq, battle_sig;
-    u64 room_loads = 0, art_swaps = 0, battle_starts = 0, title_plays = 0;
+    u64 room_loads = 0, art_swaps = 0, battle_starts = 0, title_plays = 0, field_ticks = 0;
+    std::vector<int> dialogue;
     bool battle = false;
     struct EntState {
       bool ok = false;

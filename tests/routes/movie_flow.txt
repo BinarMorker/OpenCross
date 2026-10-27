@@ -15,7 +15,7 @@
 - wait 90
 - tap confirm
 - wait 90
-- tap tab
+- tap start
 - wait room opn_a01i 900
 - wait 200
 - load opn_a05i 1

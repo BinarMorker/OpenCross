@@ -160,6 +160,28 @@ std::vector<TextPage> layout_pages(const import::Message& flat, const LayoutMetr
   return std::move(builder.pages);
 }
 
+// ---------------------------------------------------------------------------------------------- WindowOpening
+void WindowOpening::start(bool grow) {
+  grow_left_s_ = grow ? static_cast<float>(kWindowGrowTicks - 1) / kSpeedTickHz : 0.0f;
+  since_text_s_ = 0;
+}
+
+float WindowOpening::update(float dt) {
+  if (growing()) {
+    grow_left_s_ -= dt;
+    if (growing()) return 0.0f;
+    dt = std::max(0.0f, -grow_left_s_);
+    grow_left_s_ = 0;
+  }
+  since_text_s_ += dt;
+  return dt;
+}
+
+float WindowOpening::alpha() const {
+  const float tick = 1.0f / kSpeedTickHz;
+  return std::clamp((since_text_s_ + kTickEpsilon - tick) / (static_cast<float>(kWindowFadeTicks) * tick), 0.0f, 1.0f);
+}
+
 // ---------------------------------------------------------------------------------------------- Typewriter
 void Typewriter::start(std::vector<TextPage> pages) {
   pages_ = std::move(pages);

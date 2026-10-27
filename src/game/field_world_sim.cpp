@@ -57,6 +57,16 @@ bool FieldWorld::controls_free() const {
   return true;
 }
 
+// Start pauses the field every frame unless the room forbids it: the room script (FE 42 0 clears the flag every room load sets) or
+// variable 0x36, the title / ending maps 8 and 9, a room switch, a menu, a movie or a battle on its way. Open windows, choices, a
+// running cutscene and the input lock do not count.
+bool FieldWorld::pause_allowed() const {
+  if (in_init_ || trans_ != Trans::None || jump_.active) return false;
+  if (!(vm_.global_flags() & script::gflag::kPauseAllowed) || (vm_.var(0x36) & 0xFF) != 0) return false;
+  if (map_id_ == 8 || map_id_ == 9) return false;
+  return menu_state_ == MenuState::None && movie_state_ == MovieState::None && handoff_.battle_state == BattleState::None;
+}
+
 void FieldWorld::update_input_lock() {
   // The lock of an inactive entity (SET_VISIBLE 0) does not count.
   bool locked = false;
@@ -383,6 +393,7 @@ void FieldWorld::step_motions() {
 }
 
 void FieldWorld::step_player() {
+  lead_start_valid_ = false;
   const int player = player_entity();
   if (player < 0) return;
   Ent& pe = ents_[static_cast<size_t>(player)];
@@ -446,6 +457,9 @@ void FieldWorld::step_player() {
     }
   }
   const Actor::Spot before = pe.actor.spot();
+  lead_start_ = trail_entry_of(pe.actor);
+  lead_start_facing_ = pe.actor.facing();
+  lead_start_valid_ = player == party_ent_[0];
   // Pad control re-selects the clip every tick.
   if (controls_free() && !pe.motion.active) pe.actor.clear_play();
   // Right stick: turn on the spot.
@@ -464,8 +478,11 @@ void FieldWorld::step_player() {
       if (other.pend) apply_push(other);
     }
   }
-  // The trail only grows while the leader moves (recorded after a pad move, not while idle).
-  if (heading != kNoHeading) trail_push(0, trail_entry_of(pe.actor));
+  // The trail only grows on ticks with a pad heading, and records the spot the leader stood on before this tick's move.
+  if (heading != kNoHeading) {
+    trail_push(0, lead_start_);
+    lead_start_pushed_ = true;
+  }
 }
 
 FieldWorld::TrailEntry FieldWorld::trail_entry_of(const Actor& actor) const {
@@ -489,6 +506,7 @@ void FieldWorld::reset_trails() {
   // the leader's spot would leave a > 50-unit gap before follower 1's first entries: follower 2 would step back and forth over
   // the fill entry under its feet for ever).
   trail_fill(0, trail_entry_of(ents_[static_cast<size_t>(leader)].actor));
+  lead_pad_end_ = trail_entry_of(ents_[static_cast<size_t>(leader)].actor);
   const int f1 = party_ent_[1];
   trail_fill(1, trail_entry_of(ents_[static_cast<size_t>(f1 >= 0 && ents_[static_cast<size_t>(f1)].placed ? f1 : leader)].actor));
 }
@@ -507,7 +525,14 @@ void FieldWorld::follower_back_off(int slot, bool other_side, int ent_override) 
   const int ent = ent_override >= 0 ? ent_override : party_ent_[static_cast<size_t>(slot)];
   if (lead < 0 || ent < 0) return;
   Ent& ent_state = ents_[static_cast<size_t>(ent)];
-  const ActorPose& lp = ents_[static_cast<size_t>(lead)].actor.current();
+  ActorPose lp = ents_[static_cast<size_t>(lead)].actor.current();
+  int lead_facing = ents_[static_cast<size_t>(lead)].actor.facing();
+  if (lead_start_valid_) {
+    lp.x = lead_start_.x;
+    lp.y = lead_start_.y;
+    lp.z = lead_start_.z;
+    lead_facing = lead_start_facing_;
+  }
   const ActorPose pose = ent_state.actor.current();
   const int ring = slot - 1;
   const int base = vm_.entity(ent).v10c ? vm_.entity(ent).v10c : kDefaultSpeed;
@@ -516,7 +541,7 @@ void FieldWorld::follower_back_off(int slot, bool other_side, int ent_override) 
   // angle = engine angle to the leader; lfe = engine heading of the leader; other_side: settle_spawned_followers swings
   // follower 2 away from follower 1.
   const int angle = same ? 0 : (-bearing(dx, dz)) & 0xFFF;
-  const int lfe = (ents_[static_cast<size_t>(lead)].actor.facing() - 0x800) & 0xFFF;
+  const int lfe = (lead_facing - 0x800) & 0xFFF;
   const int sum = (lfe + angle) & 0xFFF;
   const bool swing = (sum > 0x7FF + ring) != other_side;
   const int ar = (angle + (swing ? 0x80 : -0x80)) & 0xFFF;
@@ -546,6 +571,7 @@ void FieldWorld::follower_back_off(int slot, bool other_side, int ent_override) 
 // walk (3D distance to the leader, the leader's height, mesh-bounded as in follower_back_off) the engine plays over the next ticks; at a
 // cramped entrance it may stop short of 80 units.
 void FieldWorld::settle_spawned_followers() {
+  lead_start_valid_ = false;
   const int lead = party_ent_[0];
   if (lead < 0) return;
   const WalkMesh& walk = view_.walk();
@@ -594,10 +620,21 @@ void FieldWorld::step_followers() {
   const int lead = party_ent_[0];
   if (lead < 0) return;
   const ActorPose& lp = ents_[static_cast<size_t>(lead)].actor.current();
+  // The follow rules measure against the leader's spot before this tick's pad move.
+  ActorPose lead_pose = lp;
+  if (lead_start_valid_) {
+    lead_pose.x = lead_start_.x;
+    lead_pose.y = lead_start_.y;
+    lead_pose.z = lead_start_.z;
+  }
+  if (lead_start_pushed_) lead_pad_end_ = trail_entry_of(ents_[static_cast<size_t>(lead)].actor);
+  const bool pad_pushed = lead_start_pushed_;
+  lead_start_pushed_ = false;
   if (follow_hold_ && follow_hold_ticks_ > 0) --follow_hold_ticks_;
-  {
-    // A leader moved by a script (MOVE / WALK_TO, e.g. opn_a01i's run out of the lift) must grow the ring too, or the followers
-    // resumed afterwards replay the spawn position and walk back to where the party started.
+  // A leader moved by a script (MOVE / WALK_TO, e.g. opn_a01i's run out of the lift) must grow the ring too, or the followers
+  // resumed afterwards replay the spawn position and walk back to where the party started. The spot a pad walk ended on is
+  // not such a move: the ring keeps the spot before the last pad step.
+  if (!pad_pushed && std::hypot(lp.x - lead_pad_end_.x, lp.z - lead_pad_end_.z) > 0.5f) {
     const TrailEntry& last = trails_[0].entries[static_cast<size_t>((trails_[0].head - 1) & 0x7F)];
     if (std::hypot(lp.x - last.x, lp.z - last.z) > 0.5f) trail_push(0, trail_entry_of(ents_[static_cast<size_t>(lead)].actor));
   }
@@ -622,8 +659,10 @@ void FieldWorld::step_followers() {
   // CLEAR_CONTROLLED_ENTITY + locked controls: the party is scripted, the followers stay where the
   // script left them until the controls return.
   if (controlled_cleared_ && !controls_free()) return;
+  // The engine measures between whole-unit positions and floors the root: a member 200.9 units away counts as 200.
   auto dist3 = [](const ActorPose& pose, float x, float y, float z) {
-    return std::sqrt((pose.x - x) * (pose.x - x) + (pose.y - y) * (pose.y - y) + (pose.z - z) * (pose.z - z));
+    const float dx = std::floor(pose.x) - std::floor(x), dy = std::floor(pose.y) - std::floor(y), dz = std::floor(pose.z) - std::floor(z);
+    return std::floor(std::sqrt(dx * dx + dy * dy + dz * dz));
   };
   // One member's turn of the non-leader branch. `slot` picks the ring (k = slot - 1) and the speed step, `prev` is the member it follows.
   auto follow_member = [&](int ent, int slot, int prev) {
@@ -639,8 +678,8 @@ void FieldWorld::step_followers() {
     const int ring = slot - 1;
     if (prev < 0) return;
     const ActorPose pose = ent_state.actor.current();
-    const ActorPose& pp = ents_[static_cast<size_t>(prev)].actor.current();
-    const float d_lead = dist3(pose, lp.x, lp.y, lp.z);
+    const ActorPose& pp = prev == lead ? lead_pose : ents_[static_cast<size_t>(prev)].actor.current();
+    const float d_lead = dist3(pose, lead_pose.x, lead_pose.y, lead_pose.z);
     const float d_prev = dist3(pose, pp.x, pp.y, pp.z);
     const int base = vm_.entity(ent).v10c ? vm_.entity(ent).v10c : kDefaultSpeed;
     // Too close to the leader: rule 1 (skipped while op BE waits).

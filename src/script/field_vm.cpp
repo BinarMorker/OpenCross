@@ -354,13 +354,13 @@ void FieldVM::tick() {
 }
 
 // The FE 29 sound slot register is the one register the room init clears; the water levels of the first
-// three slots default to 10.
+// three slots default to 10. Every room starts with the pause allowed (FE 42 0 forbids it).
 void FieldVM::load(FieldScriptModule module, std::span<const u32> flag_table) {
   mod_ = std::move(module);
   ents_.assign(mod_.entity_count(), Entity{});
   std::fill(vars_.begin() + kGlobalVarSlots, vars_.end(), u16{0});
   vars_[0x46 >> 1] = 1;
-  gflags_ = 0;
+  gflags_ = gflag::kPauseAllowed;
   restore_slots_ = false;
   regs_.erase(0x800EA404);
   flag_table_.fill(0);

@@ -1,0 +1,69 @@
+# Start pauses over open message windows (RDE / ccx: the field's per-frame pause gate ignores windows, choices, cutscenes and the
+# input lock). Each part opens the pause screen over a message, checks that no field tick ran and no typewriter moved while it was up,
+# closes it and finishes the conversation.
+# 1. An NPC's message: Termina, Skelly's grandmother (tel_b11i entity 4).
+0 wait 5
+- request party_add 1
+- walk 500 0 40 400
+- approach 4 60 600
+- action
+- wait text Who might you be
+- tap start
+- wait 2
+- assert pause open
+- snap 0x402
+- wait 120
+- assert pause open
+- assert frozen
+- assert same
+- assert text Who might you be
+- tap start
+- wait 10
+- assert pause closed
+- wait 90
+- action
+- wait 20
+- wait text Grandma, they are travelers
+- skip
+- wait idle 1200
+- assert var 0x402 1
+# 2. A choice: the Termina portrait painter (tel_b02f entity 7) waits on "Shall I draw you a portrait".
+- load tel_b02f 0
+- wait room tel_b02f 300
+- wait idle 600
+- approach 7 60 600
+- action
+- wait text Shall I draw you a portrait
+- wait 60
+- tap start
+- wait 2
+- assert pause open
+- snap
+- wait 60
+- assert frozen
+- tap start
+- wait 10
+- assert pause closed
+- choose 2
+- wait text Come again
+- skip
+- wait idle 600
+# 3. A cutscene with the controls taken: the Guldove clinic scene (gal_b06i, entrance 1).
+- request party_add 2
+- set var 0x00 54
+- set var 0x188 0x10
+- load gal_b06i 1
+- wait room gal_b06i 300
+- wait text patient has been poisoned
+- tap start
+- wait 2
+- assert pause open
+- snap
+- wait 60
+- assert frozen
+- tap start
+- wait 10
+- assert pause closed
+- skip
+- wait text can save this girl
+- quit

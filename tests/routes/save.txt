@@ -18,7 +18,7 @@
 - tap confirm
 - wait 90
 - wait 20
-- tap tab                             # Start: accept "Serge"
+- tap start                             # Start: accept "Serge"
 - wait movie start 300                # the title script's D4 #2: a02koryu plays first (skippable)
 - wait 60
 - tap confirm

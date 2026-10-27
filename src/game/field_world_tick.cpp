@@ -539,7 +539,10 @@ std::string FieldWorld::layer_report(std::string* notes) const {
 void FieldWorld::update(const platform::Input& in, int ticks) {
   if (!initialised_) return;
   // ---- input snapshot
-  auto [confirm, up, down, left, right, repeat] = input_.sample(in, ticks);
+  auto [confirm, up, down, left, right, repeat, select] = input_.sample(in, ticks);
+  // Select rotates the party order, once per frame before the ticks; not in the first field frames after a room load.
+  if (input_.select_wait > 0) input_.select_wait = std::max(0, input_.select_wait - ticks);
+  else if (select) rotate_party();
   // Number entry: up / down step the cursor digit, left / right move the cursor; a held direction auto-repeats.
   const auto stepping = [&](bool pressed, u32 bit) { return pressed || (repeat & bit) != 0 ? 1 : 0; };
   const int digit_step = stepping(up, 1) - stepping(down, 4), digit_shift = stepping(right, 2) - stepping(left, 8);

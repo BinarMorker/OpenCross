@@ -37,10 +37,12 @@ class DialogueBox {
   void set_mode(ArtMode mode);
   ArtMode mode() const { return mode_; }
 
-  // Lays out `flat` (import::flatten output) and starts the typewriter. Call outside SpriteBatch begin()/end().
-  // `canvas_width` is the canvas width in canvas units (wrap limit = 70 % of it for non-JP text).
+  // Lays out `flat` (import::flatten output) and opens the window (WindowOpening: it grows first, then the typewriter starts). Call
+  // outside SpriteBatch begin()/end(). `canvas_width` is the canvas width in canvas units (wrap limit = 70 % of it for non-JP text).
   void open(const import::Message& flat, render::FaceId face, float text_scale, bool wrap, float canvas_width,
             render::FaceId italic = render::kNoFace);
+  // A window opened without the grow (field window flag 0x20): full size at once. Call right after open().
+  void skip_grow() { opening_.start(false); }
   // Art swap of an open window: lays the same message out again with other faces (the small_ / large_ metrics differ) and keeps
   // the page, the revealed glyph count, pending waits, the choice cursor and the window position. Call outside begin()/end().
   void swap_faces(render::FaceId face, render::FaceId italic = render::kNoFace);
@@ -182,8 +184,7 @@ class DialogueBox {
   float line_h_ = 0;
   // Most lines of any page (the frame has lines + 1 rows).
   int lines_ = 1;
-  // Seconds since open.
-  float time_ = 0;
+  WindowOpening opening_;
   float blink_ = 0;
   int portrait_ = -1;
   bool portrait_on_ = true, portrait_left_ = false;
@@ -252,6 +253,8 @@ class DialogueDemo {
   int chosen() const;
   // The message line the hand is on while a choice list takes the pick (-1 none).
   int picking_line() const;
+  // Typewriter position of the open message: page * 0x10000 + revealed glyphs.
+  int progress() const;
   // Number entry ({input(n)}) of the open message, started from script variable 0x18 (the digit-entry result) at show(); while it takes
   // input, update() writes its value back to that variable every frame. See DialogueBox::start_digits.
   bool digit_entry() const;
@@ -269,6 +272,8 @@ class DialogueDemo {
   void set_label(bool on);
   // Top-left of the text area in PS1 pixels (call after show()).
   void set_ps1_window(int x, int y);
+  // The shown window opens at full size without the grow (field window flag 0x20; call after show()).
+  void skip_grow();
   void close();
   // The demo status line at the top left (default on).
   void show_status(bool on);

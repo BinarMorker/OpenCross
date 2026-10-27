@@ -411,6 +411,8 @@ class FieldWorld final : public script::FieldHost {
   int auto_target_entity() const { return auto_target_; }
   // controls are free (no dialogue, fade, transition or running action)
   bool idle() const { return controls_free(); }
+  // the pause screen may open over the field (message windows, choices and locked controls do not prevent it)
+  bool pause_allowed() const;
   // route `assert choiceline`: the message line the hand is on in any open choice window (-1 none)
   int dialogue_choice_line() const {
     int line = dialogue_.is_open() ? dialogue_.picking_line() : -1;
@@ -425,6 +427,12 @@ class FieldWorld final : public script::FieldHost {
     for (const auto& window : extra_win_)
       if (window.box && window.box->is_open()) text += (text.empty() ? "" : " ") + window.box->text();
     return text;
+  }
+  // route `snap`: the typewriter position of every open window (DialogueDemo::progress), -1 = closed
+  std::vector<int> dialogue_progress() const {
+    std::vector<int> progress{dialogue_.is_open() ? dialogue_.progress() : -1};
+    for (const auto& window : extra_win_) progress.push_back(window.box && window.box->is_open() ? window.box->progress() : -1);
+    return progress;
   }
   const std::vector<int>& party_chars() const { return party_chars_; }
   // Route hooks: a character's current HP (what 0), max HP (1) or status bits (2); -1 = no such character. The setter writes 0 / 2.
@@ -633,6 +641,8 @@ class FieldWorld final : public script::FieldHost {
   void bind_party_entity(int slot);
   void rebind_party();
   void place_party_spawn(int slot);
+  // Select in the field / on the world map: the party order rotates one place (the entities stay where they are).
+  void rotate_party();
 
   // ---- simulation
   void sim_tick();
@@ -811,6 +821,14 @@ class FieldWorld final : public script::FieldHost {
     int head = 0;
   };
   std::array<Trail, 2> trails_;
+  // The leader as it stood when the tick began, before the pad move: the scripts (and with them the follow rules) run before
+  // the mover, so ring 0 records this spot and the followers measure their distances to it.
+  TrailEntry lead_start_;
+  int lead_start_facing_ = 0;
+  bool lead_start_valid_ = false;
+  bool lead_start_pushed_ = false;
+  // where the last pad step left the leader (not a scripted move)
+  TrailEntry lead_pad_end_;
   TrailEntry trail_entry_of(const Actor& actor) const;
   void trail_fill(int ring, const TrailEntry& entry);
   void trail_push(int ring, const TrailEntry& entry);

@@ -56,6 +56,29 @@ constexpr float kSpeedTickHz = 60.0f;
 constexpr float kScriptFrameHz = 30.0f;
 constexpr int kDefaultSpeed = 64;
 
+// Opening of a field message window. The window grows from nothing to full size in kWindowGrowTicks 60 Hz ticks (scale k / 16 on
+// the k-th tick, counting the tick it opens on as the first); the text, its waits and the number entry start on the tick after it
+// is full, and confirm presses before that are dropped. The window and its text are not drawn while it grows; they fade in over
+// the kWindowFadeTicks ticks after the text starts. A window opened without the grow is full at once. Closing has no animation.
+constexpr int kWindowGrowTicks = 16;
+constexpr int kWindowFadeTicks = 3;
+
+class WindowOpening {
+ public:
+  // The window is opened inside a tick whose own update already ran: its first update() is the next tick.
+  void start(bool grow);
+  // Advances by dt and returns the part of dt that belongs to the text (0 while the window grows).
+  float update(float dt);
+  bool growing() const { return grow_left_s_ > kTickEpsilon; }
+  // Draw opacity of the window and its text, 0..1.
+  float alpha() const;
+
+ private:
+  static constexpr float kTickEpsilon = 1e-4f;
+  float grow_left_s_ = 0;
+  float since_text_s_ = 0;
+};
+
 class Typewriter {
  public:
   enum class State : u8 { Idle, Revealing, WaitConfirm, WaitPage, WaitClose, Closing, Closed };

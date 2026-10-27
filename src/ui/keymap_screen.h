@@ -11,14 +11,15 @@
 // - Timing (one counter step per presented frame): page 1 fades in over 15 frames (alpha k / 15) and waits at
 //   k = 15 for the "next" latch; 15..29 cross-fades page 2 in over page 1 (page 1 stays opaque); waits at k = 30; 30..44 fades
 //   page 2 out to black ((45 - k) / 15); k = 45 closes. The latch is set by any key press with a keyboard glyph or
-//   Space (not the speed keys), or by the release of a pad button (not LT / RT / L3 / R3), at any time: a press during a fade
-//   is consumed when the counter reaches the waiting step. The game frame is not drawn under the guide (black).
-// - The glyph overlays show RDE's two key sets (platform/keymap.h): arrows / WASD move, Enter / X confirm, Backspace / Left Shift
-//   cancel and run, F / R key items, I / Tab menu, Esc options; pad A / B / Y / Start, d-pad + left stick. Guide rows for
-//   features OpenCross does not implement (pause, change lead, speed modes, F3 / F4 / F5) stay empty, like an unbound key.
+//   Space (not the speed keys), or on the frame the pad goes from some button held to none held (LT / RT / L3 / R3 do not
+//   count), at any time: a press during a fade is consumed when the counter reaches the waiting step. A connected pad that is
+//   left alone never sets it, so the controller page waits like the keyboard page. The game frame is not drawn under the
+//   guide (black).
+// - The glyph overlays, every row as RDE: the keyboard page shows RDE's two key sets (platform/keymap.h; arrows / WASD move, Enter / X
+//   confirm, Backspace / Left Shift cancel and run, F / R key items, I / Tab menu, F1 / F2 speed modes; an unbound key moves its row
+//   half a step right) and the fixed keys Space (pause), K (change lead character), F3 / F4 / F5, Esc. The pad page is a fixed picture:
+//   A / B / X / Y for the field and battle rows, d-pad + left stick, Start, Back, LT, RT, L3, R3, L3 + R3, LT + L3.
 //   The screen is not part of the PS1 game, so both art modes draw the same pages.
-#include <array>
-
 #include "import/text.h"
 #include "platform/window.h"
 #include "ui/title/canvas.h"
@@ -33,6 +34,8 @@ class KeyMapScreen {
   // One presented frame; `dt` in seconds (the counter steps once per 1/60 s).
   void update(const platform::Input& in, float dt);
   bool done() const { return done_; }
+  // 1 = the controller page (fading in or waiting), 2 = the keyboard page (cross-fading in, waiting or fading out), 0 = closed.
+  int page() const { return done_ ? 0 : counter_ <= 15 ? 1 : 2; }
   void draw(DrawList& dl, UiKit& kit) const;
 
  private:
@@ -44,7 +47,8 @@ class KeyMapScreen {
   // The "next" latch.
   bool next_ = false;
   bool done_ = true;
-  std::array<bool, platform::Input::kButtons> pad_prev_{};
+  // Some latching pad button was held on the previous frame.
+  bool pad_held_ = false;
 };
 
 }  // namespace oc::ui

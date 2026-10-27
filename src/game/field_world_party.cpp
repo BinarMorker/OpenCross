@@ -276,6 +276,27 @@ void FieldWorld::swap_leader(int char_id) {
   bind_party_entity(target_slot);
   log::debug("field: tick {} swap leader with slot {} (char {})", tick_count_, target_slot, char_id);
 }
+
+// Select: slot 0 <- slot 1, slot 1 <- slot 2, slot 2 <- the old leader (two members: they trade places). Like FE 52 the characters
+// move, not the entities: every party entity keeps its place, its followers' trail and the control, and shows its slot's new
+// character. The per-slot words of variables 0x170 / 0x172 / 0x174 (the disguise model bytes the main menu shows) move with their
+// characters. Refused while the controls are not free, with fewer than two members, while B2 has the party sorted (global bit
+// 0x40), while global bit 0x800 (FE 17) is set and while variable 0x36 is not 0.
+void FieldWorld::rotate_party() {
+  if (party_chars_.size() < 2 || !controls_free() || menu_active() || battle_active()) return;
+  if ((vm_.global_flags() & 0x840u) != 0 || vm_.var(0x36) != 0) return;
+  const size_t count = std::min<size_t>(party_chars_.size(), 3);
+  std::rotate(party_chars_.begin(), party_chars_.begin() + 1, party_chars_.begin() + static_cast<std::ptrdiff_t>(count));
+  for (size_t slot = 0; slot + 1 < count; ++slot) {
+    const u16 here = static_cast<u16>(0x170 + 2 * slot), next = static_cast<u16>(here + 2);
+    const s32 word = vm_.var(here);
+    vm_.set_var(here, vm_.var(next));
+    vm_.set_var(next, word);
+  }
+  write_party();
+  rebind_party();
+  log::info("field: tick {} party rotated (Select): leader char {}, leader ent {}", tick_count_, party_chars_[0], party_ent_[0]);
+}
 void FieldWorld::roster_add(int char_id) {
   if (char_id >= 0 && char_id < save::kNumChars) gs_->slot.set_recruited(char_id, true);
 }

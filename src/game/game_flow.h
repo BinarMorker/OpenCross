@@ -208,6 +208,8 @@ class GameFlow {
   // New Game+.
   void begin_rename(int char_id, bool guide = false);
   bool rename_active() const { return rename_active_; }
+  // The user guide page on screen (New Game or the FE 4A rename): 1 controller, 2 keyboard, 0 none.
+  int guide_page() const { return keymap_active_ || (rename_active_ && rename_guide_) ? keymap_.page() : 0; }
   bool take_rename_finished() {
     const bool finished = rename_finished_;
     rename_finished_ = false;

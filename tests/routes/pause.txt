@@ -10,9 +10,9 @@
 - approach 10 40 1500
 - wait dialogue open 300
 - wait 60
-- tap p
+- tap start
 - wait 20
 - screenshot pause_01.png
-- tap p
+- tap start
 - wait 10
 - quit

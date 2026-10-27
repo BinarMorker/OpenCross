@@ -244,7 +244,7 @@ void DialogueBox::open(const import::Message& flat, render::FaceId face, float t
   tw_.start(std::move(pages));
   open_ = true;
   has_win_ = false;
-  time_ = 0;
+  opening_.start(true);
   blink_ = 0;
   chosen_ = -1;
   line_count_ = 0;
@@ -339,13 +339,13 @@ std::vector<TextPage> DialogueBox::layout(render::FaceId face, render::FaceId it
 
 void DialogueBox::update(float dt) {
   if (!open_) return;
-  time_ += dt;
   blink_ += dt;
-  tw_.update(dt);
+  const float text_dt = opening_.update(dt);
+  if (text_dt > 0) tw_.update(text_dt);
 }
 
 void DialogueBox::confirm() {
-  if (!open_) return;
+  if (!open_ || opening_.growing()) return;
   // In-window choice: the result is the cursor's *line number* in the message (the cursor starts at the first
   // option line), not the option index.
   // A message ending in {wend(n)} is in Closing while the list is up: the pick still counts.
@@ -550,6 +550,8 @@ DialogueBox::ChoiceCursor DialogueBox::choice_cursor(const TextPage& page, float
 
 void DialogueBox::draw(float vw, float vh, const render::CanvasFit* fit) {
   if (!open_ || tw_.closed() || !sprites_) return;
+  const float alpha = opening_.alpha();
+  if (alpha * 255.0f < 1.0f) return;
   const render::CanvasFit cf = fit ? *fit : render::canvas_fit(vw, vh);
   const float zoom = cf.s;
   yo_ = cf.oy;
@@ -559,7 +561,6 @@ void DialogueBox::draw(float vw, float vh, const render::CanvasFit* fit) {
     ~Grid() { if (batch) batch->set_pixel_grid(0.0f, 0.0f); }
   } grid{fit && text_ ? text_ : nullptr};
   if (grid.batch) grid.batch->set_pixel_grid(1.0f, 1.0f);
-  const float alpha = std::min(1.0f, time_ / 0.12f);
   // Both art modes draw the same frame model; only the skin texture (and the font face chosen by the caller) differs.
   const bool tiled = skin_set_ && skin_mode_ == mode_ && !label_;
   const float cw = vw / zoom;
@@ -940,6 +941,7 @@ void DialogueDemo::move_choice(int delta) { impl_->box.move_choice(delta); }
 void DialogueDemo::set_line_choice(int first, int last) { impl_->box.set_line_choice(first, last); }
 int DialogueDemo::chosen() const { return impl_->box.chosen(); }
 int DialogueDemo::picking_line() const { return impl_->box.picking_line(); }
+int DialogueDemo::progress() const { return impl_->box.page_index() * 0x10000 + static_cast<int>(impl_->box.typewriter().visible()); }
 bool DialogueDemo::digit_entry() const { return impl_->box.digit_entry(); }
 void DialogueDemo::move_digit(int step, int shift) {
   impl_->box.move_digit(step, shift);
@@ -957,6 +959,7 @@ void DialogueDemo::close() {
 }
 void DialogueDemo::set_label(bool on) { impl_->box.set_label(on); }
 void DialogueDemo::set_ps1_window(int x, int y) { impl_->box.set_ps1_window(x, y); }
+void DialogueDemo::skip_grow() { impl_->box.skip_grow(); }
 void DialogueDemo::show_status(bool on) { impl_->status_on = on; }
 import::Lang DialogueDemo::language() const { return impl_->lang; }
 

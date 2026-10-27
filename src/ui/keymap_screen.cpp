@@ -17,30 +17,41 @@ constexpr float kImageW = 1620.0f;
 constexpr float kScale = kCanvasW / kImageW;
 constexpr float kStep = 52.0f, kHalfStep = 26.0f, kGlyph = 48.0f;
 
-// Page 1 glyphs (cells: A 8, B 9, Y 10, X 11, L stick 12, D-pad 13, START 14,
-// BACK 15, L3 16, R3 17, LT 22, RT 23) for the buttons OpenCross binds (nav.h / app/app_sim.cpp).
+// Page 1 glyphs, RDE's fixed picture of its pad layout (cells of ui/gamepad_assign.png: A 8, B 9, Y 10, X 11, L stick 12, D-pad 13,
+// START 14, BACK 15, L3 16, R3 17, LT 22, RT 23).
 struct PadGlyph {
   u8 cell;
   float x, y;
 };
 constexpr PadGlyph kPadGlyphs[] = {
-    // field: Talk/Confirm = A
+    // In the field: Talk/Confirm, Run/Cancel, Open Key Item Window, Menu.
     {8, 192.0f, 282.5f},
-    // Run/Cancel = B
     {9, 192.0f, 376.5f},
-    // Open key item window = Y (pad North)
-    {10, 192.0f, 470.5f},
-    // Menu = Start
-    {14, 192.0f, 564.5f},
-    // battle: Confirm = A
+    {11, 192.0f, 470.5f},
+    {10, 192.0f, 564.5f},
+    // In battle: Confirm, Cancel, Choose Character, Change View.
     {8, 192.0f, 700.5f},
-    // Cancel = B
     {9, 192.0f, 794.5f},
-    // Move/Select = D-pad
+    {11, 192.0f, 888.5f},
+    {10, 192.0f, 982.5f},
+    // Move/Select (D-pad, left stick), Pause, Change Lead Character, Low-Speed Mode, High-Speed Mode, No Random Battles, Battle Boosts.
     {13, 916.0f, 230.5f},
-    // + left stick
     {12, 968.0f, 230.5f},
+    {14, 942.0f, 324.5f},
+    {15, 942.0f, 418.5f},
+    {22, 942.0f, 512.5f},
+    {23, 942.0f, 606.5f},
+    {16, 942.0f, 700.5f},
+    {17, 942.0f, 794.5f},
+    // Auto-Battle (L3 + R3), ESC Menu (LT + L3).
+    {16, 911.0f, 888.5f},
+    {17, 973.0f, 888.5f},
+    {22, 911.0f, 982.5f},
+    {16, 973.0f, 982.5f},
 };
+
+// A stick pushed at least half way counts as a held button, as in RDE.
+constexpr float kStickHeld = 0.5f;
 
 u32 alpha_white(float a) { return render::pack_rgba(255, 255, 255, static_cast<u8>(std::lround(std::clamp(a, 0.0f, 1.0f) * 255.0f))); }
 
@@ -54,8 +65,7 @@ bool KeyMapScreen::begin(UiKit& kit, import::Lang lang) {
   counter_ = 0;
   acc_ = 0;
   next_ = false;
-  // No release latch from a button held across the transition.
-  pad_prev_.fill(true);
+  pad_held_ = false;
   if (loaded_lang_ != li) {
     auto load = [&](const std::string& path) {
       auto raw = kit.vfs().read(path);
@@ -93,17 +103,20 @@ void KeyMapScreen::step() {
 
 void KeyMapScreen::update(const platform::Input& in, float dt) {
   if (done_) return;
-  // "Next" latch: a key press (anything but the F-key toggles) or the release of a pad button other than the stick clicks and Back (the
-  // settings window).
+  // "Next" latch: a key press (anything but the F-key toggles), or the frame the pad goes from some button or stick held to none (the
+  // stick clicks, the triggers and Start, the pause / settings button, do not count). A connected pad with nothing held never sets it.
   for (size_t i = 0; i < in.key_pressed.size(); ++i)
     if (in.key_pressed[i] && (i < SDL_SCANCODE_F1 || i > SDL_SCANCODE_F12)) next_ = true;
-  for (size_t button = 0; button < pad_prev_.size(); ++button) {
-    const bool down = in.pad_connected && in.pad_down[button];
-    if (pad_prev_[button] && !down && in.pad_connected && button != SDL_GAMEPAD_BUTTON_LEFT_STICK && button != SDL_GAMEPAD_BUTTON_RIGHT_STICK &&
-        button != SDL_GAMEPAD_BUTTON_BACK)
-      next_ = true;
-    pad_prev_[button] = down;
+  bool pad_held = false;
+  if (in.pad_connected) {
+    for (size_t button = 0; button < in.pad_down.size(); ++button)
+      if (in.pad_down[button] && button != SDL_GAMEPAD_BUTTON_LEFT_STICK && button != SDL_GAMEPAD_BUTTON_RIGHT_STICK && button != SDL_GAMEPAD_BUTTON_START)
+        pad_held = true;
+    for (int axis : {SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY, SDL_GAMEPAD_AXIS_RIGHTX, SDL_GAMEPAD_AXIS_RIGHTY})
+      if (std::fabs(in.pad_axis[static_cast<size_t>(axis)]) >= kStickHeld) pad_held = true;
   }
+  if (pad_held_ && !pad_held) next_ = true;
+  pad_held_ = pad_held;
   acc_ += std::clamp(dt, 0.0f, 0.25f) * 60.0f;
   while (acc_ >= 1.0f && !done_) {
     acc_ -= 1.0f;
@@ -163,11 +176,20 @@ void KeyMapScreen::draw(DrawList& dl, UiKit& kit) const {
       key_glyph(vks[0], x, y, a1);
       key_glyph(vks[1], x + kStep, y, a1);
     };
-    // Rows: Talk/Confirm, Run/Cancel, key item window, Menu (both RDE key sets each), then the ESC menu (the options overlay).
+    // Left column: Talk/Confirm, Run/Cancel, key item window, Menu (both RDE key sets each), then the fixed Start (Pause) and Select
+    // (Change Lead Character) keys.
     pair(Action::Ok, 162.0f, 415.5f);
     pair(Action::Cancel, 162.0f, 525.5f);
     pair(Action::Item, 162.0f, 644.5f);
     pair(Action::Menu, 162.0f, 772.5f);
+    key_glyph(platform::kStartVk, 188.0f, 891.5f, a1);
+    key_glyph(platform::kSelectVk, 188.0f, 1001.5f, a1);
+    // Right column: Low- / High-Speed Mode (both sets), No Random Battles F3, Battle Boosts F4, Auto-Battle F5, ESC Menu.
+    pair(Action::SlowSpeed, 912.0f, 243.5f);
+    pair(Action::FastSpeed, 912.0f, 353.5f);
+    key_glyph(0x72, 938.0f, 463.5f, a1);
+    key_glyph(0x73, 938.0f, 573.5f, a1);
+    key_glyph(0x74, 938.0f, 683.5f, a1);
     key_glyph(0x1B, 938.0f, 793.5f, a1);
   }
 }
