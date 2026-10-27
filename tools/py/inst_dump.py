@@ -1,13 +1,13 @@
-"""PS1 instrument table (g_InstrumentInfo[256]) and SPU RAM out of a ccx/DuckStation save state.
+"""PS1 instrument table (g_InstrumentInfo[256]) and SPU RAM out of a DuckStation save state.
 
-    python tools/py/inst_dump.py <state.sav> [--all] [--cmp]      dump the table (non-wave0000-identical slots, or all)
+    python tools/py/inst_dump.py <state.sav> [--all]    dump the table (non-wave0000-identical slots, or all)
 
 g_InstrumentInfo is found by signature (guest 0x800919C8, verified against wave0000 entry 10 which is unique there). SPU RAM (512 KiB) is found by the wave0000 sample data (SPU 0x71100). Entry = 16 bytes:
 u32 spu start, u32 spu loop, s16 fine_tune, s16 base_note, u16 adsr1, u16 adsr2.
 """
 import os, struct, sys, zipfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccx_state
+import ps1_state
 
 GAME = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 
@@ -24,13 +24,13 @@ def bank_entries(d):
 
 
 def load_state(path):
-    st = ccx_state.State(path)
+    st = ps1_state.State(path)
     raw = open(path, "rb").read()
     if st.compressed:
         import zstandard
-        p = raw.find(ccx_state.ZSTD_MAGIC); fr = []
+        p = raw.find(ps1_state.ZSTD_MAGIC); fr = []
         while p != -1 and len(fr) < 4:
-            fr.append(p); p = raw.find(ccx_state.ZSTD_MAGIC, p + 1)
+            fr.append(p); p = raw.find(ps1_state.ZSTD_MAGIC, p + 1)
         body = zstandard.ZstdDecompressor().decompressobj().decompress(raw[fr[1]:])
     else:
         body = raw

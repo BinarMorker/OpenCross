@@ -15,13 +15,14 @@ battle::Battle::Cheats battle_cheats();
 // The tab body (call inside the registered tab's draw). Returns true when a toggle changed (the caller saves the ini).
 bool draw_cheats_tab(platform::Config& cfg);
 
-// ---- RDE "encounters off". `story(addr)` reads a byte of the story-flag memory by its original console address and returns -1 when
-// the port does not know it; an unknown byte makes the rule err on the side of the fight.
-using StoryByte = std::function<int(unsigned addr)>;
-// The story bytes the tables read are script variables, not save-image bytes: the field VM keeps the global variable array (ids =
-// byte offsets from the array's base address, saved with the game). `vars` = FieldVm::variables(); an address in the 0x400-byte
-// window from the base is the low byte (even address) / high byte (odd) of slot (addr - base) / 2; anything else returns -1.
-int story_byte_from_vars(std::span<const u16> vars, unsigned addr);
+// ---- RDE "encounters off". `story(var)` reads one byte of the field script's global variables by its variable id (a byte offset
+// into the 16-bit variable array: even = low byte, odd = high byte) and returns -1 when it is not available; an unknown byte makes
+// the rule err on the side of the fight.
+using StoryByte = std::function<int(unsigned var)>;
+// The global half of the variable array (the first kStoryVarBytes byte ids), saved with the game. `vars` = FieldVm::variables();
+// an id outside that window returns -1.
+constexpr unsigned kStoryVarBytes = 0x400;
+int story_byte_from_vars(std::span<const u16> vars, unsigned var);
 // A3 / C9 with the op's raw battle id `id` (operand & 0x7FF) in `map` (the script / save map id) run by entity `ent`: true = RDE
 // would patch the op into the auto-win (the A3 exception table, the C9 id list).
 bool encounter_auto_won(int map, int ent, int id, bool c9, const StoryByte& story);

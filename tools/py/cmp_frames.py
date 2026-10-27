@@ -1,4 +1,4 @@
-"""Compare a ccx reference capture with our ocbattleview shots by region statistics (no image viewing).
+"""Compare a ps1 reference capture with our ocbattleview shots by region statistics (no image viewing).
 usage: cmp_frames.py REFDIR OURSDIR OFFSET FIRST LAST STEP [COLS ROWS]
   REFDIR/frames/frame_NNNNNN.png (640x432)  vs  OURSDIR/shot_{N+OFFSET:06d}.png (1280x960, picture rows 8..951)
 prints per frame: mean luma R G B (ref | ours) and a COLSxROWS luma grid of both, plus mean |grid diff|."""
@@ -6,7 +6,7 @@ import sys, os
 import numpy as np
 from PIL import Image
 
-# the HD HUD (banner top-left, party panels bottom) is absent in the ccx frames: compare rows 10 %..74 % only (CROP=y0,y1 fractions)
+# the HD HUD (banner top-left, party panels bottom) is absent in the ps1 frames: compare rows 10 %..74 % only (CROP=y0,y1 fractions)
 Y0, Y1 = (float(v) for v in os.environ.get('CROP', '0.10,0.74').split(','))
 
 def load(p, ours):

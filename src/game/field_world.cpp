@@ -402,7 +402,7 @@ bool FieldWorld::load_room(std::string_view name, int param) {
     ScopedTimer timer("field: script INIT (incl. model loads)");
     const auto& af = scene->attr_flags;
     // E9 / FE 7A: the owned window frames live in the save.
-    if (gs_) vm_.set_reg(0x800790D4, gs_->slot.frames);
+    if (gs_) vm_.seed_global(script::Global::WindowFrames, gs_->slot.frames);
     vm_.load(std::move(*mod), std::span<const u32>(af.data(), std::min<size_t>(af.size(), 256)));
   }
   flag_writes_seen_ = 0;

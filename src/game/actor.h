@@ -407,7 +407,7 @@ class Actor {
   // The turn and the clip choice of step_visual: moving / requested / stand (idle) / stair slot, submitted when it changes.
   void pick_clip(bool moving, bool run);
   void advance_anim(bool loop_current);
-  // OC_POSE_TRACE=1: logs joints whose rotation turns > 60 deg between two ticks.
+  // Logs joints whose rotation turns > 60 deg between two ticks.
   void pose_trace();
   std::vector<Local> trace_prev_;
 

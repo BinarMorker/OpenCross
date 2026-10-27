@@ -3,14 +3,16 @@
 // replayer ([Debug] Record= / Replay=). Both feed the same platform::Input the real window would, one simulation tick
 // at a time, so a run is deterministic and needs no human.
 //
-// Route file: one command per line, '#' or ';' start a comment. A line is  <when> <command> [args]  where <when> is
+// Route file: one command per line, '#' or ';' cut the line there wherever they stand (so neither can appear in an argument).
+// [Debug] Replay is ignored when [Debug] Script is set. A failed `load` and an unknown `request` end the run with exit code 1 and
+// no "route FAILED" line (only a log error). A line is  <when> <command> [args]  where <when> is
 //   N     absolute driver tick (the line waits until that tick has been reached),
 //   +N    N ticks after the previous line finished,
 //   -     right after the previous line finished.
 // A line only starts once the previous one has finished; blocking commands (walk, wait, skip, fight, ...) finish when
 // their condition holds, or fail the run when their timeout (default 1800 ticks) runs out.
-//   key down|up <name>            hold / release a key (up down left right confirm cancel run menu triangle item: RDE's keys,
-//                                 platform/keymap.h; or an SDL-style letter)
+//   key down|up <name>            hold / release a key. Names: up down left right confirm|ok cancel run menu|tab triangle item
+//                                 (RDE's keys, platform/keymap.h), escape, select, start|space, a..z, f1..f9
 //   tap <name> [ticks]            press and release (default 3 ticks held, then 3 ticks free)
 //   pad on|off                    a virtual pad is connected (no button held) from now on / not any more
 //   pad tap <a|b|x|y|start> [ticks]   press and release a button of the virtual pad (connects it)
@@ -18,10 +20,11 @@
 //   walk <x> <z> [tol] [timeout]  steer the stick until the player is within tol (default 24) of the world point
 //   walk_ent <ent> [tol] [timeout]  same, towards entity <ent> of the room
 //   approach <ent> [tol] [timeout]  walk_ent that never fails: also ends when blocked (40 ticks), timed out or the controls are taken
-//   wait <ticks>                  wait
+//   wait <ticks>                  wait (no timeout)
 //   wait room <name> [timeout]    wait until the field room is <name> (and the screen has faded back in)
 //   wait dialogue open|closed [timeout]
-//   wait text <words...>          an open dialogue shows a message containing the words (plain text, newlines as spaces)
+//   wait text <words...>          an open dialogue shows a message containing the words (plain text, newlines as spaces); no timeout
+//                                 argument, the default timeout applies (every other wait form takes an optional [timeout])
 //   wait battle start|end|results [timeout]   (results = the post-battle results screen is up)
 //   wait idle [timeout]           controls free again (no dialogue, no fade, no transition)
 //   wait flow <title|name|slots|opening|field> [timeout]   the game flow reached that state
@@ -29,12 +32,13 @@
 //   wait guide <0|1|2> [timeout]  the user guide shows that page (1 controller, 2 keyboard, 0 closed)
 //   wait menu open|closed [timeout]  the main menu / a shop / the rename screen is up / gone
 //   wait shop open|closed [timeout]  a shop screen (FE 5E / 68) is up / gone
-//   skip [timeout]                confirm every 10 ticks until a dialogue that is open has closed (30 quiet ticks end it)
+//   skip [timeout]                confirm every 10 ticks until a dialogue that is open has closed (45 quiet ticks end it)
 //   mash until flow <state> | room <name> | movie start|end | idle x | shop open|closed | menu open|closed [timeout]   confirm every 12 ticks until it holds
+//                                 (`idle` still needs an argument after it, `x` above; its value is ignored)
 //   choose <n> [timeout]          wait for a dialogue, move the choice cursor down n times, confirm
 //   fight [timeout]               mash the battle menu (attack chain) until the battle view has finished
 //   autoshot <every> <count> <prefix>   background screenshots every <every> ticks (<prefix>NN.png) while later commands run
-//   screenshot <file.png>         capture the next rendered frame (relative names go to the exe folder's shots/)
+//   screenshot <file.png>         capture the next rendered frame (relative names go to shots/ next to the route's ini file)
 //   assert room <name> | assert var <hexid> <value> | assert dialogue open|closed | assert battle active|inactive | assert battle events <w1|a|w2 ...> (the window / action order starts with these tokens) |
 //   assert result <n>             (BATTLE_RESULT)       assert flow <state> | assert menu open|closed | assert shop open|closed |
 //   assert movie playing|idle      assert guide <0|1|2>     assert pause open|closed (the RDE pause screen)
@@ -50,7 +54,10 @@
 //                                 10 sprain, 20 flu)
 //   assert hp <char> <min> <max>  current HP of a character in [min, max]     assert status <char> <hexmask> set|clear
 //   request <kind> [arg]          debug: ask the host for what a field opcode would (money <n> = set the gold, battle <encounter> = A3 (battlefield 0), rename <char> = FE 4A + FE 61, party = FE 5B,
-//                                 save = FE 85 + FE 61 (cleared-save prompt), ngplus = FE 84 + FE 61 (New Game+ list), menu = FE 61, disc <n> = FE 65 (n = disc - 1), movie <n> = 7E / D4 (on the disc in use), trading <row> = FE 67 + FE 61); returns at once (wait for the screen with `wait menu|shop`)
+//                                 save = FE 85 + FE 61 (cleared-save prompt), ngplus = FE 84 + FE 61 (New Game+ list), menu = FE 61, disc <n> = FE 65 (n = disc - 1), movie <n> = 7E / D4 (on the disc in use), trading <row> = FE 67 + FE 61,
+//                                 party_add <char> = add a character to the party, keyitem <n> = give key item n, slotdump <n> = write the game as one save
+//                                 block to $OC_SLOT_DUMP<n>.bin, battle_disguise <encounter> = the disguised-fight variant of `battle`);
+//                                 issued once, finishes 4 ticks later (wait for the screen with `wait menu|shop`)
 //   assert name <char> <text>     the typed name of a character (UTF-8)       assert party <id,id,id>   the party ids in slot order (- = empty)
 //   assert disc <n>               the disc in use                             assert location <id>      the saved location word of the state
 //   mark / assert screen right|left|up|down   player screen movement since the mark
@@ -65,9 +72,12 @@
 //   trace <ent> <ticks>           log an entity's position / facing / model yaw every tick for N ticks and a speed / turn summary
 //   (trace also logs clip / keyframe*4 per tick) assert traceclip <max_src_moves> <max_clip_changes>   cross-fade source keyframe moves / clip changes of the last trace
 //   (trace also logs the head-turn angles while the head callback is on) assert traceheadturn <ticks> <span>   the last trace saw the head turn on >= ticks ticks over an ax range >= span (4096/turn)
-//   assert traceyaw<ticks> <octants>   the last trace saw the model yaw change on >= ticks ticks and visit >= octants of the 8 45-deg sectors
+//   assert traceyaw <ticks> <octants>   the last trace saw the model yaw change on >= ticks ticks and visit >= octants of the 8 45-deg sectors
 //   dump                          log the room's entity table
-//   art hd|original|toggle        switch the art mode like F6 / the options overlay (returns at once)
+//   art hd|original|modded|toggle   switch the art mode like F6 / the options overlay (returns at once; toggle = HD-family <-> original)
+//   pos                           log the tick, room, player position and control yaw
+//   assert offmesh p1|p2 <max> | ent <n> <max> | npcs <max>   ticks a party member / entity / the worst placed non-party model stood off the walk mesh is <= max
+//   assert rel <who> <ref> <dx> <dy> <tol>   screen offset of <who> from <ref> (p0..p2 or entity) is (dx, dy) within tol
 //   snap [hexvar...]              remember the simulation state: room, flow, room-load / battle-start / title-sequence counters, the
 //                                 battle signature, every entity's position / facing / model yaw and the listed script variables
 //   assert same [tol]             nothing of the `snap` state changed (positions within tol world units, default 0)
@@ -180,7 +190,7 @@ struct RouteOut {
   bool dump = false;
   // Host request (see "request"): kind.
   std::string request;
-  // `art`: hd / original / toggle.
+  // `art`: hd / original / modded / toggle.
   std::string art;
   int request_arg = 0;
   bool done = false;

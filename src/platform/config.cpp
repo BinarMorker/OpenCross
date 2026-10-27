@@ -119,7 +119,7 @@ std::vector<std::pair<std::string, std::string>> Ini::entries(std::string_view s
 }
 
 // Reads every key with its current default as the fallback. Legacy keys of earlier inis still migrate:
-//   [Video] Fullscreen=1 -> WindowMode borderless; FilterHD / FilterSD / FilterModded -> Filter (FilterHD wins); WideHudEdges=1 -> WideHud
+//   [Video] Fullscreen=1 -> WindowMode borderless; FilterHD -> Filter (Filter wins); WideHudEdges=1 -> WideHud
 //   full; Ps1Res3D -> Ps1Res (Ps1ResMenus is dropped; an ini with FilterHD but no Filter that is not in classic art reads it as off, since
 //   Ps1Res3D acted in classic art only); the old percentage Fov, Toasts and Aspect-as-widescreen keys are ignored.
 //   [Enhancements] EnhancedLighting / SpellLights (either on) -> Lighting; SeamBlend 0 / 1 / 2 -> EdgeBlend off / on / on.
@@ -197,7 +197,7 @@ bool Config::load(const std::filesystem::path& file) {
   dump_effects = parse_bool(ini.get("Mods", "DumpEffects"), dump_effects);
   for (const auto& [name, value] : ini.entries("Mods")) {
     const bool is_setting = name == "DumpTextures" || name == "ReplaceTextures" || name == "DumpStages" || name == "DumpTitle" ||
-                            name == "DumpRooms" || name == "DumpModels" || name == "DumpEffects";
+                            name == "DumpRooms" || name == "DumpModels" || name == "DumpWeapons" || name == "DumpEffects";
     if (is_setting) continue;
     ModSetting mod;
     mod.name = name;

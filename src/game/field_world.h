@@ -365,7 +365,7 @@ class FieldWorld final : public script::FieldHost {
   // The ordering-table slab every field drawer honours (layers, shadows, actor faces, effect quads): only content with lo < slot <= hi is
   // drawn. The host draws the deep part (ot, inf], warps it, then the near part (-inf, ot]. Reset to everything after use.
   void set_draw_slab(float lo, float hi);
-  // [Enhancements] SmoothEffectRings (off under Ps1Res3D)
+  // [Enhancements] SmoothEffectRings
   void set_smooth_rings(bool on) { smooth_rings_ = on; }
   // ---- FE 02 captured-frame transitions (kinds 1 / 3 / 4 additive fade of the old frame, 5 / 6 slide) ------
   // The host hands the next presented frame to FieldWorld when capture_wanted() (GpuContext::request_capture), and draws the overlay as usual.
@@ -614,7 +614,7 @@ class FieldWorld final : public script::FieldHost {
   void clear_key_latch() override;
   bool predicate(script::Predicate op, int arg) override;
   s32 query(script::Query which) override;
-  void set_register(u32 ps1_addr, s32 value) override;
+  void set_global(script::Global which, s32 value) override;
   void opaque_op(u16 key, std::span<const u8> operands) override;
 
  private:
@@ -1016,7 +1016,10 @@ class FieldWorld final : public script::FieldHost {
  private:
   // LOAD_ANIMATION packs (clips + sequence table) by char/name
   std::map<std::string, ExPack> ex_pack_cache_;
-  std::map<u32, s32> registers_;
+  // FE 2B / FE 34 footstep globals; reset_room_sound_regs restores the room defaults (the floor types persist across rooms).
+  struct FootstepRegs {
+    s32 volume = 0x7F, dry_type = 0, water_type = 0, listener_x = 0, listener_y = 0, listener_z = 0, nearest = 0x7FFF, farthest = 0x7FFF;
+  } footstep_;
   u32 rng_ = 0x2545F491u;
 
   // ---- engine state behind script ops (B5 D0 D1 D2 D9 DA DB B2 FE 52 FE 02 FE 1A FE 1B FE 77 C5 C8
@@ -1167,7 +1170,6 @@ class FieldWorld final : public script::FieldHost {
   bool status_no_run() const;
   // defaults of the footstep registers
   void reset_room_sound_regs();
-  s32 sound_reg(u32 addr, s32 dflt) const;
   void play_footstep(int ent, int feet);
   // see draw_background_late
   float late_layer_z() const;

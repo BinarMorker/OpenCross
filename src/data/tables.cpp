@@ -194,7 +194,7 @@ bool GameTables::load(const vfs::Vfs& game_fs, std::string* err) {
 
   // --- shops / trade
   if (auto shop_bytes = game_fs.read("cdrom/menu/el_shop.bin")) el_shop = rows_u16(*shop_bytes, 32);
-  if (auto shop_bytes = game_fs.read("cdrom/menu/waa_shop.bin")) waa_shop = rows_u16(*shop_bytes, 64);
+  if (auto shop_bytes = game_fs.read("cdrom/menu/waa_shop.bin")) waa_shop = rows_u16(*shop_bytes, 32);
   if (auto trade_bytes = game_fs.read("cdrom/menu/trade.bin")) {
     for (auto& row : rows_u16(*trade_bytes, 32)) {
       std::vector<TradeEntry> entries;

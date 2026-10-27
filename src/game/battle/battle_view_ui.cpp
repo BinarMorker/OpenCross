@@ -24,11 +24,11 @@ namespace oc::game {
 using namespace bv;
 
 namespace {
-// Canvas y per PS1 HUD line. Positions measured on 236-line captures (the HUD layer stretched by 236 / 216) convert with
-// PS1 line = measured line * kCcxY.
+// Canvas y per PS1 HUD line. Reference lines measured on a 236-line frame (the HUD layer stretched by 236 / 216) are scaled
+// to the PS1 row pitch: PS1 line = reference line * kRefLineY.
 constexpr float kRowScale = kCanvasH / 216.0f;
-constexpr float kCcxY = 216.0f / 236.0f;
-inline float ccx_y(float ccx_line) { return ccx_line * kCcxY * kRowScale; }
+constexpr float kRefLineY = 216.0f / 236.0f;
+inline float ref_y(float ref_line) { return ref_line * kRefLineY * kRowScale; }
 
 // Stamina labels per language (JP has no translation row: the key itself in the JP font).
 const char32_t* kStaLabel[6] = {U"Sta.", U"End.", U"Vig.", U"Asd.", U"Vit.", U"Sta."};
@@ -1223,7 +1223,7 @@ void BattleView::build_command_ui() {
     //  cost equals them (the last affordable hit), white below; fatigued (status 0x2000): thresholds 1.2 / 2.5 / 3.7 (dim below, yellow within
     //  +1.2, white above). Element: dim when gauge < 0 / stamina 0 / no usable cell.
     constexpr u32 kDim = 0x404040, kYellowWord = 0x008080, kWhiteWord = 0x808080;
-    const float bx = 28 * kPs1Px, by = ccx_y(177), bw = 68 * kPs1Px;
+    const float bx = 28 * kPs1Px, by = ref_y(177), bw = 68 * kPs1Px;
     // Interior 52 x 36 + the 8 px skin frame; 0.8 row shorter than the nominal 52 so the top and bottom padding round the text are equal (0.67 row pitch).
     add_skin_box(bx, by, bw, 51.2f * kRowScale);
     const int cur = ui_ == Ui::Top ? top_cursor_ : chain_cursor_;
@@ -1232,7 +1232,7 @@ void BattleView::build_command_ui() {
     const int cmd_flags = jp ? 0x10002 : 2;
     for (int k = 0; k < 4; ++k) {
       // PS1 line of the row (+1.1: top pad = bottom pad with the 0.8 row shorter box).
-      const float yl = (182 + 11.0f * static_cast<float>(k)) * kCcxY + 1.1f;
+      const float yl = (182 + 11.0f * static_cast<float>(k)) * kRefLineY + 1.1f;
       const bool sel = k == cur;
       u32 row_colour = kWhiteWord;
       std::u32string label;
@@ -1255,7 +1255,7 @@ void BattleView::build_command_ui() {
       }
       // Red diamond cursor: battle_11.png {0, 0, 0.5625, 1}, 9 x 8 PS1 px.
       if (sel) {
-        const float cx = 37 * kPs1Px, cy = (yl * kRowScale) + ccx_y(5);
+        const float cx = 37 * kPs1Px, cy = (yl * kRowScale) + ref_y(5);
         add_img(hud_[kHDiamond], cx - 4.5f * kPs1Px, cy - 4 * kRowScale, 9 * kPs1Px, 8 * kRowScale, 0, 0, 0.5625f, 1);
       }
       btext(cmd_flags, label, 44, yl, remap_text_colour(row_colour));
@@ -1263,8 +1263,8 @@ void BattleView::build_command_ui() {
     if (ui_ == Ui::Chain) {
       // "HIT%" caption: battle-osak-010 (50 x 9 PS1 px leader line, drawn at (x, y - 8)) with the caption
       // (命中率 / "HIT%" per language, flags 0x10002, colour 0x757575) above it.
-      add_img(hud_[kHOsak], 82 * kPs1Px, ccx_y(170), 62 * kPs1Px, ccx_y(11));
-      btext(cmd_flags, kHitCaption[li], 93, 165 * kCcxY, 0x757575);
+      add_img(hud_[kHOsak], 82 * kPs1Px, ref_y(170), 62 * kPs1Px, ref_y(11));
+      btext(cmd_flags, kHitCaption[li], 93, 165 * kRefLineY, 0x757575);
     }
   }
   // WideHudEdges: the command box (PS1 x 28, HIT% caption to 144) moves 21 px further out so its left margin equals the field-effect ring's (7 PS1 px).
@@ -1458,8 +1458,8 @@ void BattleView::build_element_ui() {
       const data::ElemRec& elem = tables_->elements[static_cast<size_t>(id)];
       const int ci = blink && level == sel_lvl ? 4 : data::colour_index_of_bit(elem.colour_bit());
       const u8 a = level > unit.gauge ? 128 : 255;
-      const float x = (160 + 15.0f * static_cast<float>(level)) * kPs1Px, y = ccx_y(118 + 7.5f * static_cast<float>(slot));
-      add_plate(ci, x, y, 13 * kPs1Px, ccx_y(6), col(255, 255, 255, a));
+      const float x = (160 + 15.0f * static_cast<float>(level)) * kPs1Px, y = ref_y(118 + 7.5f * static_cast<float>(slot));
+      add_plate(ci, x, y, 13 * kPs1Px, ref_y(6), col(255, 255, 255, a));
       set_group(op_count() - 1, 1);
     }
   // Name list: one plate per valid slot of the level at PS1 (11, 60 + 15 slot); the selected slot's plate is the

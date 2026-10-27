@@ -1,6 +1,6 @@
 """RDE capture analysis:  python -I tools/py/rde_trans_analyze.py DIR [DIR ...]
 Per real frame (frames named f_<ms>_<mean*10>.png from tools/rde_capture.py; picture = rows 32..992 of the 1280x1024
-client): luma L (PIL 'L', same as ccx trans_measure), mean abs gradient x/y at 320x240 (blur metric), white%/dark%.
+client): luma L (PIL 'L', same as ps1 trans_measure), mean abs gradient x/y at 320x240 (blur metric), white%/dark%.
 Time is relative to the first white frame (L > 200) found after a field picture (t = 0), in ms.  Prints one table per DIR
 (t, L, grad, white%, dark%) and a merged curve over all DIRs (50 ms bins, mean L)."""
 import sys, os

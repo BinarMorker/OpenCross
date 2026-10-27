@@ -1,9 +1,9 @@
 # Dot-source: . (Join-Path $PSScriptRoot "quiet_start.ps1")
 # Start-Quiet <exe> <argument string> <working dir> [stdout file] [stderr file] -> a process object (WaitForExit / ExitCode).
-# The child's first ShowWindow takes the STARTUPINFO show mode, so a test window (ccx) opens minimised WITHOUT activation
+# The child's first ShowWindow takes the STARTUPINFO show mode, so a test window (ps1) opens minimised WITHOUT activation
 # (SW_SHOWMINNOACTIVE): it never takes the focus from whatever the user is doing. Start-Process -WindowStyle Minimized activates it.
 # -NoMinimize: shown at its normal size, still without activation (SW_SHOWNOACTIVATE), for runs that need the presented frame
-# (a minimised ccx presents nothing: its screenshots are 8 x 8 and its PC overlays are not drawn).
+# (a minimised ps1 presents nothing: its screenshots are 8 x 8 and its PC overlays are not drawn).
 if (-not ("OcQuietStart" -as [type])) {
   Add-Type -TypeDefinition @"
 using System;

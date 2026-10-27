@@ -28,7 +28,7 @@ struct Equip {
   int mag_gear = 0;
   int mdef_gear = 4;
   int evd_gear = 0;
-  // OR of record flags & 0xD: 1 HP%, 4 deals x125/100, 8 takes x75/100 (and 2 = gold x125/100).
+  // OR of record flags & 0xF: 1 HP%, 2 gold x125/100 after battle, 4 deals x125/100, 8 takes x75/100.
   u16 gear_flags = 0;
   // Weapon mask: crit when (slayer & target hi) != 0.
   u32 slayer = 0;
@@ -604,7 +604,7 @@ class Battle {
   bool fizzled_ = false;
 };
 
-// Simple deterministic player policy for `ocbattle sim --auto`: heal when someone is below 40%, else the strongest
+// Simple deterministic player policy for `ocbattle sim`: heal when someone is below 40%, else the strongest
 // usable damage element, else a weak->medium->heavy chain that fits the stamina budget.
 Command auto_command(const Battle& battle, int pc);
 

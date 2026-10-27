@@ -161,9 +161,10 @@ class FieldVM {
   std::span<u16> variables() { return vars_; }
   u32 global_flags() const { return gflags_; }
   void set_global_flags(u32 flags) { gflags_ = flags; }
-  // Seeds a global the host keeps elsewhere (the saved window frames); `reg` reads the globals the set_register ops wrote.
-  void set_reg(u32 ps1_addr, s32 value) { regs_[ps1_addr] = value; }
-  s32 reg(u32 ps1_addr) const;
+  // Seeds a global the host keeps elsewhere (the saved window frames) without notifying the host; `global` reads the values
+  // the set_global ops wrote.
+  void seed_global(Global which, s32 value) { globals_[static_cast<size_t>(which)] = value; }
+  s32 global(Global which) const { return globals_[static_cast<size_t>(which)]; }
   // The FE 4F slot table: entity index in slot `slot`, -1 when empty.
   int slot_entity(size_t slot) const { return slot < slot_ent_.size() && slot_ent_[slot] != 0xFF ? slot_ent_[slot] : -1; }
   // The entity whose script is executing (valid inside host calls).
@@ -208,7 +209,7 @@ class FieldVM {
   int room_reg_ = -1;
   int room_register() const;
   u32 gflags_ = 0;
-  std::map<u32, s32> regs_;
+  std::array<s32, static_cast<size_t>(Global::Count)> globals_{};
   u32 flag_writes_ = 0;
   // Tables the ops fill: the flag table (75..78, 4 byte lanes per word), the water levels (66), the pair table (AF), the
   // slot entities (FE 4F) and the three effect actor lists (FE 08 / 09 / 0A).
@@ -268,7 +269,7 @@ class FieldVM {
   void set_global_bit(int bit, bool on) { set_flag(gflags_, bit, on); }
   void turn_flag_13(Entity& entity, bool on);
   void opaque(u16 key, u32 first_operand, u32 count);
-  void set_register(u32 addr, s32 value);
+  void set_global(Global which, s32 value);
   s32 isqrt_dist(s32 dx, s32 dy, s32 dz) const;
   // Character id in party slot `slot`, 0xFF when the slot is empty (the word the original party table holds).
   s32 party_table(int slot) const {

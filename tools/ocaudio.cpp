@@ -6,6 +6,7 @@
 //   ocaudio [-g <game dir>] render-sfx <sfx id> <out.wav> [seconds] [rate] [room]   (rate default 44100 = the SPU rate; 48000 = the mixer;
 //     room = the room whose yos0 bank overlays instruments 208..223; battle:<room> = that room entered again after a battle)
 //   ocaudio [-g <game dir>] sfx-pitch | sfx-bytes <id> | room-sfx <room> | banks   pitch-register audit against the retail formula
+//   ocaudio [-g <game dir>] timing | switch-test <song> <seconds> [volume] | inst-dump <index> | sfx-ops
 //   ocaudio [-g <game dir>] play-sfx <sfx id> [seconds]
 // The game dir defaults to $OPENCROSS_GAMEDIR.
 #include <algorithm>
@@ -40,7 +41,19 @@ namespace {
 int usage() {
   std::fprintf(stderr,
                "usage: ocaudio [-g <game dir>] decode <song id|BGMnnn> <out.wav> [seconds]\n"
-               "       ocaudio [-g <game dir>] play <song id|BGMnnn> [seconds]\n");
+               "       ocaudio [-g <game dir>] play <song id|BGMnnn> [seconds]\n"
+               "       ocaudio [-g <game dir>] render-seq <music NNN> <out.wav> [seconds] [rate]\n"
+               "       ocaudio [-g <game dir>] play-seq <music NNN> [seconds]\n"
+               "       ocaudio [-g <game dir>] render-sfx <sfx id> <out.wav> [seconds] [rate] [room]\n"
+               "       ocaudio [-g <game dir>] sfx-pitch\n"
+               "       ocaudio [-g <game dir>] room-sfx <room>\n"
+               "       ocaudio [-g <game dir>] sfx-bytes <sfx id>\n"
+               "       ocaudio [-g <game dir>] banks\n"
+               "       ocaudio [-g <game dir>] timing\n"
+               "       ocaudio [-g <game dir>] switch-test <song> <seconds> [volume]\n"
+               "       ocaudio [-g <game dir>] inst-dump <index>\n"
+               "       ocaudio [-g <game dir>] sfx-ops\n"
+               "       ocaudio [-g <game dir>] play-sfx <sfx id> [seconds]\n");
   return 2;
 }
 

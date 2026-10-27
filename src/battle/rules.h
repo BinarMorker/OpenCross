@@ -65,8 +65,6 @@ struct ChanceIn {
   int evd = 0;
   int evd_mod = 100;
   bool target_dizzy = false;
-  // Control-block flag bit 15: evade x125/100.
-  bool attacker_state15 = false;
   // The chain bonus is PC-only.
   bool pc_attacker = true;
   // Chain counter.
@@ -105,7 +103,7 @@ struct WeaponIn {
   // 0 weak, 1 medium, 2 heavy.
   int strength = 0;
   int weapon_class = 0;
-  bool target_afraid = false, attacker_state15 = false, slayer = false;
+  bool target_afraid = false, slayer = false;
   // Attack colour == kOpp[target colour].
   bool opposite_colour = false;
   bool guarding = false;

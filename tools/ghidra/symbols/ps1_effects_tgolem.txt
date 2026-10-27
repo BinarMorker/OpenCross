@@ -1,0 +1,4 @@
+# PS1 project symbol list: effect overlay tgolem.prg (base 0x801C5E00).
+# Format: name = 0xADDR;  # function|data: description. Names come from this project's own reverse engineering.
+# Apply with tools\ghidra\ApplySymbols.java <this file> (see symbols\README.md).
+fx_tgolem_task_pose_step = 0x801C5F7C;  # function: Task that steps the model pose each tick

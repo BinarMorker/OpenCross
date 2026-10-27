@@ -3,7 +3,7 @@
     python tools/py/cc_save_forge.py <in save.dat> <out save.dat> --slot N [options]
 
 Options (all optional; every edit lands in slot N of memcard1.mcr, the block checksum is recomputed, the output is a
-plain stored ZIP with the same members, which OpenCross and ccx read like RDE's WinZip-AES file):
+plain stored ZIP with the same members, which OpenCross and ps1 read like RDE's WinZip-AES file):
   --room ID            location word (raw head 0x18E = script variable 6): the room Continue loads
   --entrance N         script variable 0x3A (raw head 0x1C2): the ROOM_PARAM entrance Continue re-enters with
   --party a[,b[,c]]    party character ids (raw head 0x59C.. and the 0x34 preview; 0xFF pads); recruits them too
@@ -21,6 +21,8 @@ plain stored ZIP with the same members, which OpenCross and ccx read like RDE's 
   --cleared            a New Game+ "cleared" save as the ending's FE 85 writes it: variable 0x7E = 3, summary flags (raw head 0x42
                        bits 0-1) = 3, location = map 9 (the ending room) with entrance 3 (Continue opens the New Game+ title list)
   --flags N            only the 2 summary flag bits (raw head 0x42; 2 = a New Game+ game, 3 = cleared)
+  --mcd PATH           also write the forged memcard1.mcr as a raw 128 KiB memory card image (stock DuckStation .mcd)
+  --mcd-only           with --mcd: skip writing the output save.dat
 
   rowlen CHAR ROW      (own sub-command) print the number of cells of that grid row. Tech cells (Pilfer = 163 ...) are plain
                        element ids in the save record, so --grid places techs like elements.
@@ -84,7 +86,7 @@ def main(argv):
     src, dst = argv[0], argv[1]
     args = argv[2:]
     opts = {"slot": None, "room": None, "entrance": None, "party": None, "recruit": [], "char": [], "grid": [],
-            "unlock": [], "var": [], "set_bit": [], "clear_bit": [], "stars": None, "gold": None, "flags": None}
+            "unlock": [], "var": [], "set_bit": [], "clear_bit": [], "stars": None, "gold": None, "flags": None, "mcd": None, "mcd_only": False}
     i = 0
     while i < len(args):
         a = args[i]
@@ -124,6 +126,12 @@ def main(argv):
             continue
         elif a == "--flags":
             opts["flags"] = int(v, 0)
+        elif a == "--mcd":
+            opts["mcd"] = v
+        elif a == "--mcd-only":
+            opts["mcd_only"] = True
+            i += 1
+            continue
         else:
             raise SystemExit("unknown option %s" % a)
         i += 2
@@ -246,6 +254,16 @@ def main(argv):
     base = c.BLOCK * entry.idx
     data[base:base + c.BLOCK] = new_blk
     card_member.data = bytes(data)
+    if opts["mcd_only"] and not opts["mcd"]:
+        raise SystemExit("--mcd-only needs --mcd PATH")
+    if opts["mcd"]:
+        if len(card_member.data) != 0x20000 or card_member.data[:2] != b"MC":
+            raise SystemExit("memcard1.mcr is not a raw 128 KiB card image")
+        with open(opts["mcd"], "wb") as f:
+            f.write(card_member.data)
+        print("wrote %s (%d bytes)" % (opts["mcd"], len(card_member.data)))
+    if opts["mcd_only"]:
+        return 0
     with zipfile.ZipFile(dst, "w", zipfile.ZIP_STORED) as z:
         for m in members:
             z.writestr(m.name, m.data)

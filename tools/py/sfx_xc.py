@@ -1,4 +1,4 @@
-"""Waveform cross-correlation PS1 segment vs ours. usage: sfx_xc.py raw t_event ours.wav t0_ms t1_ms [chan 0|1|m]"""
+"""Waveform cross-correlation PS1 segment vs ours. usage: sfx_xc.py raw t_event ours.wav t0_ms t1_ms"""
 import sys, os, numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from x2_audio import load, load_wav

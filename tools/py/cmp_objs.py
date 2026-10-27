@@ -1,4 +1,4 @@
-"""Per-emitter live object counts: ccx state vs our OC_FX_OBJECTS log.   cmp_objs.py REFDIR OURS.log OFFSET FIRST LAST STEP
+"""Per-emitter live object counts: ps1 state vs our OC_FX_OBJECTS log.   cmp_objs.py REFDIR OURS.log OFFSET FIRST LAST STEP
 (ref frame F <-> our fx dump 'fx objects tick F+OFFSET'; OURS.log made with OC_FX_OBJECTS=<step>)."""
 import sys, re, subprocess, collections, os
 ref, log, off, f0, f1, st = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6])

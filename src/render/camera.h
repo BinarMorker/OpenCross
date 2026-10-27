@@ -88,7 +88,7 @@ inline bool cull_screen_ok(const CullFrame& frame, float sx, float sy) {
 }
 inline bool cull_span_ok(const CullFrame& frame, float dx, float dy) { return dx <= frame.x_span && dy <= CullFrame::y_span; }
 // Extra columns per side for a vw x vh window: the window's own shape at the 4:3 fit's height (240 rows), whole columns; 0 for a window
-// of 4:3 or narrower (16:9 -> 53, i.e. 426 columns; 16:10 -> 32 = 384; 21:9 -> 120 = 560).
+// of 4:3 or narrower (16:9 -> 49, i.e. 418 columns; 16:10 -> 28 = 376; 21:9 -> 115 = 550).
 inline float wide_extra_for(float vw, float vh) {
   if (vw <= 0.0f || vh <= 0.0f) return 0.0f;
   return std::max(0.0f, std::floor((kPresentRows * vw / vh - kLayerW) * 0.5f + 1e-3f));

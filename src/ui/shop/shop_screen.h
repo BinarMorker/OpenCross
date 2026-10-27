@@ -33,7 +33,7 @@ class ShopScreen {
   ShopScreen(const ShopScreen&) = delete;
   ShopScreen& operator=(const ShopScreen&) = delete;
 
-  // `tables` must outlive the screen. Also re-reads waa_shop.bin with the correct 32 x 64 layout.
+  // `tables` must outlive the screen. Re-reads waa_shop.bin into the shop data.
   bool init(render::GpuContext& ctx, const vfs::Vfs& vfs, render::SpriteBatch& sprites, render::TextBatch& text,
             const data::GameTables& tables, import::Lang lang);
   void shutdown();

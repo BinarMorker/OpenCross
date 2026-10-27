@@ -215,7 +215,7 @@ class DialogueBox {
 };
 
 // Self-contained dialogue viewer: loads fonts and tables, shows (room, message) pairs. Wire-up in the app (app/app.h):
-//   init once after the SpriteBatch exists; show(); per frame: handle_input(), update(dt), and draw() inside
+//   init once after the SpriteBatch exists; show(); per frame: update(dt), confirm() / move_choice() from the host, and draw() inside
 //   SpriteBatch::begin()/end().
 class DialogueDemo {
  public:
@@ -238,12 +238,10 @@ class DialogueDemo {
   void set_art_mode(ArtMode mode);
 
   void update(float dt);
-  // Confirm (Enter/Space/Z): next page, or replay when closed. F5 art mode, F6 language, PgUp/PgDn message, Up/Down choice.
-  void handle_input(const platform::Input& in);
   // Inside SpriteBatch::begin()/end().
   void draw(float vw, float vh, const render::CanvasFit* fit = nullptr);
 
-  // Field integration (FieldWorld): the demo hot keys of handle_input() are not used there.
+  // Field integration (FieldWorld).
   bool is_open() const;
   void confirm();
   void move_choice(int delta);

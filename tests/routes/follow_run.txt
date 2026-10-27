@@ -1,6 +1,6 @@
 # Followers behind a running leader (Termina tel_a01f, the button walks, so Up alone runs at 12.5 units a tick). Follower 1 walks at
 # 8.5 units a tick until it is 351 units from the leader's spot at the start of the tick, then runs at 15: it settles 345..360
-# behind (ccx: 341..355; measuring after the leader's step settled it ~12 units closer). Stopped, both stand within 200.
+# behind (ps1: 341..355; measuring after the leader's step settled it ~12 units closer). Stopped, both stand within 200.
 0 wait idle
 - request party_add 1
 - request party_add 2

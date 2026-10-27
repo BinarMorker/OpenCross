@@ -96,9 +96,9 @@ bool FieldVM::exec_game(u8 op) {
       advance(7);
       yield_ = true;
       break;
-    case 0xA4: regs_[0x800EA058] = operand_u(1); host_.set_register(0x800EA058, operand_u(1)); advance(3); break;
+    case 0xA4: set_global(Global::SubmergedOtPush, operand_u(1)); advance(3); break;
     case 0xA5: self.v24e = static_cast<u16>(operand_u(1)); advance(3); break;
-    case 0xA6: regs_[0x800E9CF2] = byte_at(1) == 0; host_.set_register(0x800E9CF2, byte_at(1) == 0); advance(2); break;
+    case 0xA6: set_global(Global::RegisterInvA6, byte_at(1) == 0); advance(2); break;
     case 0xA7: opaque(0xA7, 1, 8); advance(9); break;
     case 0xA8: host_.fade(byte_at(1), operand_u(2)); advance(4); break;
     case 0xA9: {
@@ -174,7 +174,7 @@ bool FieldVM::exec_game(u8 op) {
       else
         advance(5);
       break;
-    case 0xB5: regs_[0x800EA05E] = operand_u(1); host_.set_register(0x800EA05E, operand_u(1)); advance(3); break;
+    case 0xB5: set_global(Global::PushStrength, operand_u(1)); advance(3); break;
     case 0xB7: self.v10e = static_cast<u16>(operand_s(1, 3, 0x80)); advance(4); break;
     case 0xBB:
       if (byte_at(1) == 0)
@@ -464,7 +464,7 @@ bool FieldVM::exec_game(u8 op) {
       break;
     }
     case 0xE9:
-      if (!((reg(0x800790D4) >> (byte_at(1) & 0x1F)) & 1))
+      if (!((global(Global::WindowFrames) >> (byte_at(1) & 0x1F)) & 1))
         pc = word_at(3);
       else
         advance(5);

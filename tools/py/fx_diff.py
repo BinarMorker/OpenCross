@@ -1,26 +1,26 @@
-"""fx_diff.py DIR [--step 5] [--offset N|auto] [--window A B] : the mechanical diff of one effect cast, ccx (PS1) vs OpenCross.
+"""fx_diff.py DIR [--step 5] [--offset N|auto] [--window A B] : the mechanical diff of one effect cast, ps1 (PS1) vs OpenCross.
 
     DIR = tmp\\r34\\<id>   with   ref\\states\\state_NNNNNN.sav (+ ref\\frames\\frame_NNNNNN.png)   and   ours\\ours.log (+ ours\\shots\\shot_NNNNNN.png)
     ours.log = tools\\ours_cast34.ps1 (OC_FX_OBJECTS / OC_FX_SEQ / OC_FX_UNITS = 5): `fxseq:`, `fx objects`, `fx units` + unit lines, `fx camera` lines.
 
-Step 1 extracts every ccx state once into DIR\\ref\\tables.json (so the states can be deleted afterwards): sequence tasks, live objects (all, with
+Step 1 extracts every ps1 state once into DIR\\ref\\tables.json (so the states can be deleted afterwards): sequence tasks, live objects (all, with
 the per-emitter first object), unit model blocks, camera, fog, warp. Step 2 parses ours.log into the same shape. Step 3 finds the offset
-(our tick = ccx frame + offset; the median over common sequence names of our start tick - ccx start frame (= state frame - elapsed); fallback
+(our tick = ps1 frame + offset; the median over common sequence names of our start tick - ps1 start frame (= state frame - elapsed); fallback
 the first live object on both sides), then writes DIR\\diff.md (verdict block, per-frame differences, the full table collapsed) and
-DIR\\shots.png (ccx frame | our shot at the first draw and the peak object count). Missing categories give a `-` verdict, never an error.
+DIR\\shots.png (ps1 frame | our shot at the first draw and the peak object count). Missing categories give a `-` verdict, never an error.
 
 Tolerances: object count +-2 per emitter, first-object numbers 5 % (abs floor 8), unit position / yaw 64, camera eye / target 64, fog 5 %.
 Options (the plain call runs the diff):
   --extract           tables only (ref\\tables.json from the states; no ours needed) + `cam_pick:` appended to ref\\manifest.txt from camera-shot sequence-task tags
                       (ch1N / tgtN / aprN / numbered shots; the pack's own first sequence and `main` excluded) unless the manifest already has a non-empty one
-  --info              prints `last_frame: N` (the ccx capture length), `states: M` and `dt: t:N,t:N` (the PS1 loop iteration length in vsyncs along the
+  --info              prints `last_frame: N` (the ps1 capture length), `states: M` and `dt: t:N,t:N` (the PS1 loop iteration length in vsyncs along the
                       'main' elapsed t, estimated from how the elapsed counter steps between the 5-frame samples)
-  --cam-score LOG..   per our probe log: how many sampled ccx camera frames match (eye / target within 64) -> `LOG: match/compared shift S` (best of the shifts -1 / 0 / +1 sample), then `best: <index>`, `clear: 1|0` (>= 50 % or >= 2x the runner-up), `shift: S`, `mode: exact|shape` (shape = the eye turned about the target), `score: ok/n`
+  --cam-score LOG..   per our probe log: how many sampled ps1 camera frames match (eye / target within 64) -> `LOG: match/compared shift S` (best of the shifts -1 / 0 / +1 sample), then `best: <index>`, `clear: 1|0` (>= 50 % or >= 2x the runner-up), `shift: S`, `mode: exact|shape` (shape = the eye turned about the target), `score: ok/n`
   --set-cam-pick S    writes `cam_pick: S` into the manifest (replacing an empty line)
   --prune             after the diff: delete ref\\states\\*.sav (tables.json exists), keep every 8th ref frame + the two used, keep the two ours shots used
-  Stage emitters (anything live in ccx before the first sequence starts: `near`, `far`) are reported as `stage`, not counted; fog / warp are
+  Stage emitters (anything live in ps1 before the first sequence starts: `near`, `far`) are reported as `stage`, not counted; fog / warp are
   compared only from the first op (fog on / warp on) on either side.
-Python 3.13 with numpy / PIL / zstandard (the ccx side) - run as `python -I tools\\py\\fx_diff.py tmp\\r34\\7`.
+Python 3.13 with numpy / PIL / zstandard (the ps1 side) - run as `python -I tools\\py\\fx_diff.py tmp\\r34\\7`.
 """
 import json
 import os
@@ -37,12 +37,12 @@ TOL_POS = 64
 TOL_POOL = 300   # cam_score: a pool member is a 60-90 tick shot, so a 1-2 sample timing / anchor-height lag (e.g. a 350 u lag on Fireball) must not lose it to a wrong pick
 
 
-# ------------------------------------------------------------------------------------------------------------------ ccx side
+# ------------------------------------------------------------------------------------------------------------------ ps1 side
 def extract_ref(refdir):
-    """Reads every state in refdir/states with fx_ref / ccx_state; returns {frame: tables}."""
+    """Reads every state in refdir/states with fx_ref / ps1_state; returns {frame: tables}."""
     import struct
     import fx_ref as fr
-    from ccx_state import State, frame_of, list_states
+    from ps1_state import State, frame_of, list_states
     out = {}
     sd = os.path.join(refdir, "states")
     for p in list_states([sd]):
@@ -95,7 +95,7 @@ def extract_ref(refdir):
 
 
 def norm_ref(tabs):
-    """ccx tags are 4 bytes with NUL shown as '.': '2r3.' = ours '2r3'."""
+    """ps1 tags are 4 bytes with NUL shown as '.': '2r3.' = ours '2r3'."""
     for t in tabs.values():
         for s in t["seqs"]:
             s["name"] = s["name"].rstrip(". ")  # the 4-byte tag keeps trailing spaces ("0   ", "c2 ") that the ours.log \S+ field drops
@@ -268,11 +268,11 @@ def ref_seq_births(ref):
     return out
 
 
-MAIN_CREDIT = 3  # ccx Anti-Red per-frame states: main elapsed 7 at the first visible frame = first-run delta 3 + the pass delta 4, i.e. its start frame reads ~3-6 early; fog / camera of the same frames agree with ours at main-start - 3
+MAIN_CREDIT = 3  # ps1 Anti-Red per-frame states: main elapsed 7 at the first visible frame = first-run delta 3 + the pass delta 4, i.e. its start frame reads ~3-6 early; fog / camera of the same frames agree with ours at main-start - 3
 
 
 def snap_offset(ref, ours, raw, step):
-    """The samples of both sides sit on grids (ccx every `step` frames, ours every `step` ticks): an offset off the grid makes `nearest` read
+    """The samples of both sides sit on grids (ps1 every `step` frames, ours every `step` ticks): an offset off the grid makes `nearest` read
     a sample up to step // 2 ticks away (the 'common lead' of ~5 frames was 2 ticks of estimator bias + 2 of snapping)."""
     if not ref or not ours:
         return raw
@@ -287,11 +287,11 @@ def find_offset(ref, ours, oseqs, step=5):
     rs, _ = ref_seq_starts(ref)
     # A sequence task born inside an update is run at once with the update's
     # delta (+0x14 elapsed, +0x18 wait) and again by the task loop of the same pass, so a CHILD (op 0x2F) starts with elapsed ~2 deltas
-    # (ccx eft1 elapsed 8 beside main 7 at the first visible frame) and its 'start frame' (state frame - elapsed) comes out 4-8 early. The
+    # (ps1 eft1 elapsed 8 beside main 7 at the first visible frame) and its 'start frame' (state frame - elapsed) comes out 4-8 early. The
     # pack's own `main` / `own` (born by the hand-over) are the roots: align on them, not on the median of all names.
     roots = [n for n in rs if n in oseqs and n in ("main", "own")]
     if roots:
-        # A ccx capture can hold SEVERAL packs (Cuscus 100: Serge's element 1, then its reflection; Schoolmates 169 likewise) while ours plays
+        # A ps1 capture can hold SEVERAL packs (Cuscus 100: Serge's element 1, then its reflection; Schoolmates 169 likewise) while ours plays
         # one. Every birth of a root is a candidate; the one under which most other sequences of both sides start together wins (ties: the later birth).
         births = ref_seq_births(ref)
         cands = sorted({b for n in roots for b in births.get(n, [rs[n]])})
@@ -311,16 +311,16 @@ def find_offset(ref, ours, oseqs, step=5):
             for n in roots:
                 rs[n] = best
         raw = int(round(statistics.median([oseqs[n][0] - rs[n] for n in roots]))) - MAIN_CREDIT   # main's elapsed already carries its birth credit
-        return snap_offset(ref, ours, raw, step), "pack %s start (our first command tick - ccx state frame + elapsed), snapped to the sample grid from %d" % ("/".join(roots), raw)
+        return snap_offset(ref, ours, raw, step), "pack %s start (our first command tick - ps1 state frame + elapsed), snapped to the sample grid from %d" % ("/".join(roots), raw)
     diffs = [oseqs[n][0] - rs[n] for n in rs if n in oseqs]
     if diffs:
         # A plain median: the root path's birth credit does not hold here (Flag-Bearer 177 reads one sample better at 190 than at this 193,
         # Canon Cannon 298 five frames worse at 190 than at 195) - pass `--offset N` where a capture needs it.
-        return int(round(statistics.median(diffs))), "median of %d common sequence starts (our first command tick - ccx state frame + elapsed)" % len(diffs)
+        return int(round(statistics.median(diffs))), "median of %d common sequence starts (our first command tick - ps1 state frame + elapsed)" % len(diffs)
     rf = next((f for f in sorted(ref) if ref[f]["objs"]), None)
     of = next((t for t in sorted(ours) if ours[t]["objs"]), None)
     if rf is not None and of is not None:
-        return of - rf, "first live object (ccx frame %d, our tick %d)" % (rf, of)
+        return of - rf, "first live object (ps1 frame %d, our tick %d)" % (rf, of)
     return 0, "no common sequence or object: 0"
 
 
@@ -376,7 +376,7 @@ def set_cam_pick(d, pick):
 
 
 def tag_cam_pick(ref):
-    """Camera-shot names from the sequence-task tags / names, by first appearance over the ccx frames. The pack's own first sequence (ch03 ...)
+    """Camera-shot names from the sequence-task tags / names, by first appearance over the ps1 frames. The pack's own first sequence (ch03 ...)
     and `main` are the effect sequences, not camera shots."""
     first = None
     seen = []
@@ -425,7 +425,7 @@ def tools_only(d, do_extract, do_info, setpick):
         ref = load_ref(d, force=False)
     if do_extract:
         if not ref:
-            print("fx_diff: no ccx tables (ref\\tables.json / ref\\states) in %s" % d)
+            print("fx_diff: no ps1 tables (ref\\tables.json / ref\\states) in %s" % d)
         else:
             print("extract: %d states -> %s" % (len(ref), os.path.join(d, "ref", "tables.json")))
             have = manifest_cam_pick(d)
@@ -437,7 +437,7 @@ def tools_only(d, do_extract, do_info, setpick):
                     set_cam_pick(d, pick)
                     print("cam_pick: %s (from the sequence-task tags; appended to the manifest)" % pick)
                 else:
-                    print("cam_pick: - (no camera-shot tags among the ccx sequence tasks; ours_cast34.ps1 probes the camera pool)")
+                    print("cam_pick: - (no camera-shot tags among the ps1 sequence tasks; ours_cast34.ps1 probes the camera pool)")
     if do_info:
         last = max(ref) if ref else 0
         if not last:
@@ -461,9 +461,9 @@ def default_window(ref):
 
 
 def cam_score(d, ref, logs, step):
-    """Per probe log, over the time shifts -1 / 0 / +1 sample (the ccx charge camera runs a few frames ahead of ours): the EXACT score (eye and
+    """Per probe log, over the time shifts -1 / 0 / +1 sample (the ps1 charge camera runs a few frames ahead of ours): the EXACT score (eye and
     target within TOL_POS) and the SHAPE score (target y within TOL_POS and x / z within 2x, the eye radius about the target and its height within TOL_POS: the eye turned about the vertical axis through the target; the charge shots are
-    anchored to the unit yaws, which the harness's pre-cast state does not reproduce - ccx u0 yaw 1327 vs ours 1024 = the same 303 the camera is turned by).
+    anchored to the unit yaws, which the harness's pre-cast state does not reproduce - ps1 u0 yaw 1327 vs ours 1024 = the same 303 the camera is turned by).
     Prints `LOG: ok/n shift S` and `LOG: shape ok/n shift S yaw Y`, then `best: <index>`, `clear: 1|0` (best >= 2x the runner-up, or >= 50 %),
     `shift: S`, `mode: exact|shape`, `score: ok/n` of the winner (the exact scores rank when one is clear, else the shape scores)."""
     import math
@@ -619,7 +619,7 @@ def main(argv):
     lp = os.path.join(d, "ours", "ours.log")
     ours, oseqs = parse_ours(lp) if os.path.isfile(lp) else ({}, {})
     if not ref:
-        print("fx_diff: no ccx tables (ref\\tables.json / ref\\states) in %s" % d)
+        print("fx_diff: no ps1 tables (ref\\tables.json / ref\\states) in %s" % d)
     if not ours:
         print("fx_diff: no ours.log samples in %s" % d)
     off_note = "given"
@@ -633,9 +633,9 @@ def main(argv):
             window[0] = CHOSEN_BIRTH[0] - 15
     if window:
         frames = [f for f in frames if window[0] <= f <= window[1]]
-        win_note = "ccx frames %d..%d" % (window[0], window[1])
+        win_note = "ps1 frames %d..%d" % (window[0], window[1])
 
-    # stage baseline (T2b): emitters live in ccx before the first sequence starts (`near`, `far` ...) are the stage, not the cast
+    # stage baseline (T2b): emitters live in ps1 before the first sequence starts (`near`, `far` ...) are the stage, not the cast
     rs_all, _ = ref_seq_starts(ref)
     first_seq = min(rs_all.values()) if rs_all else None
     stage = set()
@@ -644,15 +644,15 @@ def main(argv):
             if f < first_seq:
                 stage.update(o["em"] for o in ref[f]["objs"])
     # a pruned capture (states from the cast on, e.g. scenes 447 / 479 / 392 / 402) has no pre-sequence frame, so the baseline above is empty
-    # and the stage's own scenery emitters were counted as 'ccx-only near N'. Their names are fixed (far / near / roof / ring).
+    # and the stage's own scenery emitters were counted as 'ps1-only near N'. Their names are fixed (far / near / roof / ring).
     stage.update(n for n in ("near", "far", "roof", "ring") if any(o["em"] == n for f in ref for o in ref[f]["objs"]))
-    stage_peak = [0, 0]  # ccx / ours objects of the stage emitters, peak over the compared frames
+    stage_peak = [0, 0]  # ps1 / ours objects of the stage emitters, peak over the compared frames
     # fog / warp are compared from the first op on either side
     fog_from = min([f for f in sorted(ref) if ref[f]["fog"] and (ref[f]["fog"]["on"] or ref[f]["fog"]["near"] or ref[f]["fog"]["far"])] +
                    [t - offset for t in sorted(ours) if ours[t]["fog"] and ours[t]["fog"]["on"]] or [1 << 30])
     warp_from = min([f for f in sorted(ref) if ref[f]["warp"] and ref[f]["warp"]["on"]] +
                     [t - offset for t in sorted(ours) if ours[t]["warp"] and ours[t]["warp"]["on"]] or [1 << 30])
-    rows = []  # per ccx frame
+    rows = []  # per ps1 frame
     v = {k: [0, 0] for k in ("seq", "cnt", "first", "units", "cam", "fog", "warp")}  # [bad, compared]
     vnotes = {k: [] for k in v}
     diffs_by_frame = {}
@@ -684,17 +684,17 @@ def main(argv):
                 v["seq"][1] += 1
                 vnotes["seq"].append("%s only in ours (start F%d)" % (n, o0))
             elif n in rs and n not in oseqs:
-                seq_rows.append((n, r0, "-", "ccx only"))
+                seq_rows.append((n, r0, "-", "ps1 only"))
                 v["seq"][0] += 1
                 v["seq"][1] += 1
-                vnotes["seq"].append("%s only in ccx (start F%d)" % (n, r0))
+                vnotes["seq"].append("%s only in ps1 (start F%d)" % (n, r0))
             else:
                 ok = abs(r0 - o0) <= max(step, 2)
                 seq_rows.append((n, r0, o0, "ok" if ok else "start differs by %d" % (o0 - r0)))
                 v["seq"][1] += 1
                 if not ok:
                     v["seq"][0] += 1
-                    vnotes["seq"].append("%s starts ccx F%d vs ours F%d" % (n, r0, o0))
+                    vnotes["seq"].append("%s starts ps1 F%d vs ours F%d" % (n, r0, o0))
 
     full = []
     peak = (0, None)
@@ -720,17 +720,17 @@ def main(argv):
                 a, b = len(gr.get(e, [])), len(go.get(e, []))
                 v["cnt"][1] += 1
                 if abs(a - b) > TOL_COUNT:
-                    note(f, "cnt", "%s ccx %d ours %d" % (e, a, b))
+                    note(f, "cnt", "%s ps1 %d ours %d" % (e, a, b))
                 if e in gr and e in go and abs(a - b) <= TOL_COUNT:
                     x, y = gr[e][0], go[e][0]
                     for key in ("pos", "sc", "col"):
                         for i in range(3):
                             v["first"][1] += 1
                             if not close(x[key][i], y[key][i]):
-                                note(f, "first", "%s first.%s[%d] ccx %d ours %d" % (e, key, i, x[key][i], y[key][i]))
+                                note(f, "first", "%s first.%s[%d] ps1 %d ours %d" % (e, key, i, x[key][i], y[key][i]))
                     v["first"][1] += 1
                     if not close(x["life"], y["life"], floor=2):
-                        note(f, "first", "%s first.life ccx %d ours %d" % (e, x["life"], y["life"]))
+                        note(f, "first", "%s first.life ps1 %d ours %d" % (e, x["life"], y["life"]))
         # units
         if ot is not None and ot["units"] and rt["units"]:
             for u, a in sorted(rt["units"].items(), key=lambda kv: int(kv[0])):
@@ -740,14 +740,14 @@ def main(argv):
                 v["units"][1] += 1
                 bad = []
                 if max(abs(a["pos"][i] - b["pos"][i]) for i in range(3)) > TOL_POS:
-                    bad.append("pos ccx %s ours %s" % (a["pos"], b["pos"]))
+                    bad.append("pos ps1 %s ours %s" % (a["pos"], b["pos"]))
                 dy = (a["yaw"] - b["yaw"]) & 0xFFF
                 if min(dy, 4096 - dy) > TOL_POS:
-                    bad.append("yaw ccx %d ours %d" % (a["yaw"] & 0xFFF, b["yaw"]))
+                    bad.append("yaw ps1 %d ours %d" % (a["yaw"] & 0xFFF, b["yaw"]))
                 if (a["fl"] ^ b["fl"]) & 0x0301:
-                    bad.append("flags7e ccx %04x ours %04x" % (a["fl"], b["fl"]))
+                    bad.append("flags7e ps1 %04x ours %04x" % (a["fl"], b["fl"]))
                 if max(abs(a["col"][i] - b["col"][i]) for i in range(3)) > 8:
-                    bad.append("col ccx %s ours %s" % (a["col"], b["col"]))
+                    bad.append("col ps1 %s ours %s" % (a["col"], b["col"]))
                 if bad:
                     note(f, "units", "u%s " % u + "; ".join(bad))
         # camera / fog / warp
@@ -755,18 +755,18 @@ def main(argv):
             v["cam"][1] += 1
             ce, oe, ct, ot_ = rt["cam"]["eye"], ot["cam"]["eye"], rt["cam"]["tgt"], ot["cam"]["tgt"]
             if max(abs(ce[i] - oe[i]) for i in range(3)) > TOL_POS or max(abs(ct[i] - ot_[i]) for i in range(3)) > TOL_POS:
-                note(f, "cam", "eye ccx %s ours %s tgt ccx %s ours %s H %d/%d" % (ce, oe, ct, ot_, rt["cam"]["H"], ot["cam"]["H"]))
+                note(f, "cam", "eye ps1 %s ours %s tgt ps1 %s ours %s H %d/%d" % (ce, oe, ct, ot_, rt["cam"]["H"], ot["cam"]["H"]))
         if ot is not None and ot["fog"] and rt["fog"] and f >= fog_from:
             v["fog"][1] += 1
             a, b = rt["fog"], ot["fog"]
             if not (close(a["near"], b["near"]) and close(a["far"], b["far"]) and all(close(a["rgb"][i], b["rgb"][i], floor=4) for i in range(3))):
-                note(f, "fog", "ccx near %d far %d rgb %s ours near %d far %d rgb %s" % (a["near"], a["far"], a["rgb"], b["near"], b["far"], b["rgb"]))
+                note(f, "fog", "ps1 near %d far %d rgb %s ours near %d far %d rgb %s" % (a["near"], a["far"], a["rgb"], b["near"], b["far"], b["rgb"]))
         if ot is not None and ot["warp"] and rt["warp"] and f >= warp_from:
             v["warp"][1] += 1
             a, b = rt["warp"], ot["warp"]
             bad = (bool(a["on"]) != bool(b["on"])) or (a["on"] and (max(abs(a["ang"][i] - b["ang"][i]) for i in range(3)) > TOL_POS or max(abs(a["tr"][i] - b["tr"][i]) for i in range(3)) > TOL_POS))
             if bad:
-                note(f, "warp", "ccx on %d ang %s tr %s ours on %d ang %s tr %s" % (a["on"], a["ang"], a["tr"], b["on"], b["ang"], b["tr"]))
+                note(f, "warp", "ps1 on %d ang %s tr %s ours on %d ang %s tr %s" % (a["on"], a["ang"], a["tr"], b["on"], b["ang"], b["tr"]))
         full.append(line)
 
     def verdict(k):
@@ -778,15 +778,15 @@ def main(argv):
     names = [("seq", "sequences"), ("cnt", "object counts"), ("first", "first-object numbers"), ("units", "unit positions / yaw / flags / colour"),
              ("cam", "camera eye / target"), ("fog", "fog"), ("warp", "warp")]
     md = ["# fx_diff %s" % d.replace("\\", "/"), "",
-          "offset (our tick = ccx frame + offset): **%s** (%s); ccx states %d (frames %s..%s), compared window: %s, our samples %d, step %d" % (
+          "offset (our tick = ps1 frame + offset): **%s** (%s); ps1 states %d (frames %s..%s), compared window: %s, our samples %d, step %d" % (
               offset, off_note, len(ref), min(ref) if ref else "-", max(ref) if ref else "-", win_note, len(ours), step), "",
           "## Verdict", ""]
     for k, label in names:
         md.append("- %s: **%s**" % (label, verdict(k)))
         for s in vnotes[k][:4]:
             md.append("    - %s" % s)
-    md.insert(md.index("## Verdict") + 2, "- stage emitters (baseline, not counted): %s; peak objects ccx %d ours %d" % (", ".join(sorted(stage)) or "none", stage_peak[0], stage_peak[1]))
-    md += ["", "## Sequences (start frame = state frame - elapsed; ours = first command tick - offset)", "", "| name | ccx | ours | note |", "|---|---|---|---|"]
+    md.insert(md.index("## Verdict") + 2, "- stage emitters (baseline, not counted): %s; peak objects ps1 %d ours %d" % (", ".join(sorted(stage)) or "none", stage_peak[0], stage_peak[1]))
+    md += ["", "## Sequences (start frame = state frame - elapsed; ours = first command tick - offset)", "", "| name | ps1 | ours | note |", "|---|---|---|---|"]
     for r in seq_rows:
         md.append("| %s | %s | %s | %s |" % r)
     md += ["", "## Differences per frame", "(category lines camera / fog / warp / units first, then the counts; capped at 12 lines per frame, the uncapped list is diff_full.md)", ""]
@@ -809,7 +809,7 @@ def main(argv):
             md.append("    - ... %d more (diff_full.md)" % (len(lst) - 12))
         for s in lst:
             full_md.append("    - %s" % s)
-    md += ["", "<details><summary>Full per-frame table</summary>", "", "| ccx F | our tick | objs ccx | objs ours | eye ccx | eye ours | tgt ccx | tgt ours | fog ccx | fog ours | warp ccx/ours |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+    md += ["", "<details><summary>Full per-frame table</summary>", "", "| ps1 F | our tick | objs ps1 | objs ours | eye ps1 | eye ours | tgt ps1 | tgt ours | fog ps1 | fog ours | warp ps1/ours |", "|---|---|---|---|---|---|---|---|---|---|---|"]
     for l in full:
         rt = ref[l["F"]]
         ot = ours.get(l["tick"]) if l["tick"] is not None else None
@@ -841,7 +841,7 @@ def main(argv):
             tk = f + offset
             tk -= tk % step if step else 0
             rp = os.path.join(d, "ref", "frames", "frame_%06d.png" % f)
-            if not os.path.isfile(rp):  # nearest ccx frame on disk
+            if not os.path.isfile(rp):  # nearest ps1 frame on disk
                 fd = os.path.join(d, "ref", "frames")
                 cand = [int(x[6:12]) for x in os.listdir(fd) if x.startswith("frame_")] if os.path.isdir(fd) else []
                 if cand:
@@ -850,7 +850,7 @@ def main(argv):
             used_ref.add(os.path.basename(rp))
             used_ours.add(os.path.basename(op))
             ims = []
-            for pth, lab in ((rp, "ccx F%d" % f), (op, "ours tick %d" % tk)):
+            for pth, lab in ((rp, "ps1 F%d" % f), (op, "ours tick %d" % tk)):
                 if os.path.isfile(pth):
                     im = Image.open(pth).convert("RGB")
                     im = im.resize((int(im.width * 360 / im.height), 360))

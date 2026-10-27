@@ -198,15 +198,13 @@ void FieldWorld::play_movie(int index, int variant, bool skippable) {
 
 bool FieldWorld::movie_playing() { return movie_state_ != MovieState::None; }
 
-s32 FieldWorld::sound_reg(u32 addr, s32 dflt) const {
-  const auto it = registers_.find(addr);
-  return it == registers_.end() ? dflt : it->second;
-}
-
 // Room init defaults of the footstep registers: master volume 0x7F, distance band 0x7FFF / 0x7FFF, listener 0. The floor types keep
 // their value.
 void FieldWorld::reset_room_sound_regs() {
-  for (u32 addr : {0x800EA408u, 0x800EA40Au, 0x800EA40Cu, 0x800EA410u, 0x800EA414u, 0x800EA428u}) registers_.erase(addr);
+  const FootstepRegs defaults;
+  footstep_.volume = defaults.volume;
+  footstep_.listener_x = defaults.listener_x, footstep_.listener_y = defaults.listener_y, footstep_.listener_z = defaults.listener_z;
+  footstep_.nearest = defaults.nearest, footstep_.farthest = defaults.farthest;
 }
 
 // Footstep of an actor whose model raised a foot event (bits 4 / 5 = left / right): only for the controlled entity and entities with
@@ -225,7 +223,7 @@ void FieldWorld::play_footstep(int ent, int feet) {
   if (ent != player_entity() && !(vm_ent.flags270 & 0x1000000u)) return;
   int id = vm_ent.array25a[((feet >> 4) - 1) & 1];
   if (id == 0xFF) {
-    const int type = static_cast<s16>(sound_reg((tri_flags & 0x60000) ? 0x800EA422u : 0x800EA420u, 0));
+    const int type = static_cast<s16>((tri_flags & 0x60000) ? footstep_.water_type : footstep_.dry_type);
     const int who = entity.pc_slot >= 0 && entity.char_id >= 0 ? entity.char_id : vm_ent.v116;
     if (type == 0xFF || who == 0xFFFF) return;
     id = footstep_sound(type, who & 0x3F, feet & 1);
@@ -237,10 +235,10 @@ void FieldWorld::play_footstep(int ent, int feet) {
   if (view_.camera().project({pose.x, pose.y, pose.z}, projected)) screen_x = static_cast<int>(std::lround(projected.sx)) + view_.scroll_x();
   const int pan8 = std::clamp(((screen_x * 0x6666) >> 16) + 0x40, 0, 0xFF);
   const s64 dx = std::lround(pose.x);
-  const s64 dy = static_cast<s16>(sound_reg(0x800EA40Au, 0)) - std::lround(pose.y);
-  const s64 dz = static_cast<s16>(sound_reg(0x800EA40Cu, 0)) - std::lround(pose.z);
+  const s64 dy = static_cast<s16>(footstep_.listener_y) - std::lround(pose.y);
+  const s64 dz = static_cast<s16>(footstep_.listener_z) - std::lround(pose.z);
   const int distance = static_cast<int>(std::sqrt(static_cast<double>(dx * dx + dy * dy + dz * dz)));
-  const s32 nearest = sound_reg(0x800EA410u, 0x7FFF), farthest = sound_reg(0x800EA414u, 0x7FFF);
+  const s32 nearest = footstep_.nearest, farthest = footstep_.farthest;
   int vol = 0;
   if (distance <= farthest) {
     vol = 0x7F;
@@ -251,7 +249,7 @@ void FieldWorld::play_footstep(int ent, int feet) {
       vol = 0x7F - std::min(0x7F, prod >> 16);
     }
   }
-  s32 master = static_cast<s32>(static_cast<s16>(sound_reg(0x800EA428u, 0x7F))) * 0x10000;
+  s32 master = static_cast<s32>(static_cast<s16>(footstep_.volume)) * 0x10000;
   if (master < 0) master += 0x7F;
   const int volume = static_cast<int>((static_cast<s64>(vol) * (master >> 7)) >> 16) & 0x7F;
   const u32 mask = 1u << ((fstat_.step_voice & 1) + 6);

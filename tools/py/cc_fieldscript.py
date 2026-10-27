@@ -96,7 +96,7 @@ TABLE = r"""
 49 | V | GET_TARGET_ROTATION | I | var = target rotation & 0xFFF.
 4A | c V | GET_ROTATION | I | var = rotation of entity c.
 4B | V | DEBUG | I | Debug print of variable.
-4C | w S40 S20 S10 S08 M | OP4C | ? | Five-operand command.
+4C | V S40 S20 S10 S08 M | GET_DISTANCE_2D | I | V = sqrt(dx*dx + dz*dz) of the two S-pairs.
 4D | V S40 S20 S10 S08 S04 S02 M | OP4D | ? | Six-operand query returning var.
 4E | V c c | ENTITY_DISTANCE | C | var = distance between entities.
 4F | V c c | OP4F | ? | Same shape as 4E (var, entity, entity).
@@ -248,7 +248,7 @@ E5 | U J | OPE5 | ? | cc_fd only.
 E6 | U J | JUMP_IF_NOT_RECRUITED | I | Jump if character U not recruited.
 E7 | A4 | OPE7 | ? | 4 ASCII chars (like 'had1'); related to 9B/9C/D3/D7 effect names. cc_fd only.
 E8 | U J | OPE8 | I | Character test + jump (pattern: E8 c,J ; ADD_TO_ROSTER c) - probably jump if recruited. Absent from q-gears and cc_fd.
-E9 | U J | JUMP_IF_FRAME | I | cc_fd: CHECK_FRAME jump. q-gears: U w.
+E9 | w J | JUMP_IF_FRAME | C | Jumps when bit (w & 0x1F) of the owned-frames mask is clear.
 FE00 | b | OPFE00 | ? | cc_fd only.
 FE01 | b | OPFE01 | ? |
 FE02 | U | OPFE02 | ? |
@@ -294,10 +294,10 @@ FE33 | b | OPFE33 | ? |
 FE34 | S80 S40 S20 S10 S08 M | OPFE34 | ? |
 FE35 | S80 M | OPFE35 | ? |
 FE36 | U | HEAL_GROUP | C | Heal party group.
-FE37 | w U | OPFE37 | ? |
+FE37 | V U | GET_CHAR_LIFE | I |
 FE38 | S80 U M | OPTIONAL_LIFE | I |
 FE3A | S80 U M | OPFE3A | ? |
-FE3B | U U | OPFE3B | ? | cc_fd only.
+FE3B | V U | GET_CHAR_STATUS_BYTE | I |
 FE3C | U | SET_SELF_258 | I | PS1 handler consumes FE 3C U (4 bytes); cc_fd listed 7.
 FE3D | U U | SET_STATUS | C | Inflict status (|= mask: 1 poison, 8 burn, 16 sprain, 32 flu).
 FE3E | U U | CURE_STATUS | C | Cure status (&= ~mask).
@@ -322,7 +322,7 @@ FE52 | U | OPFE52 | ? |
 FE53 | S80 S40 M c | HEAD_ANGLE | I |
 FE55 | c c | LOOK_AT_ENTITY | I |
 FE56 | c | HEAD_DEFAULT | I |
-FE57 | b U b | OPFE57 | ? | cc_fd only.
+FE57 | S80 M c | FACING_VEC_SET_TARGET | I |
 FE59 | | OPFE59 | ? |
 FE5A | b | OPFE5A | ? |
 FE5B | | PARTY_SCREEN | C | Character exchange / party screen.

@@ -22,6 +22,8 @@
 //                                            src/data/battlefield_rooms.inc (the Debug tab's battlefield labels)
 //   occ world-markers [--inc <file>]         the overworld screens' location markers: label text (EN) -> target room, and the room-prefix ->
 //                                            place-name table it gives; --inc writes src/data/area_names.inc
+//   occ dump-textures [stages|title|effects|rooms|models|weapons|all] [--raw] <outdir>   headless texture dump (tools/occ_dump_textures.cpp)
+//   occ save-info | save-slots | save-roundtrip | save-blank <save.dat> ...   save-file tools, no GameDir needed (tools/occ_save.cpp)
 // GameDir comes from -g <dir> or the OPENCROSS_GAMEDIR environment variable.
 #include <algorithm>
 #include <cmath>
@@ -96,7 +98,33 @@ std::vector<std::string> list_rooms(const vfs::Vfs& fs) {
 }
 
 int usage() {
-  std::fprintf(stderr, "usage: occ [-g GameDir] (list <archive> | cat <path> <out> | info <path> | lzss <path> <out> | room <name> <outdir> | rooms-validate | chip2 <room> <outdir> | chip2-validate | model <path-stem> <outdir> | models-validate)\n");
+  std::fprintf(stderr,
+               "usage: occ [-g GameDir] (\n"
+               "  list <archive>\n"
+               "  | cat <path> <out>\n"
+               "  | info <path>\n"
+               "  | lzss <path> <out>\n"
+               "  | dump-textures [stages|title|effects|rooms|models|weapons|all] [--raw] <outdir>\n"
+               "  | room <name> <outdir>\n"
+               "  | rooms-validate\n"
+               "  | rooms-check\n"
+               "  | battlefields [--inc <file>]\n"
+               "  | world-markers [--inc <file>]\n"
+               "  | rooms-frame\n"
+               "  | chip2 <room> <outdir>\n"
+               "  | chip2-validate\n"
+               "  | script-disasm <room> [entity]\n"
+               "  | dialogue-choices [room] [-v]\n"
+               "  | dialogue-sizes [room] [-v]\n"
+               "  | script-soak\n"
+               "  | model <path-stem> <outdir>\n"
+               "  | models-validate\n"
+               "  | room-songs [room]\n"
+               "  | room-models [room]\n"
+               "  | save-info <save.dat>\n"
+               "  | save-slots <save.dat>\n"
+               "  | save-roundtrip <save.dat> <out.dat>\n"
+               "  | save-blank <save.dat> <out.dat>)\n");
   return 2;
 }
 
@@ -1075,7 +1103,8 @@ int cmd_room_songs(const vfs::Vfs& fs, const std::string& only) {
 
 // occ battlefields [--inc <file>]: every BATTLE op (A3 / C9) of every room script -> the stage it fights on, by BattleView's rule: the op's
 // battlefield operand when it is an immediate 0..99, else the scene record's bg (scene = id, + 0x200 for C9). Prints bg_NN, the number of scene
-// records with that bg and the rooms; --inc writes the per-stage room lists as a C++ initializer (src/data/battlefields.h).
+// records with that bg and the rooms; --inc writes the per-stage room lists (one quoted string per bg_00..bg_99) as a C++ initializer, the
+// file data/battlefields.h includes as battlefield_rooms.inc.
 int cmd_battlefields(const vfs::Vfs& fs, const std::vector<std::string>& args) {
   data::GameTables tables;
   std::string err;
@@ -1144,7 +1173,8 @@ int cmd_battlefields(const vfs::Vfs& fs, const std::vector<std::string>& args) {
 // label window (SETUP_DIALOG_WINDOW ... #56) names the message DIALOG shows, SET_NEXT_ROOM names the room it enters. The label text (EN) is
 // cleaned: line breaks / runs of blanks -> one space, a trailing "- North -" / "- Clotho -" style subtitle dropped. Prints "text -> room" per
 // marker, then the table: one row per marker room stem ("opa_a01f" = Lizard Rock) and one per room prefix (the prefix's most frequent name,
-// shortest on a tie: "opa" = Lizard Rock) for the rooms no marker enters; --inc writes it as a C++ initializer (src/data/battlefields.h).
+// shortest on a tie: "opa" = Lizard Rock) for the rooms no marker enters; --inc writes it as a C++ initializer ({stem-or-prefix, name} rows),
+// the file data/battlefields.h includes as area_names.inc.
 int cmd_world_markers(const vfs::Vfs& fs, const std::vector<std::string>& args) {
   std::string inc;
   for (size_t i = 1; i + 1 < args.size(); ++i)

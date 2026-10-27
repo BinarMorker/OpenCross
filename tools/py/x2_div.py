@@ -1,4 +1,4 @@
-"""First sample where ours diverges from the PS1 recording. usage: x2_div.py ps1.raw t0 ours.wav ps1_onset_sample our_onset_sample"""
+"""First sample where ours diverges from the PS1 recording. usage: x2_div.py ps1.raw t0 ours.wav"""
 import sys; sys.path.insert(0, __import__('os').path.dirname(__file__))
 from x2_audio import *
 a = load(sys.argv[1]); sr = 44100; t0 = float(sys.argv[2])

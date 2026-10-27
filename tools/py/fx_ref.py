@@ -15,7 +15,7 @@ sequences, the PS1 display buffer of a DuckStation state, and the effect engine'
     python tools/py/fx_ref.py models  STATE|DIR          the unit model blocks (ctrl 0x800E31B0 + 0x30 u): +0x7E flags, colour, pos, rot, scale
     python tools/py/fx_ref.py nodes   STATE              the effect registry (0x800721E4): type, name, data pointer
 
-Needs PIL + numpy (Python 3.13 has both) and zstandard (ccx_state.py).
+Needs PIL + numpy (Python 3.13 has both) and zstandard (ps1_state.py).
 """
 import os
 import struct
@@ -24,7 +24,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ccx_state import State, frame_of, list_states  # noqa: E402
+from ps1_state import State, frame_of, list_states  # noqa: E402
 
 CB_OBJECT = 0x80038E60
 # The damage digits' first two stages run their own callbacks: damv (flight, battle.prg 0x800B07B8) and dam1 (rest, 0x800B06D4);
@@ -141,15 +141,20 @@ def tag(v):
 
 class Registry:
     def __init__(self, st):
+        """st: a State, or a read(addr, n) callable returning n bytes of guest RAM (a live session's read)."""
+        if callable(st):
+            u32 = lambda a: int.from_bytes(st(a, 4), "little")  # noqa: E731
+        else:
+            u32 = st.u32
         self.nodes = []
-        p = st.u32(0x800721E4)
+        p = u32(0x800721E4)
         n = 0
-        while 0x80000000 <= p < 0x80800000 and n < 4096:
-            name = st.u32(p + 4)
-            typ = st.u32(p + 8)
-            data = st.u32(p + 0xC) if (typ & 0x80) else p + 0xC
+        while 0x80000000 <= p < 0x80200000 and n < 4096:
+            name = u32(p + 4)
+            typ = u32(p + 8)
+            data = u32(p + 0xC) if (typ & 0x80) else p + 0xC
             self.nodes.append((p, typ & 0x3F, tag(name), data, typ))
-            p = st.u32(p)
+            p = u32(p)
             n += 1
         self.by_data = {d: (t, nm) for (_, t, nm, d, _) in self.nodes}
         self.by_node = {a: (t, nm) for (a, t, nm, d, _) in self.nodes}
@@ -186,9 +191,9 @@ def walk(st, base, end):
 def tasks(st):
     """Entries: +0 u32 (bit 31 active, bits 16-30 previous index, bits 0-15 next index; indices in 4-byte units from the work base), +4 the
     tick callback, +8 the draw callback, +0xC the task data (the 0x94-byte particle object, the sequence task, ...). The work size is the
-    allocation size argument (0xC000 on the PS1; 0x13000 in the ccx captures = RDE's memory expansion), so it is searched."""
+    allocation size argument (0xC000 on the PS1; some builds differ), so it is searched."""
     end = st.u32(0x80072118)
-    if not (0x80000000 <= end < 0x80800000):
+    if not (0x80000000 <= end < 0x80200000):
         return None, []
     for size in (WORK_SIZE, 0x13000, 0x4000, 0x100) + tuple(range(0x1000, 0x40000, 4)):
         base = end + 0xC - size
@@ -252,7 +257,7 @@ def cmd_seqs(args):
             if cb == CB_SEQ:
                 seq = st.u32(d + 4)
                 rows.append("seq %s hdr %s flags %08x op@%s label@%s tag %s elapsed %d wait %d cursor %d inherited %d" % (
-                    reg.name_of_data(seq), hex(seq), st.u32(seq) if 0x80000000 <= seq < 0x80800000 else 0, hex(st.u32(d + 8)), hex(st.u32(d + 0xC)),
+                    reg.name_of_data(seq), hex(seq), st.u32(seq) if 0x80000000 <= seq < 0x80200000 else 0, hex(st.u32(d + 8)), hex(st.u32(d + 0xC)),
                     tag(st.u32(d + 0x10)), st.s16(d + 0x14), st.s16(d + 0x18), st.s16(d + 0x1A), st.s16(d + 0x1C)))
             elif cb != CB_OBJECT:
                 rows.append("task cb %s data %s" % (hex(cb), hex(d)))
@@ -280,7 +285,7 @@ def cmd_models(args):
         for u in range(12):
             c = 0x800E31B0 + 0x30 * u
             m = st.u32(c)
-            if not (0x80000000 <= m < 0x80800000):
+            if not (0x80000000 <= m < 0x80200000):
                 continue
             pos = tuple(struct.unpack_from("<i", st.ram, st._o(m + k))[0] >> 12 for k in (0x84, 0x88, 0x8C))
             print("  unit %2d ctrl %s model %s home %6d %6d %6d flags7e %04x col %3d %3d %3d pos %6d %6d %6d rot %5d %5d %5d scale %5d %5d %5d grp %d f14 %08x f18 %04x" % (

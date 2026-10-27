@@ -903,22 +903,6 @@ void DialogueDemo::voice_sync() {
   }
 }
 
-void DialogueDemo::handle_input(const platform::Input& in) {
-  Impl& impl = *impl_;
-  if (!impl.ready) return;
-  auto pressed = [&](int scancode) { return in.key_pressed[static_cast<size_t>(scancode)]; };
-  if (platform::action_pressed(in, platform::Action::Ok)) {
-    if (impl.box.finished()) show(room_, msg_);
-    else impl.box.confirm();
-  }
-  if (pressed(SDL_SCANCODE_UP)) impl.box.move_choice(-1);
-  if (pressed(SDL_SCANCODE_DOWN)) impl.box.move_choice(1);
-  if (pressed(SDL_SCANCODE_PAGEDOWN)) show(room_, msg_ + 1);
-  if (pressed(SDL_SCANCODE_PAGEUP)) show(room_, msg_ - 1);
-  if (pressed(SDL_SCANCODE_F5)) set_mode(impl.mode == ArtMode::Hd ? ArtMode::Original : ArtMode::Hd);
-  if (pressed(SDL_SCANCODE_F6)) set_language(static_cast<import::Lang>((static_cast<int>(impl.lang) + 1) % 6));
-}
-
 void DialogueDemo::draw(float vw, float vh, const render::CanvasFit* fit) {
   Impl& impl = *impl_;
   if (!impl.ready) return;

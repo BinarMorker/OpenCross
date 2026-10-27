@@ -1,5 +1,5 @@
-r"""PS1 (ccx CCX_TRACEPC + -dumpaudio) vs OpenCross (OC_SFX_TRACE) sound-request comparison.
-  sfx_cmp2.py ps1  <dir>            -> <dir>/events.csv  (t_s,kind,tag,mask,pan,vol,ra,path) + onset report; <dir> from tools\ccx_audio_capture.ps1
+r"""PS1 reference (DuckStation trace.txt + audio.wav) vs OpenCross (OC_SFX_TRACE) sound-request comparison.
+  sfx_cmp2.py ps1  <dir>            -> <dir>/events.csv  (t_s,kind,tag,mask,pan,vol,ra,path) + onset report; <dir> from tools/py/ps1_audio.py (trace.txt, audio.wav, action.sav)
   sfx_cmp2.py ours <log> [<out.csv>] -> normalised events of an opencross run (OC_SFX_TRACE=1 stdout/log)
   sfx_cmp2.py cmp  <ps1 events.csv> <ours events.csv> [--shift S]   -> missing / extra / timing / pan / vol differences
 kinds: menu (Sound_PlaySfx id, tag = '#<hex id>'), snd (Sound_PlaySfxFromPointer; tag resolved from the global resource list of a state)
@@ -13,7 +13,7 @@ def tagstr(v):
 
 def resmap(statedir):
     """data pointer -> tag for every type-0x16 entry of the global resource list in the given states (union)"""
-    import ccx_state as c
+    import ps1_state as c
     m = {}
     for p in sorted(glob.glob(os.path.join(statedir, '*.sav'))):
         try:
@@ -30,14 +30,27 @@ def resmap(statedir):
             if not (0x80000000 <= e < 0x80200000): break
     return m
 
+def trace_events(d):
+    """trace.txt of a ps1_audio.py folder -> (pc, t_s, ra, a0, a1, a2, a3); t_s = audio time (frames after the action state / 60)."""
+    action = 0
+    mp = os.path.join(d, 'manifest.txt')
+    if os.path.exists(mp):
+        for ln in open(mp):
+            if ln.startswith('action_frame '):
+                action = int(ln.split()[1])
+    for ln in open(os.path.join(d, 'trace.txt'), errors='replace'):
+        f = ln.split()
+        if len(f) < 7: continue
+        yield f[1].upper().rjust(8, '0'), (int(f[0]) - action) / 60.0, f[6].upper().rjust(8, '0'), int(f[2], 16), int(f[3], 16), int(f[4], 16), int(f[5], 16)
+
+def wavfile(d):
+    return os.path.join(d, 'audio.wav') if os.path.exists(os.path.join(d, 'audio.wav')) else os.path.join(d, 'audio.raw')
+
 L = re.compile(r'TRACEPC ([0-9A-F]{8}) t=([0-9.]+) ra=([0-9A-F]{8}) a0=([0-9A-F]+) a1=([0-9A-F]+) a2=([0-9A-F]+) a3=([0-9A-F]+)')
 def ps1(d):
-    rm = resmap(os.path.join(d, 'log', 'states'))
+    rm = resmap(d)
     ev = []; last = None
-    for ln in open(os.path.join(d, 'ccx.log'), errors='replace'):
-        mm = L.search(ln)
-        if not mm: continue
-        pc, t, ra, a0, a1, a2, a3 = mm.groups(); t = float(t); a0, a1, a2, a3 = (int(x, 16) for x in (a0, a1, a2, a3))
+    for pc, t, ra, a0, a1, a2, a3 in trace_events(d):
         if pc == '8004A118':   # Sound_PlaySfx(id, mask, pan, vol)
             ev.append(dict(t=t, kind='menu', tag='#%X' % a0, mask=a1, pan=a2, vol=a3, ra=ra, path='menu'))
         elif pc == '800368C4':
@@ -65,7 +78,7 @@ def read(p):
 
 def onsets(d):
     import x2_audio as a
-    x = a.load(os.path.join(d, 'audio.raw'))
+    x = a.load_wav(os.path.join(d, 'audio.wav'))[0] if os.path.exists(os.path.join(d, 'audio.wav')) else a.load(os.path.join(d, 'audio.raw'))
     return a.events(x, thr=0.004, gap=0.25)
 
 def report(d):

@@ -64,7 +64,7 @@ Equip make_equip(const data::GameTables& tables, int weapon, int armour, const s
   const data::GearRec* armour_rec = tables.gear_rec(armour);
   if (tables.gear.empty() || (!weapon_rec && !armour_rec)) return equip;
   equip.wp = equip.wp_acc = equip.wp_var = equip.wp_class = equip.arm = equip.arm_var = equip.mag_gear = equip.mdef_gear = equip.evd_gear = 0;
-  auto add_flags = [&](const data::GearRec& rec) { equip.gear_flags |= static_cast<u16>(rec.flags() & 0xD); };
+  auto add_flags = [&](const data::GearRec& rec) { equip.gear_flags |= static_cast<u16>(rec.flags() & 0xF); };
   if (weapon_rec) {
     equip.wp = weapon_rec->power(), equip.wp_acc = weapon_rec->acc(), equip.wp_var = weapon_rec->var(), equip.wp_class = weapon_rec->klass(),
     equip.mag_gear = weapon_rec->mag();

@@ -1,6 +1,8 @@
 // ocbattleseq: dumps what the animation-sequence VM does for a battle model (dev tool).
 //   ocbattleseq [-g <gamedir>] <folder e.g. player/selju2 | monster/chouchin> [entry variant [a b hit dead]]
-//   ocbattleseq [-g <gamedir>] sfx <folder> <tag> [weapon class]    renders a battle sound offline and prints its level
+//   ocbattleseq [-g <gamedir>] sfx <folder> <tag> [weapon class [seconds]]    renders a battle sound offline and prints its level
+//   ocbattleseq [-g <gamedir>] emitters <cdrom path> | audit | sfxscan [weapon class] | sfxslots <stage.prd> <unit> <weapon class> [pack ...]
+//                              | sfxbanks <.prd> | sfxfind <hex>    dev audits of effect emitters, sequence ops and battle sounds
 #include <algorithm>
 #include <bitset>
 #include <cmath>
@@ -31,7 +33,15 @@ int ocbattleseq_main(int argc, char** argv) {
     game = env_dir;
   }
   if (i >= argc) {
-    std::printf("usage: ocbattleseq [-g gamedir] <player/selju2 | monster/x | pack <effect .prd path>> [entry variant [a b hit dead]]  (entry -1 = atk table)\n");
+    std::printf(
+        "usage: ocbattleseq [-g gamedir] <player/selju2 | monster/x | pack <effect .prd path>> [entry variant [a b hit dead]]  (entry -1 = atk table)\n"
+        "       ocbattleseq [-g gamedir] emitters <cdrom path of a drp>\n"
+        "       ocbattleseq [-g gamedir] audit\n"
+        "       ocbattleseq [-g gamedir] sfx <folder|.prd> <tag> [weapon class [seconds]]\n"
+        "       ocbattleseq [-g gamedir] sfxscan [weapon class]\n"
+        "       ocbattleseq [-g gamedir] sfxslots <stage.prd> <unit folder|.prd> <weapon class> [pack .prd ...]\n"
+        "       ocbattleseq [-g gamedir] sfxbanks <.prd under cdrom/battle/>\n"
+        "       ocbattleseq [-g gamedir] sfxfind <hex byte pattern>\n");
     return 2;
   }
   vfs::Vfs fs;

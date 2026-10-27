@@ -1,5 +1,5 @@
 #pragma once
-// [Enhancements] SpellLights: turns the bright additive primitives of a live battle effect into a few point lights.
+// [Enhancements] Lighting: turns the bright additive primitives of a live battle effect into a few point lights.
 //   1. The caller lists LightSource entries (render-world position, colour 0..1, weight) from the effect's additive sprites / meshes
 //      (BattleView::fx_spell_light_tick).
 //   2. cluster_sources() merges sources closer than `merge_radius` (greedy, strongest first) into at most LightSet::kMax clusters: weighted mean

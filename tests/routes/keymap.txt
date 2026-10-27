@@ -1,5 +1,5 @@
 # New Game up to the user guide (controls / key map) and the name entry, original art mode: screenshots km_*.png next to the
-# reference frames (tmp\keymap\ccx_*_page.png). The guide is RDE's own UI, so both art modes draw the same RDE pages.
+# reference frames (tmp\keymapef_*_page.png). The guide is RDE's own UI, so both art modes draw the same RDE pages.
 0 wait flow title 300
 - wait movie start 300
 - wait 30

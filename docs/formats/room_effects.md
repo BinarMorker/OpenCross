@@ -1,0 +1,254 @@
+# Room `.prd` effects: emitters (0x0A), sprite sheets (0x03), sequences (0x10)
+
+Spec for the animated background parts of a room (smoke, flames, glows, rings, lanterns, birds, light beams, sea waves). The data lives in the room's `.prd` (a drp container, `room.md` 1.3): TIMs, sprite sheets, emitter bytecode, sequences and meshes. This document gives the byte layouts, the emitter command set, how particle objects are updated and drawn (including how they sort against background layers and actors), how field scripts start and stop effects, and the engine-spawned wake effects. The command set is shared with battle effects (`battle_effects.md` section 10 has the extended-object details). Everything below was checked over all 346 room `.prd` files (344 rooms plus 2 extra) unless marked inferred. Offsets are bytes, little-endian. Reference decoder: `tools/py/cc_prd.py` (`info`, `validate`, `render`); C++ tool `ocprd` (`info`, `validate`, `render`, `soak`, `preview`; `fx-soak` and `fx-preview` run the battle overlays of `battle_effects.md`).
+
+## 1. Overview and entry kinds
+A room `.prd` lists entries `name[4], type`. The engine registers them into a name-keyed registry; lookup is by `(type, name)`.
+| type | meaning |
+|---|---|
+| 0x04 | TIM: CLUT and image uploaded to VRAM at the TIM's own x,y (`room.md` 1.4) |
+| 0x03 | timinfo = sprite sheet (frames of quads cut from a paired 0x04 TIM) |
+| 0x0A | effect emitter: bytecode that spawns short-lived sprite objects |
+| 0x10 | sequence: timed list of "start emitter X" commands |
+| 0x02 | mesh, registered as list type 0x0E; referenced by SPRITE type 14 (3.6) |
+| 0x01 | nested drp: every entry of it is linked into the same name registry (used by `effect/particle.prd > fenc`, `battle.prd > miya/chih/tana/sato`, unit / monster `at0.prd` packs) |
+| 0x18 | path curve, read by ops 3D / 3E (layout in `battle_effects.md` 7.3) |
+| 0x24 | three bytes r, g, b: the initial ambient (GTE back) colour; applied at room load as a sequence op 65 with 0 ticks (5.2) |
+Corpus (346 files): 5,437 emitters, 1,345 timinfo (1,518 frames; 1,030 sheets still carry the relocation flag), 1,376 TIMs, 328 sequences, 238 meshes. Type-0x04 TIMs here are mostly 4bpp with a 16-entry CLUT (TIM flags 8, CLUT at y=0xFF/0x20.. x of its own). A shared library `effect/particle.prd` (13 timinfo, 14 TIMs, 3 emitters) supplies sheets that rooms name but do not contain: 5,149 of 5,437 SPRITE references resolve inside the room, the rest in the library or (types 15/17) built-ins.
+
+## 2. Timinfo (0x03) sprite sheet
+```
++0  u16 0 (always)
++2  u16 count | 0x8000     count of frame tables; bit15 = "relocation pending"
++4  u16 tex_x    +6 u16 tex_y     VRAM x (halfwords) / y of the paired TIM image
++8  u16 clut_x   +A u16 clut_y    VRAM position of that TIM's CLUT
++C  u16 table_off[count]          offsets from payload start
+table: u16 n; u16 0; Sprite[n]    (frame k of the animation = table_off[k-1]; frames are 1-based)
+Sprite (12 bytes): s16 x, s16 y   quad offset from the object origin (2.3)
+                   u8 u, v        texel of the top-left corner (page-relative, 2.1)
+                   u16 clut       (clut_y<<6)|(clut_x>>4)
+                   u8 w, h        size in texels
+                   u16 flags      GPU tpage word + orientation (2.2)
+```
+A sheet is paired with a 0x04 TIM by position, not by name: in 5 files the tex/clut fields do not equal the same-named TIM (`gal_a05i` hik1/hik2 are swapped, `mis_a01f`/`mis_a03f` kem2 and `mis_b03e` kem3 have tex=(0,0)); in all 1,323 matching pairs tex/clut equal the TIM image/CLUT x,y. 17 timinfo have no TIM in the room (the library supplies it).
+
+### 2.1 Relocation (once, when bit 15 of +2 is set; the bit is then cleared)
+For every sprite: `u += (tex_x & 0x3F) << 2` if flags bits 7-8 == 0 (4bpp) else `<< 1` (8bpp); `v += tex_y & 0xFF` (all u8, wrapping). 315 sheets are already absolute. After relocation 3,464 of 3,466 sprite rects lie inside the paired TIM image.
+
+### 2.2 Sprite flags (u16, copied into the primitive's tpage word)
+- bits 0-3: tpage x / 64 halfwords (page 15 = x 960 is typical); bit 4: tpage y (0 or 256).
+- bits 5-6: abr; always 0 in data, the real blend mode comes from the object (4.3).
+- bits 7-8: colour depth (0 = 4bpp, 1 = 8bpp; 3,298 / 185 sprites).
+- **bits 9-10: orientation**: 0 none, 1 mirror X, 2 mirror Y, 3 both (180 degrees). The four corners TL,TR,BL,BR are handed to the GPU in the order (TL,TR,BL,BR) / (TR,TL,BR,BL) / (BL,BR,TL,TR) / (BR,BL,TR,TL) while the UV order stays fixed, so the texture is mirrored inside the same screen quad.
+- bits 11-12 (1/2/3 in 1,583 sprites) are copied but have no meaning for a quad. Palette entry 0 is transparent; every other CLUT entry has the STP bit set (1,374/1,374 CLUTs), so in a semi-transparent mode every opaque texel is blended. Texel fetch: 4bpp: absolute texel `X = page_x*4 + u`, halfword `X>>2`, nibble `X&3`, row `page_y + v + j`; 8bpp: `page_x*2 + u`, byte `X&1`. CLUT row = `clut>>6`, column `(clut&63)*16`. Animated sheets are rare: 1,282 sheets have 1 frame, 63 have 2..6; frames hold 1..42 sprites (1: 885, 4: 289, 8: 70).
+
+### 2.3 Draw
+Quad corners are `(x,y)`, `(x+w,y)`, `(x,y+h)`, `(x+w,y+h)` **in units of 1/8 world unit**: each is shifted left by 3 in fields and transformed as a GTE vertex (z = 0 in object space) with the object matrix, translation and camera (4.3). The primitive is a textured quad, opaque (GP0 code 0x2C) or semi-transparent (0x2E, only when the object blend mode is not 0); colour = object RGB (modulation, 0x80 = neutral); UVs `(u,v)`, `(u+w-1,v)`, `(u,v+h-1)`, `(u+w-1,v+h-1)`; tpage from the flags with abr = `(mode-1)&3`. Frame selection: the object's 1-based sheet frame f; `f == 0` draws nothing; `f > count` wraps to `f = 1`. If the object's animation period is nonzero the frame advances by one every `period` ticks, else the sheet is static.
+
+## 3. Emitter (0x0A)
+### 3.1 Header (0x18 bytes, payload offsets; field names inferred)
+```
++00 u32 link          runtime (active list); file value ignored
++04 s16 start         frames before the emitter begins (3.2)
++06 s16 duration      active frames after start; 0 = unlimited
++08 s16 frame         runtime. A header that waits (bit2) and is never started (a periodic child, op 3C) keeps its file value: the
+                      linking step only zeroes it when the header is linked, and the oscillator ops read it as their time
+                      (unico `pou0` stores 116, so its x / y scale oscillates)
++0A u16 period        ticks between fires (countdown reload)
++0C s16 countdown     runtime; likewise kept by a never-started periodic child (pou0 stores 14: the countdown
+                      decrements per parent tick and spawns at -1, so the first spawn comes 15 parent ticks in)
++0E s16 repeat        objects spawned per fire = repeat + 1   (0 in 5335 of 5437 emitters, max 9)
++10 u32 flags         bit0 stopped (runtime: file value ignored), bit1 big object (0xD8 bytes, enables ops 0x35-0x3E),
+                      bit2 "start stopped" (waits for a script/sequence start), bits3-8 N: period jitter, bit9 huge object (0xFC),
+                      bit10 restart on start
++14 u32 ptr           runtime, set to payload+0x18 on activation
++18 stream            commands (3.4), closed by a zero word
+```
+Flags seen in rooms: bit0 3,234, bit2 1,738 (start stopped), bit1 188, bit10 602, jitter N (bits 3-8) nonzero in 403. (start, duration): both 0 in 3,198, duration only 1,803, start only 270, both 166.
+
+### 3.2 Activation and per-tick stepper
+- Registration: `ptr = payload+0x18`; link into the active list (frame = 0, countdown = period) **unless** bit2 is set; then `stopped := bit2`. The same rule is re-applied on every room (re)load. Headers of a resident library pack (`effect/particle.prd`, `battle.prd`) always wait for a start, whatever their bit2.
+- Script start: if stopped, link it; then `frame = 0; countdown = 1; stopped = 0`. Stop: unlink, `stopped = 1`.
+- Each frame, for each active header and for each of `ticks` (1 at normal speed):
+```
+frame += 1; if frame < 0: frame = start + 1
+if start == 0 and duration == 0:             fire_check()          # always on
+elif frame > start:
+    if duration == 0 or frame < start + duration: fire_check()
+    else: unlink; stopped = 1                                      # burst finished
+fire_check: countdown -= 1; if countdown == -1:
+    repeat+1 times: spawn_object(header)
+    countdown = period + 2 * (rand() % N)  if N = flags bits 3..8 != 0, else period
+```
+A steady emitter fires every `period + 1` ticks. A burst emitter (Arni '1','2': start 0, duration 4, period 1) fires every 2 ticks for 3 ticks and then stops, pre-filling the area that the steady emitter ('3','5': period 60) then maintains. (One special emitter is skipped when a debug flag is set and its op-0x0F u16 is 0.)
+
+### 3.3 Spawn
+One object is allocated (0x94 bytes; 0xD8 if header bit1, 0xFC if bit9), initialised (frame index 0, timers 0), then the stream is interpreted top to bottom; each command is applied once. Randomness uses C `rand()`; terms are `(rand() & 0xFFFF) * k >> sh` as listed (the exact RNG sequence is not reproducible, only the distribution). After the stream: matrix from angles, scale applied, colour bytes derived, owner = header.
+- **Lifetime 0 (persistent object)**: every earlier object of the same header is freed, the header is unlinked from the firing list and marked stopped (it fires again only when a script starts it, which replaces the object), and the header keeps the object for a per-tick replay (header frame += ticks, then the stream is re-applied). A persistent emitter therefore spawns once per start, not every period.
+- **Child emission**: after the main object, if op 0x45 supplied a header handle, that header's emitter runs `its repeat + 1` times with this object's pose as parent (matrix from the velocity heading `ratan2(vz,vx)` or from an op-0x39 basis; position = parent position). Each child with lifetime 0 is released at once; others inherit parent state according to flags bits 8-11 (angles / velocity / scale / colour), then get one update with 0 ticks.
+
+### 3.4 Command stream
+Each command: `u16 w`; `op = w & 0x1FF`, `len = (w >> 9) & 0x3F` bytes (including `w`), bit 15 = continue at a pointer stored after the command (never set in data). The first command is always op 0x01 (len 2, ignored). The stream is closed by a zero word; all 23,099 streams in the game (5,437 in rooms) parse with this rule and the fixed lengths below. Operands are at byte offsets inside the command. `XYZ` = three s16 (or u16) at +2,+4,+6. `OSC` = three s16 per axis at +2, +10, +18 (amplitude `A`, frequency `F`, phase `P`); value `osc(t) = rsin((frame & 0xFFF)*F + P) * A * 16`, where `frame` is the header's frame counter, so oscillators are driven by time since the emitter was started and every object spawned at the same moment gets the same value; 0 if F = 0. Objects store 16.16 positions: `pos = op << 16`. The last column counts uses in rooms.
+| op | len | operands | effect | n |
+|---|---|---|---|---|
+| 03 | 4 | s16 bias +2 | OT bias, or absolute slot with flag bit 23 (4.3) | all |
+| 04 | 4 | u8 +2 | animation period = counter = n ticks per sheet frame (0 = static) | all |
+| 05 | 16 | u16 frame0 +2; u32 cache +4 (0 in file); name +8; s16 type +12 | sheet frame = frame0; resolves `(type,name)` once to a registry node (written back to +4); installs the per-type draw callback; type 3 = timinfo | all |
+| 06 | 8 | u32 flags +4 | object flags (4.2); if bit4: restitution = 0xFF, floor y = 0 | all |
+| 08 | 8 | XYZ | pos = XYZ << 16 (if spawned as a child: first rotated by the parent matrix unless flag bit15, then + parent translation) | all |
+| 09 | 26 | OSC | pos += osc (no shift) | 464 |
+| 0A | 8 | XYZ | vel = XYZ << 6 (spawned as a child: first rotated by the parent matrix, as 09, 0B, 0C, 27 and 2F) | all |
+| 0B/0E/13/18/1A/1E/25/26 | 8 | XYZ | add `(rand()&0xFFFF) * k >> sh` per nonzero component to: 0B vel (sh 10), 0E acc (13), 13 scale (16), 18 scale rate (16), 1A angle (16), 1E angle rate (16), 25 colour (16), 26 colour rate (16); k = the s16; only nonzero components call rand (order X,Y,Z) | |
+| 0C | 8 | XYZ | acc = XYZ << 3 | all |
+| 0D/2F | 26 | OSC | acc += osc >> 13 (0D) / vel += osc >> 10 (2F) | 234 / 597 |
+| 0F | 4 | u16 +2 | lifetime = n ticks; 0 = never expires | all |
+| 10 / 11 | 4 / 10 | u16 / OSC1 | lifetime += n  /  += osc>>16 (11 only when the lifetime is non-zero; a result below 1 becomes 0xFFFF) | 27 / 7 |
+| 12 / 15 | 8 | XYZ u16 | scale = XYZ (0x1000 = 1.0) / scale rate = XYZ | all |
+| 14 / 16 | 26 | OSC | scale += osc / scale rate += osc (low 16 bits) | 700 / 169 |
+| 19 / 1B | 8 | XYZ u16 | angle = XYZ (0x1000 = 360 degrees) / angle rate | all |
+| 1C / 1F | 26 | OSC | angle += osc / angle rate += osc | 577 / 72 |
+| 20 / 22 | 8 | RGB u16 | colour = RGB (12-bit) / colour rate | all |
+| 21 / 23 | 26 | OSC | colour += osc / colour rate += osc | 1065 / 76 |
+| 27 | 22 or 26 | s16 span +2, base +4, V=(sx,sy,sz) +6,+8,+10, base_grow +12, span_grow +14 | **random point in a (flattened) ball**: `A = base + (frame*base_grow >> 11)`, `B = span + (frame*span_grow >> 11)`, `X = (A + ((rand()&0x7FFF)*B >> 15)) << S` (S = 3 in rooms, 5 in battle: the position shift of `battle_effects.md` 9); random rotation from two `rand()` angles (a full sphere, not a horizontal disc); the rotation is scaled by V (4.12, e.g. 4096,1024,4096 = flat disc); `pos += R*S*(X,0,0) << 16`. The 22/26 length difference changes only the advance (bytes 16+ unread) | all |
+| 30 | 12 | u32 ptr +4 (runtime) | anchor: positions are relative to another object/entity (patched by script op 9B, 5.1) | 5167 |
+| 31 / 32 | 4 | u8 / u16 | restitution (x/256) / floor y; used with flag bit4 | 2 / 2 |
+| 33 | 12 | u32 cache +4; name +8 | child list for **death**: death header = emitter `name` (type 10); on death that emitter runs against the dying object | 688 |
+| 3C | 12 | same | periodic emitter: periodic header = `name`; every `period` ticks it spawns that header's objects (3.5) | 13 |
+| 34 | 4 | u16 k +2 | **radial push**: vel += 8 * k * unit(pos - spawn origin) with a *unit-length* direction, so `k * unit >> 12`; about k / 1024 world units per tick (k = 1014 in the title's `suji` streaks = 1 unit/tick) | 220 |
+| 38 | 4 | - | **time-reverse**: integrate `lifetime` ticks forward (pos, vel, acc, drag, floor bounce; drag := 2^24/drag), then negate velocity only (acc kept = exact reversal). Needs op 0F first | 14 |
+| 39 | 10 | u8 a,b,c,d +2..5; u16 f +6 | **basis record**: builds the parent matrix: a = actor selector, b = bone / attach point, (c,d) = optional 2nd point (look-at, translation = midpoint), a=0 identity. f bit1: remember actor scale for op 43; bit2: scale basis by it; bit0 unread. Selectors in 4.6; see `battle_effects.md` 10.1 | 163 |
+| 3A | 6 | u16 base +2; u16 rand +4 | drag = base + (rand() % rand) (4096 = no drag; 4.1) | 6 |
+| 3B / 46 | 4 | - | needs a parent matrix `M` (child emission). 3B: angleY += `ratan2(M22,M20)` of the normalised `M`; 46: that and angleZ -= `ratan2(M10,M11)` (face the parent heading / pitch) | 1 / 0 |
+| 42 | 4 | - | aim along the emitter's op-39 record: P0 = point(a,b), P1 = point(c,d); angleY -= `ratan2`, angleZ += pitch to P1; c = 0 -> behaves as 3B, no op-39 at all -> as 46 | 0 |
+| 41 | 14 | base angles u16 +2..6; spreads s16 +8..12 | vel := R * (\|vel\|,0,0) with R = RotMatrix(base + `rand() % (s+1) - s/2` per axis), then rotated by the parent matrix if any; speed kept | 0 |
+| 43/44 | 8 | XYZ s16 | **scale-rate / angle-rate acceleration** (big objects only): 43 stores the acceleration for the scale rate (scaled by the op-39 actor scale if f bit1); 44 for the angle rate. Per tick `(rate<<16 \| frac) += accel*0x20` per axis, i.e. rate += accel/2048 per tick. Enabled by op-35 ext bit 19 (43) / bit 20 (44) | 104 / 7 |
+| 45 | 12 | cache +4; name +8 | after spawning, also run emitter `name` as child (3.3); unresolved name -> no child | 0 |
+| 35 | 8 | u32 ext +4 | **extended-object flags**: ext word := ext & ~3, object flag bit29 set (only if header bit1/bit9, else skipped). Bit list: `battle_effects.md` 10.2 | 338 |
+| 36 | 14 | u8 offU +2, u8 offV +4, s16 winW +6, winH +8, rateU +10, rateV +12 | **texture-window UV scroll** for mesh sprites (ext bit0): window (offU, offV, winW, winH), phase := 0, rate (rateU, rateV) | 24 |
+| 37 | 16 | u16 mode +2 (&7); s16 rate +4; name +12 | **mesh morph**: target mesh (type 0x0E node), phase := 0, rate; ext bit1; blend = ease(phase, mode) | 52 |
+| 3D | 20 | u16 mode +2 (&7); name +8 (type 0x18) | **place on a path at spawn**: pos := basis * curve(ease((frame-start)*4096/duration)) + T (needs header duration != 0) | 0 |
+| 3E | 24 | s16 mode +2; name +8 (type 0x18) | **ride a path for the object's life** (header bit9, op 0F before it) | 3 |
+| 3F / 40 | 4 | - | register this particle (or its type-0x14 model) as pseudo-actor slot A / B for the battle selectors; object flag bit31 | 0 |
+| 48 | 12 | u32 ptr +4 | sets the draw callback to a pointer; the pointer is 0 in all 48 uses, so a no-op | 1 |
+| 49 | 10 | u8 show +2, f200 +3, f100 +4, clone +5; u16 rate +6; s16 n +8 | drive a type-0x14 model sprite (motion = op-04 byte, `rate`/256 frame per tick, optional private clone per particle); `battle_effects.md` 10.4 | 0 |
+| 17, 1D, 24 | 8 | XYZ | **no handler: ignored.** Present in 5,069 / 3,542 / 5,211 room emitters; they repeat values of 12/19/20 and look like end-state annotations of the emitter (0x17 = final scale x, y, 4096 or 0; 0x24 = final colour; 0x1D = final angle): `scale + scale_rate * life` / `colour + colour_rate * life` reproduces them in 79% / 88% of the 4,465 / 4,490 room emitters that have both | |
+Full semantics of 35-37, 3D-40, 48, 49 and the ext flag word: `battle_effects.md` section 10 (`tools/py/cc_emitter_ops.py`: 0 anomalies over 19,466 emitters). Unknown ops never occur.
+
+### 3.5 Death and periodic children
+When lifetime reaches 0 (and flag bit27 is clear) the remaining ticks are integrated, the object is freed and, if a death header is set, that header's emitter runs `its repeat + 1` times (each through the full spawn path, so an op 45 child follows). A death child whose lifetime is 0 is released at once. Unless object flag bit18 is set the child's position becomes the dying object's position (bit19: added to the child's own position instead); flags bits 8-11 copy angles / velocity / scale / colour from the dying object. Periodic spawns (op 3C): each tick the child header's countdown runs; at -1 it spawns and reloads `period + 2*(rand() % N)`. Arni 'hos1' uses op 33 to spawn 'hos2' on death.
+
+### 3.6 SPRITE types in data
+Type 3 (5,170 uses) -> timinfo; 14 (237) -> a type-0x02 mesh object (the mesh is handed to the model renderer with the object's colour, blend and OT bias; 232 resolve in-room); 17 (17 uses, built-in `ligt` light) and 15 (13, `flat`/`line`) are not in any drp. Types 19 (the battle stage ground `ring`, a type-0x12 mesh), 20 (a type-0x0B model container) and 21 (a lens-flare sheet, drawn like type 3 by its own rule) do not occur in room data; battle, stage and title packs use them (`battle_effects.md` 9, `title_scene.md`). The built-in names `line`, `flat`, `scro` and `sun0` (the stage light) have their own draw callback. Blend modes 5-7 (op 06 flags &7, must precede op 05) swap the draw callback: type 3 draws the same frame **twice**, blend 2 (B+F) and blend 3 (B-F): mode 5 submits add then subtract, modes 6 and 7 (identical) subtract then add; since a later submission is drawn first within a slot, the second submitted is drawn first. Type 14 has an equivalent callback; type 0x11 (light; one of 3 light slots) and type 0x16 (play AKAO by pointer; unused: OpenCross calls the host's AKAO hook when the blend is above 4) are special. Data: blend 5 x73 (type 14: 38, 17: 27, 3: 8), blend 6 x6 (type 14).
+
+## 4. Objects and rendering
+### 4.1 Object state and per-tick update
+An object carries: position, velocity and acceleration (16.16; the high half is the world coordinate used for drawing; position step = `vel << 3` per tick); a 3x3 matrix built from angles and scale; scale (4.12) and scale rate; angles (4096 = turn) and angle rate; colour (12-bit R,G,B), colour rate and the draw colour `(colour >> 4) & 0xFF` (updated per tick; wraps above 0xFFF); the animation counter / period; the 1-based sheet frame; lifetime in ticks (0 = persistent); OT bias; floor y, drag (4096 = 1.0) and restitution; flags (4.2); the registry node of its sprite; the periodic-child and death-child headers; and, for bit1 headers, an extended-object block. Per update with `t` ticks (each term saturating to s16):
+```
+if life != 0: life -= t; if life <= 0: death (3.5) and free
+colour += colour_rate * t ; scale += scale_rate * t ; angle += angle_rate * t
+repeat t times: pos += vel << 3 ; vel += acc ; if drag != 0: vel = ((vel >> 6) * drag) >> 6
+if flags bit4 and (floor << 3) << 16 < pos.y:  # y grows downward
+    bit27 ? die+spawn : vel.y = (-vel.y * restitution + 0xFF) >> 8 ; pos.y = floor << 19
+rebuild matrix when flags & 0x606080 (RotMatrix XYZ, or ZYX if bit16); bits 13/14: orient to velocity (yaw / yaw+pitch); bit22: apply scale
+```
+- **Net speed**: an op-0A velocity of v moves `v/128` world units per tick; an op-0C acceleration of a changes velocity by `a/8` per tick.
+- **Scale is applied to the matrix columns**: matrix = `R(angles) * diag(sx, sy, sz)` (`m[i][j] *= s[j]`): the sprite's own axes are scaled, then rotated. A flat ring (`mz01`: angle X 1024, scale z 0) lies in the ground plane. Scaling the rows instead would collapse it to a line.
+- **Rotation order**: flag bit16 clear = **Rx * Ry * Rz** (m[0][2] = sy, m[1][2] = -cy*sx, m[2][2] = cy*cx: angle Z spins the sprite in its own plane first, then Y, then X); bit16 set = **Rz * Ry * Rx** (m[2][0] = -sy, m[2][1] = cy*sx). The same RotMatrix builds the op-27 random direction (angles `(rand, rand, 0)`) and the face-velocity matrix (`(0, -ratan2(vz,vx), ratan2(vy,|vxz|))`, multiplied in front of the object matrix). With the two orders swapped, every sprite with two non-zero angles is mis-oriented: the wake ring `mz01` (X 1024, Z = -facing) and splash `mz02` (X -768, Z = -facing) would stand up and turn with the actor's facing, and `tel_b11i`'s sea waves `nm01` / `nm02` (angles (-1024, 0, 1024), world quads, vel -x) would stand upright.
+- **Rebuild rule**: the matrix is rebuilt per update only when flags & 0x606080 (bit 7, 13/14 face velocity, 21 = some angle rate != 0, 22 = scale != 1.0 or a scale rate != 0; bits 21/22 are computed at the end of the spawn); otherwise the spawn matrix stays (a later write of the angles shows only on objects that rebuild; all three engine wake emitters do, by their scale). OpenCross rebuilds every update.
+
+### 4.2 Object flags (op 06)
+- bits 0-2: **blend mode** (4.3).
+- bit 4: floor bounce. bits 8/9/10/11: child inherits angles / velocity / scale / colour from the parent.
+- bit 12: depth LOD frame: frame := 2 if view depth <= 2x a threshold, else 1 (needs bit28; 9 uses).
+- bits 13/14: face velocity. bit 15: child position/matrix expressed in the parent object's frame (uses the op 0x30 anchor or op 0x39 basis). bit 16: Euler order ZYX.
+- bit 17: depth-cue the colour (only when the room's fog flag is set; the field never sets it, so it has no effect in rooms).
+- bit 23: **fixed OT slot**. bit 24: camera-relative: the camera translation is not added and z += threshold << 3 (511 battle / 9 room uses). bit 25: position already in view space (no camera rotation). bit 26: world-oriented quad (camera matrix x object matrix) instead of a screen-aligned billboard.
+- bits 18 / 19: death child position (3.5): bit18 set = the child keeps its own position, bit19 = the dying position is added to it.
+- bit 27: no death spawn (dies on floor hit). bit 28: projection/cull test (drop on a GTE error flag; 48 uses). bit 29: **extended object active**: per-tick extended update plus the extended draw path; set by op 35 (or op 06), legal only on bit1/bit9 headers. bit 30: owns a cloned model (op 49 clone). bit 31: external registration released at free (ops 3F/40, light). bits 21/22 are internal (matrix needs update / scale needed). Frequency in rooms: bit17 3,427, bit23 2,511, bit26 1,502, bit8 534, bit9 461, bit10 490, bit11 472, bit13 209, others < 70. Blend modes in rooms: 2: 4,040, 4: 1,102, 3: 234, 0: 41, 1: 13, 5: 7.
+
+### 4.3 Projection, OT slot, blend
+Default (bit26 = 0, bit25 = 0): `view = RT_cam * pos_hi + TR_cam` (the room camera of subfile 0, `room.md` 3.1); the quad corners are rotated by the **object matrix only** (a screen-aligned billboard whose angles spin it in the screen plane). Bit26 = 1: matrix = `RT_cam * object matrix` (the quad lies in the world). The four corners are projected with H and offset (160,120). A GTE error flag drops the quad. **OT slot**: `slot = ((SZ3 >> 2) >> 2) + bias`, clamped to 0..0xFFF, where `SZ3` is the view z of the 3rd transformed vertex: `slot = (z >> 4) + bias`, **the same space as actor slots (`Pc.z >> 4`) and BG tile z (`room.md` 3.3)**. With flag bit23 the slot is exactly the bias (absolute, unclamped: values 700..2999 occur 2,511 times: they pin a glow between named BG layers). All sprites of one frame table use the slot computed for sprite 0. Insertion is at the **head** of the slot: the OT is walked from high to low slot, and inside one slot later-submitted primitives are drawn **first**, so sprite 0 of a frame is on top, and within one slot an earlier effect object is on top of a later one. Bias 1 occurs 2,751 times (nearly camera-distance sorted), 0: 640. **Blend** (op 06 bits 0-2): `0` opaque modulated; `1..4` semi-transparent with abr `mode-1`: 1 = 0.5B+0.5F, **2 = B+F additive (glow, smoke, flames)**, 3 = B-F (dark shadow puffs), 4 = B+0.25F; 5..7: abr `(mode-1)&3` plus the special double-draw handler (3.6). Colour modulation: texel * (rgb / 0x80). Semi-transparency applies to all non-zero texels (STP set in every palette). All counters are in ticks (`ticks` per frame = 1 at full rate). OpenCross draws objects interpolated between ticks (position, angles, scale and colour by the render alpha) and samples sheet sprites with `[Video] FilterEffects` (bilinear by default).
+
+### 4.4 Effects vs background layers: one ordering table
+- **Same table.** Every effect drawer (sprite quads, built-ins, mesh objects) files into the same 0x1000-entry OT as the background, whose layer i has its tile chain at slot `z_i` and its draw-offset at `z_i - 2`. There is no separate effect table and no "effects after layers" pass: an effect is behind a layer exactly when its slot is larger than the layer's z.
+- **Consequence.** A layer can only hide an effect that has a slot above its z. A non-fixed effect (view z 2000..4000, slot 125..250) is IN FRONT of every far layer (z 2000 / 3000) and behind only the near layers (z 10..230). To tuck a glow behind a near-field foreground layer the data uses fixed slots (`mis_a02f`: 2999 = in front of the z 3000 base, behind the z 2000 overlay; `alu_a03i` 130 / 280 / 290; `bak_a14e` 1900). OpenCross does the same through the shared depth buffer: layer depth = `max(8, z)`, effect depth = slot, opaque layers write depth, particles test it (`FieldWorld::draw_background` -> `draw_actors` -> `draw_effects`).
+- **`mis_a01f` / `mis_b01f`**: the light beams `pu11..14 / pu21..24 / pu31..34` (blend 2 / 4, bias 0, not fixed, started by field op B6) project in front of the z 3000 base layer; only the z 10 brazier-bowl layer can cover them. Their colour is a grey glow ramp (blue-white).
+- **`opn_a04i`** (the opening's dream hall; no `.prd` of its own, the disc record points at `ryu_a27i.prd`): entity 5 (the crystal, room model 0, shading 0x0E = ABR 3) runs `FE 09 THIS, 0` in its INIT, then `B6` starts `sui1..7`. The beam parts are blend 2 / 4, bias 1, flag bits 26 and 17, anchored by op 0x39 `a = 1, b = 0` (caster 0). `sui1` / `sui3` are `hik6` quads (the tall column) in purple colours (64,40,72) / (64,56,96) (colour/16), life 30; `sui6` / `sui7` the `elem` mesh at scale 1600, colour (64,15,72), blend 4, life 264. The column files at slot ~368..386 and the mesh at ~254..384: behind the z 305..375 layers where they overlap in x, in front of 393 / 395 and the base.
+- **Mesh objects are drawn.** `RoomView::effect_meshes()` loads the room's effect `.prd` with `import::load_stage` (same packet format as the battle stage meshes), `effects::RoomMeshes` uploads its atlases (tpage (960, 0) pages get their own one-page atlas) and projects the faces (NCLIP > 0 cull, once per packet; one slot per packet from the packet centre `>> 4` + bias, or the fixed slot; object colour x vertex colour; object blend, an opaque object keeps the packets' ABR) into the same sorted list as the sprite quads. Tests: `test_room_meshes`.
+
+### 4.5 Mesh objects in rooms
+237 sprite-type-14 (mesh) objects in 62 `.prd`s, used by 94 rooms. 232 name a type-0x02 mesh inside their own `.prd` (all load with `import::load_stage`); 4 name `enc0` / `enc1` of the `fenc` library (`crn_b03i`, `crn_b07i`, `crn_b10i`, `crn_b14i`); 1 names a mesh that exists nowhere (`sta_a19i` `hk14` -> `hk90`: nothing to draw). The mesh names are never referenced by the field scripts (scripts start emitters by name via `B6` / `9B` / `9C`). All room mesh features are supported (OpenCross: `RoomMeshes` + `draw_effects`): untextured Gouraud packets (151 objects); textured packets, all on the effect page tpage (960, 0) with one page + one CLUT per mesh (81 objects, 61 meshes, 41 rooms; 45 meshes 4bpp on CLUT row 253 etc., 16 meshes 8bpp; own-page atlas of 64 halfwords x 256 rows, since the battle-stage loader assumes rows 256..511); blends 0 / 1 / 2 / 3 / 4 on 27 / 4 / 120 / 42 / 44 objects (5-7 would draw only the add pass; none occur); non-zero OT bias (214) and fixed slots (49); bit 26 world quads (155), bit 17 depth cue (226, a no-op: the field never sets the fog flag), bit 16 ZYX (18), bit 15 relative (7); per-tick scale / angle / colour / velocity programs (237; ops 43 / 44 on 17 / 5); `ANCHOR` op 0x30 patched by field op 9B (204, via the `anchor_basis` hook); op 0x39 selectors (4.6); op 0x36 UV scroll (24 objects: `sta_a13i` 6, `zel_a13f` 3, `ryu_*` `sui6` / `sui7` 2 each); op 0x37 morph (52 objects in 36 rooms, all targets resolve in their `.prd`: `mis_a02f` 6, `gat_a01f` 5, `sta_a26e` 5, `fin_04`, `hid_a08f`, `man_a05f`, `tel_b04f`, `ten_b07f`...). No packet carries the data semi bit (the object's blend decides). Ops 0x17 / 0x24 / 0x1D are ignored. Op 0x35 (150 objects) matters only through the bits set by 0x36 / 0x37; the cull bits 4 / 5 are never set in rooms.
+
+### 4.6 Mesh features: winding, morph, UV scroll, basis selectors
+**Winding (NCLIP).** The model renderer transforms a packet's first three vertices, takes `MAC0 = (x1-x0)(y2-y0) - (x2-x0)(y1-y0)` (SX/SY right/down) and keeps the packet only when `MAC0 > 0` and the GTE flag word is non-negative; `RoomMeshes::project` evaluates the same expression on its layer-space corners (y down, corners in the packet's own order; the importer's cyclic index rotation keeps the sign), so **`nclip > 0` keeps the face** (same rule as `render::StagePipeline`). A quad (G4 / GT4) is ONE packet: NCLIP is taken on corners (0,1,2) and the 4th vertex only follows, so the second triangle (2,1,3) of a quad gets the verdict of the first. The extended draw (op 0x35) adds cull bits: ext bit 5 = both sides, bit 4 = `MAC0 < 1` (the opposite side); no room object sets them, `project` honours them when `ext_path` is set. `ryu_a27i` `elem` is a two-sided solid (every face of the 42 exists in both windings: 20 keep with MAC0 > 0, 20 with MAC0 < 0, 2 edge-on); `test_room_meshes` asserts that split.
+
+**Op 0x37 morph.** The object draws its mesh with every vertex (and the packet centre that gives the OT slot) lerped toward the named type-0x02 mesh of the same `.prd` by the eased phase the emitter system steps per tick (`MeshInstance::morph_t_prev / morph_t`, interpolated by the tick alpha). The two meshes must have the same vertex count after the packet split (`load_stage` splits per packet corner); otherwise the base mesh is drawn unmorphed (as the stage pipeline does). Retail averages vertices per frame with weights `0x1000 - t` / `t` and re-tests the winding every frame with the BASE mesh's packets (the target contributes only vertex positions), so a face the morph folds through edge-on flips and the visible face count changes (`alu_a06f` `fis1` -> `fish` keeps 26 / 26 / 24 / 22 / 16 / 12 / 16 / 22 / 24 / 26 / 26 faces at phase 0, .1 ... 1: the fish is flattened mid-turn). OpenCross does the same (`effects::RoomMeshes::project(mi, vp, lb, alpha, out)` tests the lerped corners; no smoothing). Vertex pairing uses the importer's split-vertex ordinal (equal counts, 52 of 52 targets), whereas retail pairs raw vertex index i; they coincide while the two meshes share packet / colour / UV structure.
+
+**Op 0x36 UV scroll.** The packet texel `(u, v) + phase` is wrapped inside the window `(off_u, off_v, win_w, win_h)` (a width / height of 0 = the 256-texel page), the phase being the object's 24.8 counter `>> 8` masked to 0..127 (a GP0 E2 texture window is sent per draw). The PS1 draws whole texels; OpenCross keeps the fraction and interpolates the counter between the previous tick and this one with the render alpha (`collect_meshes` -> `MeshInstance::uv_phase`, texels in [0, 128)), because scroll rates are a fraction of a texel per tick (title `roof` 48 / 64, `jos2` (58, -82) per 1/256 texel). The GPU wraps per pixel; the room path draws CPU triangles, so a triangle is cut along the window's wrap lines (Sutherland-Hodgman in texel space) and each piece is shifted back into the window (clamped 0.5 texel inside an explicit window). The `ryu_*` `elem` columns use window offset (64, 64) size 64 x 64 and a v rate of 124; others: `sta_a13i` `izu1` (rate 80), `zel_a13f` `hpo2`, `des_a05f` `ry02`, `sta_a16i` `tub1`. Test: `elem` at phase 32 -> 36 triangles instead of 20, every piece inside u * 128 in [64, 128]. With bilinear filtering the footprint's pixels each wrap inside the window (the stage shader centres texel k on coordinate k, so the window spans `off - 0.5 .. off + win - 0.5`). The title's scrolling quads each map the whole window as texels 0..63, so one texel is skipped at every quad edge; with `[Enhancements] EdgeBlend` a corner on the window's last texel is drawn at the window end (63 -> 64) and the quads tile continuously.
+
+**Op 0x39 basis selectors.** Two getters take an index `i`: the caster list and the target list, each a table of 6 entity ids filled by field-script ops `FE 09` (caster) / `FE 0A` (target) (`FE 08` is a third list, selector 5, inferred). `i >= 0` reads that table; `i < 0` reads a pseudo-list (`~i`); 0xFF = empty -> NULL; otherwise the entity record and its model. Selector cases: 1, 9 = caster[0]; 10, 11 = caster[a - 9]; 8 = caster[-1]; 2, 13 = target[0]; 14..21 = target[a - 13]; 12 = target[-1] (the battle-intro anchor); 3 / 4 / 5 / 22 / 23 = the centroid of a list; 0 = identity; 7, 24 = zero translation. The basis is `RotMatrix(0, model yaw, 0)` at the model position (b = 0: the model position; b = 1: + the lift; b >= 2: attach point b - 2); an empty slot leaves the identity basis at the origin. The tables are reset to 0xFF on every field entry, so a selector whose slot no room script filled (`mja_a03f` `fi11` uses selector 10 = caster[1], only slot 0 is filled) resolves to the identity basis at the origin; OpenCross does the same. Room data uses a = 1 (14 objects), 9 (5), 10 (1), 13 (1), 14..18 (6) with b = 0 only. The 20 rooms with such selectors run `FE 09` / `FE 0A` in their own scripts (`opn_a04i` and the `ryu_*` rooms, `mja_a01f` / `a03f`: `THIS, #0` in INIT; `ten_b07f`: `ent12, #0`; `ryu_b29i`: slot 0 and `ent7` / `PC1` / `PC2` / `ent6` in slot 1; `sta_a13i`: six of each); `mja_b01f` / `mja_b03f` use the a-room's script through the disc record. OpenCross: `FieldVM::ent_ref(table, slot)` (read-only) exposes the tables; `FieldWorld::effects_actor_basis` resolves selectors 1, 2, 9, 10, 11, 12, 13..21 through it. The centroid / pseudo-list selectors have no room data and stay unresolved.
+
+**`sta_a19i` `hk14` -> `hk90`.** `hk90` exists as a type-0x02 mesh in `inj_a03i`, `ryu_a29i`, `ryu_a30i`, `ryu_b29i`, `ten_b07f`, `zel_a13f` (all 2,152 bytes) and as an emitter name in `ryu_a25i`, `ryu_a28i`, `sta_a14i`, `sta_a16i`, but nowhere in `sta_a19i.prd` or `effect/particle.prd`. The mesh registry is filled per loaded `.prd`, so nothing resolves `hk90` while `sta_a19i` runs and the object is inert in retail as well. OpenCross draws nothing for it.
+
+## 5. How the game turns effects on and off
+### 5.1 Emitters (type 0x0A) from field scripts
+| field op | name | action |
+|---|---|---|
+| B6 `A4` | ACTIVATE_NAMED_OBJ | look up `(10, name)` and start it (3.2) |
+| 9B `A4 c` | ATTACH_NAMED_OBJ_TO_ENT5 | patch the op-0x30 record (+4 u32) of the emitter with a pointer to the entity model's **joint-0 world matrix** (R 3x3 s16, t s32), then start. The spawn rotates / scales every position, velocity, acceleration and oscillator offset by R and adds t to positions (ops 8, 9, 0xA ...) unless object flag bit 15; R = the model's RotMatrix x ScaleMatrix (so it carries the actor scale). OpenCross: `anchor_frame` (`field_world_effects.cpp`) |
+| E7 `A4` | NAMED_OBJ_MODE1 | stop and **kill every live object** of that emitter; name `"0000"` = all emitters |
+| 9C `A4` | NAMED_OBJ_MODE0 | stop emitting only; live objects finish their lifetime |
+| room (re)load | - | emitters without bit2 run, bit2 ones wait for B6 |
+| room unload | - | every 0x0A is stopped and its objects killed |
+All 4 chars are the entry name (ASCII, NUL padded; digits count: Arni '3','5','1','2' are 1-char names).
+
+**Bone-followed emitters.** A model's animation sequence (op 1D, `model.md` 6.1) also starts the headers of a named emitter with an anchor built from one of its attach points; the field treats that anchor like the op-9B one (OpenCross: `FieldWorld::step_bone_emitters`, anchor ids above the entity numbers).
+
+### 5.2 Sequences (type 0x10)
+Payload: 0x14-byte header (flags u32: bit0 = chain/repeat; the rest zero in all 328), commands from +0x14 with the same `u16 w` framing (op = low 9 bits, len bits 9-14). Each command's u16 at +2 is the **wait (ticks) after it**: the task keeps `wait`, subtracts the tick count each frame and dispatches commands while `wait == 0` (wait 0 = run the next command in the same frame). It ends at op 0x21 (every stream has one; no zero terminator). Names `'loop'` (26 in rooms) restart forever.
+| op | len | meaning |
+|---|---|---|
+| 20 | 8 | marker (no-op) |
+| 21 | 8 | end |
+| 22 | 16 | start emitter named at +12 (+4/+6 not read; 0x96 etc. seen) |
+| 23 | 16 | camera pool: of a run of 0x23 with wait 0 one is chosen with `rand()` and its name (+12) selects a type-0x0C camera shot; battle and the title scene play it, the field has no camera hook, so a room's 41 uses change nothing (the other ops of the run still execute at once) |
+| 28 / 29 | 8 / 12 | **controller rumble**: 28 = small motor on for u16 +4 ticks; 29 = big-motor ramp: the task's level (stored x128) moves to s16 +8 (**raw 0..255, not shifted**) over u16 +4 ticks; 0 ticks changes nothing (original quirk). Model: the motors start at zero each frame; every tick each running task with a non-zero small timer or big level adds its flag and its level (`level >> 7`) before its ramp and timer advance, then the small sum becomes 0 / 1 and the big sum is clamped to 255. Nothing is added while the options word's vibration bit is off. A new op 29 first applies the rest of a ramp still running (the level jumps to the ramp's end). |
+| 2F | 16 | start child sequence named at +12 |
+| 3E / 3F | 8 | begin (reset tint state, colour 0x808080) / end of a global tint bracket (op 40 ramps it). The bracket drives a 4-strip pass (80 x h strips tiling the frame, drawn last, ABR (B + F) / 2): zoom 4096 / (4096 + tz), tint colour / 128. Battle's embedded sequence `main` (battle init): 3E, 40 reset (wait 10), 40 [57 ticks, tz -2289, colour 190 191 179] wait 60, 40 [62 ticks, tz +131, 0x80] wait 61, 40 [49 ticks, tz 0] wait 49, 3F. RDE runs the pass once per presented picture (every 4 ticks) |
+| 2E (and 2A) | 12 | **screen shake**: ampX = byte +8, ampY = byte +9, ticks = s16 +4; amplitude (x256) ramps linearly to the target (0 ticks = set at once); the display offset is `rand()*amp` each frame (+10 in y) |
+| 65 | 16 | **ambient (GTE back) colour fade**: lerps the current RGB to bytes +8,+9,+10 over u16 +4 ticks; ends exactly on the target |
+| 2B / 2C | | screen colour slot 0 / 1 (5.4) |
+Started by field op D3 PLAY_EFFECT `A4`; stopped by D7 STOP_EFFECT (unlinks the sequence task only; emitters it already started keep running until stopped by E7/9C or their lifetimes end); `"0000"` stops all but `'loop'`. `main` and `own` are the entry points the battle host starts (`battle_effects.md` 2); the field starts nothing by itself, only D3. Corpus: 986 emitter starts, 164 holds, 628 ramps, 41 camera-pool picks, 20 child sequences, 33 ambient fades, 2 shakes, 2 tint brackets. OpenCross: the 3E / 3F / 40 bracket is `FieldWorld::seq_post_op` / `seq_post_step`; rumble is `sequence_player.cpp` (`vib_op`) feeding `platform/rumble`.
+
+### 5.3 Engine-spawned effects: actor water ripples, splashes and footprints
+Three emitters of the shared library `effect/particle.prd` are resolved at room entry: **`mz01`** (ring: blend 2, flag bit26 world quad, angle X 1024 = flat, scale 1536 growing 32/tick, colour fading, life 45), **`mz02`** (splash: blend 2, rises at vel y -48, life 30) and **`asi1`** (footprint: blend 3 = subtractive, flat, life 90). All three carry header bit2 (never run on their own). One object of the handle is fired regardless of header state (nothing while the debug free camera is on), then its position is set to `(x, y, z) << 16` and its angle Z to `-angle`. The per-actor pass (every actor whose class flags have none of `0x10C020`) triggers them:
+- **On water** (walk flags `& 0x60000` != 0; level = the op-66 table entry `[class - 1]`), unless the actor's flag FE 2A (bit 22; default clear) is set: if `level - y < -0x28` (+y down: the surface is more than 0x28 above the feet) **`mz01` at (x, level, z), angle = facing**, when `(counter & mask) == 0` with mask 3 while the current clip is the walk (default clip 3) or run (default clip 2) clip, else 15; otherwise **`mz02` at each foot** whose bit (0..3) is set in model variable 1, at (foot x, **actor y**, foot z), angle = facing. The counter counts the **30 Hz frames** in water (not reset on land): the pass runs once per rendered frame, outside the tick loop, so the ring fires every 4th frame = 8 ticks while walking / running and every 16th frame = **32 ticks** standing; with life 45 ticks a standing actor in deep water shows one or two calm rings at a time.
+- Orientation: `mz01` is a world quad (bit26) with angle X 1024 and Z := -facing, so Rx(1024) * Rz(-facing) lies flat in the ground plane at any facing; `mz02` (no bit26, a screen-aligned billboard) is spun by -facing in its own plane and then tipped back by X = -768 (view-space normal (0, 0.92, 0.38) at every facing). See 4.1.
+- **On dry ground**, if the actor's flag FE 2C (bit 23) is clear: **`asi1` at each foot** with a set bit, at the actor's y, angle = facing. The flag is **set by default** at SETUP, so footprints are opt-in per actor.
+- Feet = attach-point indices **12, 13, 7, 8** of the model's S3 table (`model.md` 5: 0C / 0D ankles, 07 / 08 hands = a quadruped's front feet), not joint numbers: an S3 entry is `{x, y, z, joint}` and the foot position is `M_joint * (x, y, z) + T` (x, z used). Model variable 1 is one of 16 shorts written only by the model's **animation sequence** (`model.md` 6.1: `40 2 0x11` / `77 1 2` = foot 0 + left footstep, `0x22` = foot 1 + right footstep, at the keyframes where a foot lands); it is cleared every frame. Bits 0x10 / 0x20 of the same variable are the footstep sounds (party members and entities with flag `+0x273` bit 0 only; `FieldWorld::play_footstep`).
+- OpenCross: `FieldWorld::step_wakes` spawns all three per this rule (`EmitterSystem::spawn_at`; the walk / run test compares the submitted id with the walk / run slots; feet from `Actor::attach_world`, events from `Actor::take_foot_events`, cleared every tick; ring spawn gated on the odd "frame tick"). The library is registered in every room, also rooms without a `.prd` of their own.
+
+### 5.4 The field encounter effect `enct` (`effect/particle.prd > fenc`)
+Entry 17 of the library is a nested drp `fenc`: sequences `enct` / `enc2`, emitters `e00 e01 e04 e041 e06 e061` (all header flags 5 = bit 2: wait for a start), meshes `enc0` (80 flat white triangles, a disc of radius 3156 in its x / y plane) and `enc1` (32 gouraud quads, a ring 0..2348 from black to (122, 188, 241)); no TIMs or sheets (the sparks use the library sheet `bt1`). No room names any of these. The field BATTLE handlers A3 / C9 start `enct` and the field waits until the task is gone. `enct` (cumulative tick at the left):
+| t | command |
+|---|---|
+| 0 | 20; 2F child `enc2`; 2B screen colour (ticks 7, mode 3, rgb 0x69); 51 SFX 0x24; 22 `e01`; 22 `e06`; 29 rumble ramp to 0x70 over 2 (wait 1) |
+| 1 | 51 SFX 0x23; 22 `e00` (wait 7) |
+| 8 | 29 rumble to 0 over 2 (wait 4) |
+| 12 | 2B screen colour back to 0 over 58 ticks (wait 38) |
+| 50 | 22 `e04` (wait 10) |
+| 60 | 22 `e061` (wait 45) |
+| 105 | 21 end |
+`enc2`: 20 (wait 29), 3E tint bracket begin (wait 24), 40 tint ramp (wait 67), 2B (0x2C ticks, mode 2, rgb 0x61), 2B (0x5B ticks, mode 2, 0), 3F, 21; all but the bracket begin at 29 and the ramp at 53 fall after `enct` has ended, i.e. after the battle has taken over. Emitters: every one starts with op 0x39 (a 12, b 11): the battle-intro anchor, attach point 9, rotation replaced by RotMatrix(0, model yaw, 0). `e01` = `enc0` mesh, blend 2, fixed OT slot 12 (bit 23), scale 512 growing 13 / tick, colour 2048 falling 68 / tick, life 30; `e00` = `enc1` mesh, same flags, scale 1664 shrinking 60 / tick, life 26 (its op 35 is skipped: no header bit 1 / 9); `e04` = `enc0` from scale 0 growing (64, 64, 5) / tick, colour 178 rising 3, life 110, on death `e041` (enc0 at 7040, life 293); `e06` / `e061` = `bt1` sparks (blend 2, flags bits 12 / 23 / 26: fixed slot 12, world quads), op 34 radial push 27572 / 31118, drag 3869 + rand 116, life 45, colour (4083, 2875, 1256) falling. **Sequence ops 2B / 2C** (screen colour slot 0 / 1): any task of the slot is freed; if the colour (bytes +9, +10, +11) or the mode (byte +8) differs, a task starts from the current colour over s16 +4 ticks: each tick colour = start + (target - start) * t / ticks, t += ticks per frame, past `ticks` the target. When the colour is not 0 a full-screen quad (0,0)..(0x160, 0x110) of that colour is drawn at OT slot 5 of the effect OT; mode != 0 = semi-transparent with ABR mode - 1 (3 = B - F: the encounter's dim). OpenCross: `import::nested_pack` + `load_battle_effects` (lenient sequence framing) + `load_stage` (meshes); the pack joins the field's EffectBank after the library; `FieldWorld::effects_actor_basis` (selector 12), `seq_dim_` (2B / 2C), mesh triangles merged into the effect pass (painter order by slot; meshes counted as submitted after the quads of the same slot, inferred). Rumble and the 3E / 40 bracket run through the sequence player as in 5.2.
+
+## 6. Engine reproduction recipe
+1. Per room load: parse drp; upload 0x04 TIMs (VRAM pages as in `room.md` 2); relocate each 0x03 sheet once; keep the registry `(type,name)`; load `effect/particle.prd` into the same registry.
+2. Emitters: apply the 3.2 start rules; per frame run the stepper with the frame's tick count; spawn per 3.3 with the 3.4 command table (ignore ops 17/1D/24 and the no-op 48; extended ops per `battle_effects.md` section 10).
+3. Objects: update per 4.1, draw per 2.3 / 4.3 into the same ordering table as the BG tiles and actors (slot = `(z>>4) + bias`, or `bias` with bit23; later submission is farther back inside a slot).
+4. Scripts: B6/9B/E7/9C and sequences per section 5; `'loop'` sequences restart.
+5. Validate with `ocprd validate` / `tools/py/cc_prd.py validate` (all 346 files, 5,437 emitters, 328 sequences, 1,345 sheets parse; only the 5 timinfo/TIM position mismatches of section 2 are reported) and `render` for slices.
+
+## 7. Open questions
+- Unknown: whether ops 0x17 / 0x1D / 0x24 are used by another overlay (the main program skips them).
+- Unknown: the exact `ticks` per frame at 30/60 fps, and the pixel-exact look of field-room effects (the title scene was level-matched against reference frames; `title_scene.md`).
+- The Hydra Marshes poison blur is a 50% ghost of the previous picture limited to the room picture rect; the submerged hydra is a dark-green silhouette behind the additive base layer.

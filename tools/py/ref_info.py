@@ -1,7 +1,7 @@
-"""ref_info.py REFDIR : per state of a ccx capture: frame, live object count, camera eye/target/H (RAM 0x80071F68/70/84), fog near/far/colour."""
+"""ref_info.py REFDIR : per state of a ps1 capture: frame, live object count, camera eye/target/H (RAM 0x80071F68/70/84), fog near/far/colour."""
 import sys, os, glob, subprocess
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import ccx_state as c, fx_ref
+import ps1_state as c, fx_ref
 d = sys.argv[1]; step = int(sys.argv[2]) if len(sys.argv) > 2 else 10
 for p in sorted(glob.glob(os.path.join(d, 'states', 'state_*.sav'))):
     f = int(os.path.basename(p)[6:12])

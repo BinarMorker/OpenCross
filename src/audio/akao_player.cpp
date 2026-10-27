@@ -559,7 +559,7 @@ void AkaoPlayer::note_on(Channel& channel, int key) {
       const char* env = std::getenv("OC_SFX_KEEP");
       return env ? unsigned(std::strtoul(env, nullptr, 16)) : 0xFFFFFFFFu;
     }();
-    if (!channel.music && channel.trace_id >= 1 && channel.trace_id <= 32 && !(keep_mask >> ((channel.trace_id - 1) % 8) & 1)) return;
+    if (!channel.music && channel.trace_id >= 1 && channel.trace_id <= 32 && !(keep_mask >> (channel.trace_id - 1) & 1)) return;
   }
 
   channel.pitch_base = pitch_register(note, *in);

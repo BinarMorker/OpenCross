@@ -1,0 +1,14 @@
+# PS1 project symbol list: effect overlay saraman.prg (base 0x801C5E00).
+# Format: name = 0xADDR;  # function|data: description. Names come from this project's own reverse engineering.
+# Apply with tools\ghidra\ApplySymbols.java <this file> (see symbols\README.md).
+fx_saraman_bake_ground = 0x801C6218;  # function: Ground bake, same code as the shared one
+fx_saraman_init = 0x801C7204;  # function: Init: binds model page and loads wave data
+fx_saraman_op_180_inward_spin = 0x801C7538;  # function: Op 0x180: pieces move inward and spin
+fx_saraman_op_181 = 0x801C7764;  # function: Op 0x181 handler
+fx_saraman_op_182 = 0x801C77B4;  # function: Op 0x182 handler
+fx_saraman_op_184 = 0x801C77C0;  # function: Op 0x184 handler
+fx_saraman_op_183_load_motion = 0x801C77EC;  # function: Op 0x183: loads a motion file into the heap
+fx_saraman_frame = 0x801C798C;  # function: Frame: waits for ticks and CD
+fx_saraman_exit = 0x801C8048;  # function: Exit for Salamander
+fx_saraman_pit_flag = 0x801C8B80;  # data: Pit on flag set when first motion file is loaded
+fx_saraman_op_181_params = 0x801C8BD0;  # data: Parameters copied from op 0x181 operands

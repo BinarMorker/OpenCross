@@ -1,4 +1,4 @@
-"""Reference-frame helpers for the ccx save states (stdlib only, plus ccx_state.py's zstandard):
+"""Reference-frame helpers for the ps1 save states (stdlib only, plus ps1_state.py's zstandard):
 
     python tools/py/vram_frame.py png <state.sav> <out.png> [x y w h]        a VRAM rectangle (15-bit) as an RGB PNG; default 0 0 320 224
                                                                              (the battle / field display buffer: SetDefDispEnv(x, 0, 320, 224),
@@ -37,7 +37,7 @@ def write_png(path, w, h, rgb):
 
 
 def vram_png(state_path, out, box):
-    from ccx_state import State
+    from ps1_state import State
     st = State(state_path)
     x, y, w, h = box
     rgb = bytearray(w * h * 3)

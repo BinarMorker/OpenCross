@@ -1,4 +1,4 @@
-"""Mean absolute luma gradient (blur metric) + radial streak metric per frame:  python tools/py/trans_sharp.py DIR first last"""
+"""Mean absolute luma gradient (blur metric) per frame:  python tools/py/trans_sharp.py DIR first last"""
 import sys, os
 import numpy as np
 from PIL import Image

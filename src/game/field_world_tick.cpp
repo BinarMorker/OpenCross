@@ -135,39 +135,42 @@ s32 FieldWorld::query(script::Query which) {
   return 0;
 }
 
-void FieldWorld::set_register(u32 addr, s32 value) {
-  registers_[addr] = value;
-  // Register meanings: FE 7A owned window frames (saved with the slot); control yaw (op 63); camera y offset (op 64);
-  // op A4 draw-order push of submerged model faces; B5 terrain push strength; FE 77 pad mask; FE 02 transition of the next
-  // room change; FE 29 C6 slots (bits 8..15) whose global sound survives the next room change; FE 70 entity of the
-  // battle-intro effect "enct".
-  if (addr == 0x800790D4) {
-    if (gs_) gs_->slot.frames = static_cast<u16>(value);
-  } else if (addr == 0x800E9F82) {
-    control_yaw_ = value & 0xFFF;
-    yaw_from_script_ = true;
-  } else if (addr == 0x800E9FC4) {
-    camera_.camera_y_offset = static_cast<float>(value);
-  } else if (addr == 0x800EA058) {
-    water_bias_ = value & 0x7FFF;
-  } else if ((addr >= 0x800EA408 && addr <= 0x800EA414) || addr == 0x800EA420 || addr == 0x800EA422 || addr == 0x800EA428) {
-    // FE 34 / FE 2B: footstep listener, distance band, floor types and volume, read by play_footstep
-  } else if (addr == 0x800EA05E) {
-    push_strength_ = static_cast<s16>(value);
-  } else if (addr == 0x800E9F80) {
-    input_.input_mask = static_cast<u16>(value);
-  } else if (addr == 0x800EA060) {
-    exit_kind_ = static_cast<s16>(value);
-  } else if (addr == 0x800EA404) {
-    sfx_keep_slots_ = static_cast<u32>(value);
-  } else if (addr == 0x800EA41E) {
-    handoff_.battle_anchor = value;
-  } else if (addr == 0x80079274 || addr == 0x800EA062 || addr == 0x800EA3F0) {
-    // FE 63: arms a load-then-fade music swap - a load order, nothing to do for the streamed BGM.
-    // FE 05: minimum VSyncs per drawn frame: display rate only; logic stays 60 Hz with interpolation.
-    // FE 15: draw-order slot of the FE 12-14 overlay grid; every use in the data writes the room default 0.
-  } else {
-    stub(std::format("set_register({:08X})", addr).c_str());
+void FieldWorld::set_global(script::Global which, s32 value) {
+  using script::Global;
+  switch (which) {
+    case Global::WindowFrames:
+      if (gs_) gs_->slot.frames = static_cast<u16>(value);
+      break;
+    case Global::ControlYaw:
+      control_yaw_ = value & 0xFFF;
+      yaw_from_script_ = true;
+      break;
+    case Global::CameraYOffset: camera_.camera_y_offset = static_cast<float>(value); break;
+    case Global::SubmergedOtPush: water_bias_ = value & 0x7FFF; break;
+    case Global::PushStrength: push_strength_ = static_cast<s16>(value); break;
+    case Global::PadMask: input_.input_mask = static_cast<u16>(value); break;
+    case Global::ExitTransition: exit_kind_ = static_cast<s16>(value); break;
+    case Global::KeepSfxSlots: sfx_keep_slots_ = static_cast<u32>(value); break;
+    case Global::BattleIntroAnchor: handoff_.battle_anchor = value; break;
+    // Footstep listener, distance band, floor types and volume, read by play_footstep.
+    case Global::FootstepVolume: footstep_.volume = value; break;
+    case Global::FootstepDryType: footstep_.dry_type = value; break;
+    case Global::FootstepWaterType: footstep_.water_type = value; break;
+    case Global::FootstepListenerX: footstep_.listener_x = value; break;
+    case Global::FootstepListenerY: footstep_.listener_y = value; break;
+    case Global::FootstepListenerZ: footstep_.listener_z = value; break;
+    case Global::FootstepNear: footstep_.nearest = value; break;
+    case Global::FootstepFar: footstep_.farthest = value; break;
+    // FE 63 arms a load-then-fade music swap: a load order, nothing to do for the streamed BGM. FE 05 is the minimum VSyncs per
+    // drawn frame: display rate only; logic stays 60 Hz with interpolation. FE 15 is the draw-order slot of the FE 12-14 overlay
+    // grid; every use in the data writes the room default 0.
+    case Global::MusicSwapArmed:
+    case Global::FrameVsyncs:
+    case Global::OverlayOt:
+      break;
+    default:
+      stub(std::format("set_global({})", script::global_name(which)).c_str());
+      break;
   }
 }
 

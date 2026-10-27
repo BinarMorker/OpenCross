@@ -50,14 +50,9 @@ void FieldVM::set_var(u16 id, s32 value) {
 
 int FieldVM::room_register() const { return room_reg_ >= 0 ? room_reg_ : read_var(var::kMapId); }
 bool FieldVM::var_bit(u32 bit_ref) const { return (vars_[(bit_ref >> 5) & (kVarSlots - 1)] >> (bit_ref & 0xF)) & 1; }
-s32 FieldVM::reg(u32 addr) const {
-  auto it = regs_.find(addr);
-  return it == regs_.end() ? 0 : it->second;
-}
-
-void FieldVM::set_register(u32 addr, s32 value) {
-  regs_[addr] = value;
-  host_.set_register(addr, value);
+void FieldVM::set_global(Global which, s32 value) {
+  globals_[static_cast<size_t>(which)] = value;
+  host_.set_global(which, value);
 }
 
 s32 FieldVM::imm_or_var(u16 raw) const { return raw & 0x8000 ? raw & 0x7FFF : read_var(raw); }
@@ -362,7 +357,7 @@ void FieldVM::load(FieldScriptModule module, std::span<const u32> flag_table) {
   vars_[0x46 >> 1] = 1;
   gflags_ = gflag::kPauseAllowed;
   restore_slots_ = false;
-  regs_.erase(0x800EA404);
+  globals_[static_cast<size_t>(Global::KeepSfxSlots)] = 0;
   flag_table_.fill(0);
   std::copy_n(flag_table.begin(), std::min<size_t>(flag_table.size(), flag_table_.size()), flag_table_.begin());
   flag_writes_ = 0;

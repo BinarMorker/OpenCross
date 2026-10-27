@@ -1,18 +1,18 @@
-# Our side of one per-id battle-effect comparison against the ccx capture. usage: tools\ours_cast34.ps1 <element id> [-Scene N] [-Caster U] [-Tgt U] [-Ecast] [-Weapon] [-Party a,b,c] [-CamPick s] [-Seed n] [-CastAt f] [-Frames n]
+# Our side of one per-id battle-effect comparison against the ps1 capture. usage: tools\ours_cast34.ps1 <element id> [-Scene N] [-Caster U] [-Tgt U] [-Ecast] [-Weapon] [-Party a,b,c] [-CamPick s] [-Seed n] [-CastAt f] [-Frames n]
 #   [-Keep] [-NoDiff] [-NoCamSearch] [-CamPool a,b,c] [-Dt "t:N,t:N" | -NoDt] [-NoStats]
-# OC_FX_DT = the PS1 loop iteration length the ccx capture shows (fx_diff.py --info `dt:`), so an overlay's
-# per-call emitter fires happen once per dt ticks as in ccx; -Dt gives a schedule / constant by hand, -NoDt = the 60 Hz pace (dt 1).
+# OC_FX_DT = the PS1 loop iteration length the ps1 capture shows (fx_diff.py --info `dt:`), so an overlay's
+# per-call emitter fires happen once per dt ticks as in ps1; -Dt gives a schedule / constant by hand, -NoDt = the 60 Hz pace (dt 1).
 # Runs the Debug opencross.exe ocbattleview headless (deterministic ticks, --shotevery 5) with OC_FX_OBJECTS / OC_FX_SEQ / OC_FX_UNITS = 5 and writes
 # tmp\r34\<id>\ours\ours.log + ours\shots\ (PS1 size, only inside the compared window), then runs the diff (fx_diff.py --prune).
-# Stat parity - ccx's forged Serge (hp 1023 atk 1 def 127 hit 127 evd 0 mag 1 mdef 127, ccx_cast.ps1) and the enemy HP of the manifest's first watch
-# row (u3_hp u4_hp u5_hp) are passed as ocbattleview --stats / --enemyhp, so the target survives like in ccx (-NoStats = the table stats). -Tgt default: the
-# manifest's target_unit:, else the ccx target (tgt0= of the first watch row with act_kind=1), else the element's pgdat byte +4 side bits (party only / self
+# Stat parity - the PS1 reference's forged Serge (hp 1023 atk 1 def 127 hit 127 evd 0 mag 1 mdef 127) and the enemy HP of the manifest's first watch
+# row (u3_hp u4_hp u5_hp) are passed as ocbattleview --stats / --enemyhp, so the target survives like in ps1 (-NoStats = the table stats). -Tgt default: the
+# manifest's target_unit:, else the ps1 target (tgt0= of the first watch row with act_kind=1), else the element's pgdat byte +4 side bits (party only / self
 # -> 0), else 3; the one used is printed.
 # Defaults come from tmp\r34\<id>\ref\manifest.txt (scene: caster: target: cam_pick: cast_frame:) when present.
 # fx_diff.py --extract first when ref\tables.json is missing (it also fills cam_pick: from the sequence tags); with no pick known the camera
-# pool (-CamPool) is probed - one short parallel run per member, scored against the ccx camera by fx_diff.py --cam-score - and the winner is written to the
+# pool (-CamPool) is probed - one short parallel run per member, scored against the ps1 camera by fx_diff.py --cam-score - and the winner is written to the
 # manifest (-NoCamSearch = the old default ch13; every member is scored at the time shifts -1 / 0 / +1 sample, accepted at >= 50 % or when it is
-# >= 2x the runner-up, the shift is printed); -Frames defaults to CastAt + the ccx capture length; -Keep keeps states / frames / shots (no --prune); -NoDiff skips the diff.
+# >= 2x the runner-up, the shift is printed); -Frames defaults to CastAt + the ps1 capture length; -Keep keeps states / frames / shots (no --prune); -NoDiff skips the diff.
 param([int]$Id=-1,[int]$Scene=-1,[int]$Caster=-1,[int]$Tgt=-1,[switch]$Ecast,[switch]$Weapon,[string]$Party="",[string]$CamPick="",[int]$Seed=1,[int]$CastAt=-1,[int]$Frames=-1,
       [switch]$Keep,[switch]$NoDiff,[switch]$NoCamSearch,[switch]$NoPoolSearch,[string]$CamPool="ch10,ch11,ch12,ch13",[string]$Dt="",[switch]$NoDt,[switch]$NoStats,
       [string]$Folder="",[switch]$Auto,[int]$AutoFrames=300,[string]$EnemyHp="",[string]$Offset="",[string]$Exe="",[int]$Ko=-1)
@@ -69,7 +69,7 @@ if($Tgt -lt 0){
   else {
     $wt=$null
     if(Test-Path $man){ foreach($l in (Get-Content $man -Encoding UTF8)){ if(-not $wt -and $l -match 'act_kind=1.*?tgt0=(\d+)'){ $wt=[int]$matches[1] } } }
-    if($null -ne $wt){ $Tgt=$wt; "tgt default: $Tgt (ccx watch tgt0 of the first act_kind=1 row)" }
+    if($null -ne $wt){ $Tgt=$wt; "tgt default: $Tgt (ps1 watch tgt0 of the first act_kind=1 row)" }
     else {
       $Tgt=3; $why='no target_unit / watch row: enemy side'
       $ecsv=@((Join-Path $Root "tmp\ref\elements.csv"),(Join-Path $Main "tmp\ref\elements.csv")) | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -82,12 +82,12 @@ if($Tgt -lt 0){
     }
   }
 }
-if($CastAt -lt 0){ $CastAt=200 }   # the usual alignment (ccx frame F = tick F + 225 for scene 7); fx_diff.py finds the offset itself
+if($CastAt -lt 0){ $CastAt=200 }   # the usual alignment (ps1 frame F = tick F + 225 for scene 7); fx_diff.py finds the offset itself
 if($Frames -lt 0){
   $Frames=$CastAt+300
-  if(Test-Path $tj){ foreach($l in (& python $py $dir --info)){ if($l -match '^last_frame:\s*(\d+)' -and [int]$matches[1] -gt 0){ $Frames=$CastAt+[int]$matches[1] } } }   # = the ccx capture length
+  if(Test-Path $tj){ foreach($l in (& python $py $dir --info)){ if($l -match '^last_frame:\s*(\d+)' -and [int]$matches[1] -gt 0){ $Frames=$CastAt+[int]$matches[1] } } }   # = the ps1 capture length
 }
-# cam_probe: = this script's own scored pick (trusted). cam_pick: is written by ccx_state.py campick / fx_diff --extract from the ccx
+# cam_probe: = this script's own scored pick (trusted). cam_pick: is written by ps1_state.py campick / fx_diff --extract from the ps1
 # sequence-task tags, which are the PACK's own sequences (ch04, ch05, 0000 ...), not the camera pool: accept it only when it is a pool member.
 # -Party a,b,c = ocbattleview --party (character ids, slot 0 = the acting PC); T1 tech manifests carry party0: <character id> -> party0,0 automatically
 if($Party -eq "" -and (Test-Path $man) -and ((Get-Content $man -Raw -Encoding UTF8) -match 'party0:\s*(\d+)') -and [int]$matches[1] -ne 0){ $Party="$($matches[1])" }   # R8: "X,0" puts Serge on unit 0 and X on unit 1 (log: unit 0 weapon kai, Serge casts), so the tech ran as Serge; a one-member party keeps X on unit 0
@@ -99,9 +99,9 @@ if($NoDt){ $Dt="" }
 # enemy HP of the first watch row (u3_hp u4_hp u5_hp)
 $eh=""
 if(Test-Path $man){ $hh=@(0,0,0); $first=""; foreach($l in (Get-Content $man -Encoding UTF8)){ if($l -match 'u3_hp=(\d+)\s+u4_hp=(\d+)\s+u5_hp=(\d+)'){ if($first -eq ""){ $first="$($matches[1]),$($matches[2]),$($matches[3])" }; for($k=0;$k -lt 3;$k++){ if($hh[$k] -eq 0){ $hh[$k]=[int]$matches[$k+1] } } } }
-  $eh= if($Ecast){ $first } else { ($hh | ForEach-Object { if($_ -gt 0){$_}else{-1} }) -join "," }; if($eh -eq "-1,-1,-1"){ $eh="" } }   # zero = damage already applied in the ccx row: keep the table hp (-1)   # R8: tech runs take each enemy's first NON-zero hp over the watch rows (the first row of 164 167 169 170 171 reads u3 hp 0 = capture artefact); enemy own-cast runs keep the first row
+  $eh= if($Ecast){ $first } else { ($hh | ForEach-Object { if($_ -gt 0){$_}else{-1} }) -join "," }; if($eh -eq "-1,-1,-1"){ $eh="" } }   # zero = damage already applied in the ps1 row: keep the table hp (-1)   # R8: tech runs take each enemy's first NON-zero hp over the watch rows (the first row of 164 167 169 170 171 reads u3 hp 0 = capture artefact); enemy own-cast runs keep the first row
 if($EnemyHp -ne ""){ $eh= if($EnemyHp -eq "none"){""}else{$EnemyHp} }   # -EnemyHp a,b,c overrides the manifest row ("none" = the table HP); scene 402's later rows read 135 / 189 / 273, which --auto kills before the cast
-if($NoStats){ $eh="" } else { "stats: ccx forge (hp 1023 atk 1 def 127 hit 127 evd 0 mag 1 mdef 127), enemy hp $(if($eh){$eh}else{'unchanged'})" }
+if($NoStats){ $eh="" } else { "stats: ps1 forge (hp 1023 atk 1 def 127 hit 127 evd 0 mag 1 mdef 127), enemy hp $(if($eh){$eh}else{'unchanged'})" }
 function RunOurs([string]$pick,[string]$outdir,[int]$nframes,[string[]]$shotargs,[bool]$async){
   $env:OC_QUIET="1"   # the harness window takes no focus, no sound
   $env:OC_BATTLE_SEED="$Seed"; $env:OC_CAST_PARTY= $(if($Ko -ge 0 -or $Tgt -in 1,2){"3"}else{"1"});   # a single-target cast on PC 1 / 2 is skipped by OC_CAST_PARTY=1 (battle_view_action.cpp party_cap)
@@ -125,7 +125,7 @@ function MergeOut([string]$lg){ if(Test-Path ($lg+".out")){ Get-Content ($lg+".o
 Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Join-Path $out "shots") | Out-Null
 
-if($CamPick -eq "" -and -not $NoCamSearch -and (Test-Path $tj)){   # T2b: no pick known: probe the pool and score against the ccx camera
+if($CamPick -eq "" -and -not $NoCamSearch -and (Test-Path $tj)){   # T2b: no pick known: probe the pool and score against the ps1 camera
   $cands=$CamPool -split ','
   $probes=@()
   foreach($c in $cands){
@@ -141,19 +141,19 @@ if($CamPick -eq "" -and -not $NoCamSearch -and (Test-Path $tj)){   # T2b: no pic
     if($l -match '^best:\s*(-?\d+)'){ $bi=[int]$matches[1] }; if($l -match '^clear:\s*(\d)'){ $clear=[int]$matches[1] }; if($l -match '^shift:\s*(\S+)'){ $shift=$matches[1] }
     if($l -match '^mode:\s*(\S+)'){ $mode=$matches[1] }; if($l -match '^yaw:\s*(.+)$'){ $yawo=" (eye turned $($matches[1]) about the target)" }
     if($l -match '^score:\s*(\d+)/(\d+)' -and [int]$matches[2] -gt 0){ $ratio=[double]$matches[1]/[double]$matches[2] } }
-  if($bi -ge 0 -and $clear -eq 1){ $CamPick=$cands[$bi]; Add-Content -Path $man -Value "cam_probe: $CamPick ($([math]::Round($ratio*100)) % of the ccx camera frames, $mode, time shift $shift sample)" -Encoding UTF8; "cam_probe: $CamPick ($([math]::Round($ratio*100)) % of the ccx camera frames match, $mode, at time shift $shift sample$yawo; written to the manifest)" }
-  else { "cam search: no pool member matches the ccx camera (best $([math]::Round($ratio*100)) %, not clear): falling back to ch13" }
+  if($bi -ge 0 -and $clear -eq 1){ $CamPick=$cands[$bi]; Add-Content -Path $man -Value "cam_probe: $CamPick ($([math]::Round($ratio*100)) % of the ps1 camera frames, $mode, time shift $shift sample)" -Encoding UTF8; "cam_probe: $CamPick ($([math]::Round($ratio*100)) % of the ps1 camera frames match, $mode, at time shift $shift sample$yawo; written to the manifest)" }
+  else { "cam search: no pool member matches the ps1 camera (best $([math]::Round($ratio*100)) %, not clear): falling back to ch13" }
   foreach($p in $probes){ Remove-Item -Recurse -Force $p[1] -ErrorAction SilentlyContinue }
 }
 $userPool=($CamPick -match ',')
 if($CamPick -eq ""){ $CamPick="ch13,tgt3" }
 if($CamPick -notmatch ','){ $CamPick="$CamPick,tgt$Tgt" }   # a bare "ch13" as the checklist writes it: add the target pick
 
-# The pack's own camera pool (tgt0..tgtN, 6 / 7 ... ) is a rand() pick too; ccx's member is whatever its RNG gave. One short probe lists the pools
-# (fxseq trace `pool a,b,c`), one run per member of the first non-charge pool is scored against the ccx camera and the best member joins the pick.
+# The pack's own camera pool (tgt0..tgtN, 6 / 7 ... ) is a rand() pick too; the reference's member is whatever its RNG gave. One short probe lists the pools
+# (fxseq trace `pool a,b,c`), one run per member of the first non-charge pool is scored against the ps1 camera and the best member joins the pick.
 if(-not $NoPoolSearch -and (Test-Path $tj)){
   # greedy over the pools in the order they occur: list them from a full run with the picks so far, probe the members of the first pool not yet
-  # resolved against the ccx camera (--cam-score over the whole window), keep the best, repeat
+  # resolved against the ps1 camera (--cam-score over the whole window), keep the best, repeat
   $base=($CamPick -split ',')[0]
   $picked=@(); if($userPool){ $picked=@(($CamPick -split ',')[1..(($CamPick -split ',').Count-1)]) }
   $done=@{}

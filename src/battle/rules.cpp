@@ -70,7 +70,6 @@ int ring_count(const std::array<int, 3>& ring, int colour) {
 int hit_chance(const ChanceIn& in) {
   int evade = ceil100(in.evd, in.evd_mod);
   if (in.target_dizzy) evade /= 2;
-  if (in.attacker_state15) evade = evade * 125 / 100;
   int chance = in.base * in.hit_mod / 100 - evade;
   if (chance < 0) chance = 0;
   const size_t strength = static_cast<size_t>(std::clamp(in.strength, 0, 2));
@@ -110,7 +109,7 @@ DamageOut weapon_damage(Rng& rng, const WeaponIn& in) {
   const int lo = in.target_afraid ? 5 : 0;
   const int hi = in.strength == 2 ? 15 : 14;
   const int crit_roll = rng.rnd(lo, hi);
-  out.crit = crit_roll >= (in.attacker_state15 ? 7 : 15) || in.slayer;
+  out.crit = crit_roll >= 15 || in.slayer;
   const int bonus = out.crit ? kCritBonus[static_cast<size_t>(in.weapon_class & 15)] : 0;
   int dmg = coloured * (100 + bonus) / 100;
   if (in.opposite_colour) dmg = dmg * 300 / 200;

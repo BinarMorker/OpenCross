@@ -1,12 +1,12 @@
-"""Field-by-field diff of two game states in save terms (New Game+ / Continue+ checks against ccx).
+"""Field-by-field diff of two game states in save terms (New Game+ / Continue+ checks against ps1).
 
     python tools/py/ngplus_diff.py A B [--all]
 
-A / B: a ccx DuckStation state (.sav: guest RAM, read with ccx_state.py), a raw 0x2000 save block (.bin: OpenCross route
+A / B: a ps1 DuckStation state (.sav: guest RAM, read with ps1_state.py), a raw 0x2000 save block (.bin: OpenCross route
 `request slotdump` with OC_SLOT_DUMP=<path>) or `<save.dat>:<slot>` (card 1). Every side becomes the saved view of the game:
   * the 0xE1F4 image (RAM 0x8006AEEC + X) passed through the slot packer, so only the saved bits are compared
     (character records, items, elements, names, unlock masks, equipped nibbles, 790A4.., button configs, 790CC/D0, frames, 790D8/DC);
-  * the raw head fields: key items 0x80078020, script variables (ccx: the field's live block 0x800EBAA8; `--saved-vars` the global
+  * the raw head fields: key items 0x80078020, script variables (ps1: the field's live block 0x800EBAA8; `--saved-vars` the global
     block 0x80077C20), play time 0x8007210C, gold 0x800786F0, recruited 0x800786E8, party 0x800786F4..F7, options 0x800789C0, stars
     0x800789BC / BE.
 Prints one line per differing field (A value, B value). --all also lists equal fields of the carried set.
@@ -36,8 +36,8 @@ class View:
         self.name = spec
         self.head = {}
         if spec.lower().endswith(".sav"):
-            import ccx_state
-            st = ccx_state.State(spec)
+            import ps1_state
+            st = ps1_state.State(spec)
             ram = st.ram
             r = lambda a, n: bytes(ram[(a & 0x1FFFFFFF):(a & 0x1FFFFFFF) + n])  # noqa: E731
             self.img = masked(r(IMG_BASE, c.IMG_SIZE))

@@ -1,8 +1,15 @@
 // ocbattle - battle tables validator, headless battle simulator, formula evaluator.
 //   ocbattle tables                       counts and a few named rows (compare with tools/py/cc_tables.py)
-//   ocbattle sim <scene> [seed] [--auto]  play one battle with the auto policy and print the log
+//   ocbattle scenes | elements            one line per scene record (bg, boss, enemies) / per element record (name, colour, level, mode)
+//   ocbattle sim <scene> [seed]           play one battle with the auto policy and print the log
 //        [--party 0,1,2] [--star N] [--set char|char_w0..] [--quiet] [--brain scripted|random]  (default scripted)
+//        [--party-from save.dat:slot]     party, stats and star level of a save slot
 //        [--attack] [--field N]           weapon chains only (no element casts); battlefield N; ring changes print as `ring [..]`
+//   ocbattle xcheck [--n N] [--seed N]    random attacker / target / attack triples: engine damage against an independent formula
+//   ocbattle soak [--seeds N] [--scene S | --from A --to B] [--cap N] [--party-from save.dat:slot] [--brain scripted|random] [-v]
+//                                         every scene's battle with the auto policy over N seeds (default 3), command cap per battle (default 2000)
+//   ocbattle cast <scene> <actor> <element[,element...]> <target> [seeds]   cast elements headless, print the target's status words
+//   ocbattle debug-kill [enemy_id [count]] [--scene S] [--keep-script]      the Debug tab's enemy replacement: scenes that do not end in victory
 //   ocbattle pac-disasm <scene>           disassemble battle/event/evtNNN.pac (same text as cc_tables.py bscript dump)
 //   ocbattle pac-soak [turns] [-v]        run every scene's scripts in a dummy battle for N commands (default 40)
 //        [--scene N | --from A --to B]    only these scenes; OC_SOAK_LIST=1 prints each scene's outcome
@@ -51,10 +58,17 @@ namespace {
 int usage() {
   std::fprintf(stderr,
                "usage: ocbattle [-g <gamedir>] tables\n"
-               "       ocbattle [-g <gamedir>] sim <scene> [seed] [--auto] [--party 0,1,2] [--star N] [--set name] [--quiet] [--brain scripted|random] [--party-from save.dat:slot]\n"
-               "       ocbattle [-g <gamedir>] soak [--seeds N] [--scene S | --from A --to B] [--party-from save.dat:slot] [--brain scripted|random] [-v]\n"
+               "       ocbattle [-g <gamedir>] scenes\n"
+               "       ocbattle [-g <gamedir>] sim <scene> [seed] [--party 0,1,2] [--star N] [--set name] [--quiet] [--brain scripted|random] [--party-from save.dat:slot] [--attack] [--field N]\n"
+               "       ocbattle [-g <gamedir>] xcheck [--n N] [--seed N]\n"
+               "       ocbattle [-g <gamedir>] soak [--seeds N] [--scene S | --from A --to B] [--cap N] [--party-from save.dat:slot] [--brain scripted|random] [-v]\n"
                "       ocbattle [-g <gamedir>] pac-disasm <scene>\n"
-               "       ocbattle [-g <gamedir>] pac-soak [turns]\n"
+               "       ocbattle [-g <gamedir>] pac-soak [turns] [--scene S | --from A --to B] [-v]\n"
+               "       ocbattle [-g <gamedir>] elements\n"
+               "       ocbattle [-g <gamedir>] cast <scene> <actor> <element[,element...]> <target> [seeds]\n"
+               "       ocbattle [-g <gamedir>] debug-kill [enemy_id [count]] [--scene S] [--keep-script]\n"
+               "       ocbattle [-g <gamedir>] fx-reg (SCENE [--bg N] | --index [--all] | --file PATH | --refs NAME | --s6 | --grep NAME)\n"
+               "       ocbattle [-g <gamedir>] fx-audit [--csv FILE] [--md FILE] [--eid N] [--ticks N] [-v] [--find NAME] [--rng lo|mid|hi|seed:N]\n"
                "       ocbattle formula <name> <args...> [--rng lo|mid|hi|seed:N]\n");
   return 2;
 }
@@ -737,7 +751,6 @@ int cmd_sim(const data::GameTables& tables, const vfs::Vfs& vfs, const std::vect
   int battlefield = -1;
   for (size_t i = 0; i < args.size(); ++i) {
     const std::string& arg = args[i];
-    if (arg == "--auto") continue;
     if (arg == "--quiet") quiet = true;
     else if (arg == "--attack") attack_only = true;
     else if (arg == "--field" && i + 1 < args.size()) battlefield = std::atoi(args[++i].c_str());

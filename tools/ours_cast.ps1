@@ -1,4 +1,4 @@
-# Battle audio, our side of a cast scenario. usage: tools\ours_cast.ps1 -Out tmp\x2c\heal -Cast 88 -Tgt 0 [-Scene 7] [-Caster 0] [-Field -1] [-At 120] [-Frames 900] [-Weapon]
+# Battle audio, our side of a cast scenario. usage: tools\ours_cast.ps1 -Out tmp\x2c\heal -Cast 88 -Tgt 0 [-Scene 7] [-Caster 0] [-Field -1] [-At 120] [-Frames 900]
 # Deterministic 1/60 s ticks (--shotevery) so the mixer trace clock = game time; writes <Out>\ours.log and <Out>\ours.csv (sfx_cmp2.py).
 param([Parameter(Mandatory=$true)][string]$Out,[int]$Cast,[int]$Tgt=3,[int]$Caster=0,[int]$Scene=7,[int]$Field=-1,[int]$At=120,[int]$Frames=900,[int]$Cast2=0,[int]$Cast2At=0,[int]$Cast2Tgt=-1)
 $Root=(Resolve-Path (Join-Path $PSScriptRoot "..")).Path

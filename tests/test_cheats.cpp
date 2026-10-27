@@ -72,36 +72,36 @@ int main() {
   CHECK(!encounter_auto_won(0x9E, 1, 0x0C, false, none));
   CHECK(!encounter_auto_won(0x32, 4, 1, false, none) && encounter_auto_won(0x32, 5, 1, false, none));
   // With the story byte's bit 2 set the fight is always won.
-  CHECK(encounter_auto_won(0x32, 4, 1, false, [](unsigned address) { return address == 0x800EBC68 ? 4 : -1; }));
+  CHECK(encounter_auto_won(0x32, 4, 1, false, [](unsigned var) { return var == 0x1C0 ? 4 : -1; }));
   CHECK(!encounter_auto_won(0x1A0, 8, 0x3B, false, none) && !encounter_auto_won(0x1A0, 0x0A, 0x3B, false, none));
   // An unknown story byte lets the fight run.
   CHECK(!encounter_auto_won(0x50, 1, 0x42, false, none));
-  CHECK(!encounter_auto_won(0x50, 1, 0x42, false, [](unsigned address) { return address == 0x800EBB84 ? 1 : address == 0x800EBB6C ? 2 : -1; }));
-  CHECK(encounter_auto_won(0x50, 1, 0x42, false, [](unsigned address) { return address == 0x800EBB84 ? 0 : address == 0x800EBB6C ? 2 : -1; }));
-  // The story bytes come from the VM's global variable array (ids = byte offsets from its base).
+  CHECK(!encounter_auto_won(0x50, 1, 0x42, false, [](unsigned var) { return var == 0xDC ? 1 : var == 0xC4 ? 2 : -1; }));
+  CHECK(encounter_auto_won(0x50, 1, 0x42, false, [](unsigned var) { return var == 0xDC ? 0 : var == 0xC4 ? 2 : -1; }));
+  // The story bytes come from the VM's global variable array (byte ids: even = low byte, odd = high byte of the slot).
   {
     std::vector<u16> vars(0x400, 0);
-    CHECK(game::story_byte_from_vars(vars, 0x800EBB84) == 0 && game::story_byte_from_vars(vars, 0x800EBAA7) == -1 &&
-          game::story_byte_from_vars(vars, 0x800EBEA8) == -1);
-    // The low byte sits at the even address, the high byte at the odd one.
-    vars[(0x800EBB84 - 0x800EBAA8) / 2] = 0x1234;
-    CHECK(game::story_byte_from_vars(vars, 0x800EBB84) == 0x34 && game::story_byte_from_vars(vars, 0x800EBB85) == 0x12);
-    const game::StoryByte fromvars = [&](unsigned address) { return game::story_byte_from_vars(vars, address); };
+    CHECK(game::story_byte_from_vars(vars, 0xDC) == 0 && game::story_byte_from_vars(vars, game::kStoryVarBytes) == -1 &&
+          game::story_byte_from_vars(vars, 0xFFFF) == -1);
+    // The low byte sits at the even id, the high byte at the odd one.
+    vars[0xDC / 2] = 0x1234;
+    CHECK(game::story_byte_from_vars(vars, 0xDC) == 0x34 && game::story_byte_from_vars(vars, 0xDD) == 0x12);
+    const game::StoryByte fromvars = [&](unsigned var) { return game::story_byte_from_vars(vars, var); };
     // Id 0x42 at an ordinary map: story byte A = 1 and B = 2 -> the story battle runs; A = 0 -> won (skipped)
-    vars[(0x800EBB84 - 0x800EBAA8) / 2] = 1, vars[(0x800EBB6C - 0x800EBAA8) / 2] = 2;
+    vars[0xDC / 2] = 1, vars[0xC4 / 2] = 2;
     CHECK(!encounter_auto_won(0x50, 1, 0x42, false, fromvars));
-    vars[(0x800EBB84 - 0x800EBAA8) / 2] = 0;
+    vars[0xDC / 2] = 0;
     CHECK(encounter_auto_won(0x50, 1, 0x42, false, fromvars));
     // Id 0x01: a clear bit 2 of its story byte keeps the fight at map 0x32 / entity 4, a set one wins it
     CHECK(!encounter_auto_won(0x32, 4, 1, false, fromvars));
-    vars[(0x800EBC68 - 0x800EBAA8) / 2] = 4;
+    vars[0x1C0 / 2] = 4;
     CHECK(encounter_auto_won(0x32, 4, 1, false, fromvars));
     // Id 0x45 depends on bit 6 of its story byte; table B (model swaps) on bit 7 of another.
     CHECK(encounter_auto_won(0x50, 1, 0x45, false, fromvars));
-    vars[(0x800EBC6E - 0x800EBAA8) / 2] = 0x40;
+    vars[0x1C6 / 2] = 0x40;
     CHECK(!encounter_auto_won(0x50, 1, 0x45, false, fromvars));
     CHECK(!game::model_swap_skipped(0x9E, 5, fromvars));
-    vars[(0x800EBBB0 - 0x800EBAA8) / 2] = 0x80;
+    vars[0x108 / 2] = 0x80;
     CHECK(game::model_swap_skipped(0x9E, 5, fromvars));
   }
   // C9: only 0x180 0x181 0x187 0x1B3 are won
@@ -109,7 +109,7 @@ int main() {
   CHECK(!encounter_auto_won(0x50, 1, 0x182, true, none));
 
   // --- Table B (D9): needs bit 7 of its story byte
-  const game::StoryByte b7 = [](unsigned address) { return address == 0x800EBBB0 ? 0x80 : -1; };
+  const game::StoryByte b7 = [](unsigned var) { return var == 0x108 ? 0x80 : -1; };
   // Unknown story byte: never skipped.
   CHECK(!game::model_swap_skipped(0x9E, 5, none));
   CHECK(game::model_swap_skipped(0x9E, 5, b7) && game::model_swap_skipped(0xAB, 9, b7));

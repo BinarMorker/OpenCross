@@ -137,6 +137,49 @@ enum class Query : u8 {
   ScriptGlobal,
 };
 
+// Engine globals that script ops write and the VM does not model itself (63 64 A4 A6 B5, FE 02 05 12 13 15 29 2B 34 4D 59 63 67
+// 6A 70 72 75 77 7A). The VM keeps every value (E9, FE 29 and FE 7A read theirs back); the host acts on the ones it models and
+// logs the others as stubs.
+enum class Global : u8 {
+  WindowFrames,        // E9 / FE 7A: owned dialogue-window skins, one bit per frame; lives in the save slot
+  ControlYaw,          // 63
+  CameraYOffset,       // 64
+  SubmergedOtPush,     // A4
+  RegisterInvA6,       // A6: 1 when the operand is 0 (purpose unknown)
+  PushStrength,        // B5
+  ExitTransition,      // FE 02
+  FrameVsyncs,         // FE 05
+  OverlayGridA0,       // FE 12
+  OverlayGridA1,
+  OverlayGridA2,
+  OverlayGridB0,       // FE 13
+  OverlayGridB1,
+  OverlayGridB2,
+  OverlayOt,           // FE 15
+  KeepSfxSlots,        // FE 29: bits 8..15 = C6 slots whose sound survives the next room change
+  FootstepVolume,      // FE 2B 10
+  FootstepDryType,     // FE 2B 11
+  FootstepWaterType,   // FE 2B 12
+  FootstepListenerX,   // FE 34 (stored, never read)
+  FootstepListenerY,   // FE 34
+  FootstepListenerZ,   // FE 34
+  FootstepNear,        // FE 34
+  FootstepFar,         // FE 34
+  Byte4D,              // FE 4D (purpose unknown)
+  MenuPreamble3,       // FE 59
+  MusicSwapArmed,      // FE 63
+  TradingPostRow,      // FE 67
+  TradingPostCue,      // FE 67
+  Reg6A,               // FE 6A (purpose unknown)
+  BattleIntroAnchor,   // FE 70
+  SavePointPreamble,   // FE 72
+  Selection,           // FE 75
+  SelectionFlag,       // FE 75
+  PadMask,             // FE 77
+  Count,
+};
+const char* global_name(Global which);
+
 class FieldHost {
  public:
   virtual ~FieldHost() = default;
@@ -393,8 +436,8 @@ class FieldHost {
   // ---- catch-alls (ops whose effect the VM does not model) ---------------------------------------------------------------
   virtual bool predicate(Predicate which, int arg) = 0;
   virtual s32 query(Query which) = 0;
-  // Global the original writes (FE 02 FE 05 63 64 A4 B5 ...)
-  virtual void set_register(u32 ps1_addr, s32 value) = 0;
+  // A global written by a script op (the `Global` list); the VM has already stored the value.
+  virtual void set_global(Global which, s32 value) = 0;
   // Raw operand bytes after the opcode.
   virtual void opaque_op(u16 key, std::span<const u8> operands) = 0;
 };
@@ -518,7 +561,7 @@ class NullHost : public FieldHost {
   void clear_key_latch() override;
   bool predicate(Predicate which, int arg) override;
   s32 query(Query which) override;
-  void set_register(u32 ps1_addr, s32 value) override;
+  void set_global(Global which, s32 value) override;
   void opaque_op(u16 key, std::span<const u8> operands) override;
 
  private:

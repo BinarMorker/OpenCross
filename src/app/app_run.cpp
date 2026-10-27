@@ -95,7 +95,8 @@ int App::run() {
   return exit_code;
 }
 
-// OC_FRAMETIME=1 logs the wall time of every main-loop iteration while a field -> battle hand-over is running.
+// OC_FRAMETIME logs the wall time of main-loop iterations over 20 ms while a field -> battle hand-over is running; a value starting
+// with 2 logs every iteration.
 void App::log_frametime() {
   if (!frametime_log) return;
   const auto now = std::chrono::steady_clock::now();

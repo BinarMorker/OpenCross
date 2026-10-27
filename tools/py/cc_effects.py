@@ -509,7 +509,7 @@ def cmd_stats(g, a, out):
     out.write("slots with no egfx (.ctd): %d; disc-2-only slots: %d; max ctd sectors: %d\n" % (
         sum(1 for sl in real.values() if sl[0].startswith("dummy/")), len(DISC2_ONLY),
         max(len(g.read(n)) // SECTOR for n in g.names(EFFDIR) if n.endswith(".ctd"))))
-    dec = a.decomp or os.path.join(g.root, "research", "decomp", "ps1")
+    dec = a.decomp or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools", "ghidra", "work", "out", "ps1")
     if os.path.isdir(dec):
         out.write("\noverlay profile (decomp lines/funcs; addprim = custom polygon emission; gte = GTE/trig helper calls; "
                   "emit/model/objl = engine API calls; c1xx = overlay-private op cases):\n")
@@ -548,7 +548,7 @@ def main(argv=None):
     p = sub.add_parser("map"); p.add_argument("--all", action="store_true")
     p = sub.add_parser("info"); p.add_argument("target")
     sub.add_parser("validate")
-    p = sub.add_parser("stats"); p.add_argument("--decomp", default=None, help="decomp/ps1 folder (default: <game>/research/decomp/ps1)")
+    p = sub.add_parser("stats"); p.add_argument("--decomp", default=None, help="your own PS1 decompilation export, the <OutDir>/ps1 folder written by tools/ghidra_setup.ps1 (default: tools/ghidra/work/out/ps1); the overlay profile is skipped when absent")
     a = ap.parse_args(argv)
     g = tab.Game(a.game)
     return COMMANDS[a.cmd](g, a, sys.stdout) or 0

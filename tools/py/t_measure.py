@@ -1,5 +1,5 @@
 """Structure measures of the transition frames, RDE vs ours at matched phases.
-python -I tools/py/t_measure.py DIR_RDE WHITE_MS PREFIX_OURS FIRST GF...
+python tools/py/t_measure.py DIR_RDE WHITE_MS PREFIX_OURS FIRST GF...
  per phase: L, outer-10 % band L (live scene vs copies), centre/band ratio, mean gradient (sharpness), radial luminance autocorrelation peak (lag in
  320x240 px; radial streak copies repeat with the zoom step), 50 % blend check: contrast ratio of consecutive distinct pictures."""
 import site, sys, glob, re

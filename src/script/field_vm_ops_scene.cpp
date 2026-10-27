@@ -16,12 +16,12 @@ bool FieldVM::exec_scene(u8 op) {
       advance(11);
       break;
     }
-    case 0x63:  // SET_GLOBAL_9F82
-      set_register(0x800E9F82, operand_u(1));
+    case 0x63:  // SET_CONTROL_YAW
+      set_global(Global::ControlYaw, operand_u(1));
       advance(3);
       break;
-    case 0x64:  // SET_SCRATCH_S16
-      set_register(0x800E9FC4, operand_s(1, 3, 0x80));
+    case 0x64:  // SET_CAMERA_Y_OFFSET
+      set_global(Global::CameraYOffset, operand_s(1, 3, 0x80));
       advance(4);
       break;
     case 0x65:  // STORE_GLOBAL_TO_VAR

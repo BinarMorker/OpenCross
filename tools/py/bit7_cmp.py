@@ -1,13 +1,13 @@
-"""Compare the matrices of the flag bit 7 + 15 objects (attach joint rotation x object matrix) between a ccx capture and ours.
+"""Compare the matrices of the flag bit 7 + 15 objects (attach joint rotation x object matrix) between a ps1 capture and ours.
 
-    python tools/py/bit7_cmp.py CCX_MAT_TXT OURS_LOG [--offset N | --scan] [--win W]
+    python tools/py/bit7_cmp.py REF_MAT_TXT OURS_LOG [--offset N | --scan] [--win W]
 
-CCX_MAT_TXT = `fx_ref.py objects STATES --bit7 --mat` output (PowerShell UTF-16 is fine), OURS_LOG = ours.log of a run with OC_BIT7_TRACE=2
+REF_MAT_TXT = `fx_ref.py objects STATES --bit7 --mat` output (PowerShell UTF-16 is fine), OURS_LOG = ours.log of a run with OC_BIT7_TRACE=2
 (`bit7mat: t<emitter tick> <name> pos x y z mat m0..m8`, one line per drawn object).
 Without --offset an object is matched by emitter name + integer position (any tick) and the closest of ours' matrices with that key is compared
-(max |delta| over the 9 entries) - a rule check that ignores timing.  With --offset N (fx_diff's `our tick = ccx frame + offset`) the
-ccx state frame F is compared with ours' ticks F + N - W .. F + N + W (default W 2) of the same name (the closest again): a timing-aware check.
-Prints per name: ccx samples, matched, median / worst delta, and the three worst rows.
+(max |delta| over the 9 entries) - a rule check that ignores timing.  With --offset N (fx_diff's `our tick = ps1 frame + offset`) the
+ps1 state frame F is compared with ours' ticks F + N - W .. F + N + W (default W 2) of the same name (the closest again): a timing-aware check.
+Prints per name: ps1 samples, matched, median / worst delta, and the three worst rows.
 """
 import re
 import sys
@@ -44,7 +44,7 @@ def main(argv):
             win = int(argv[i + 1]); i += 2
         else:
             args.append(argv[i]); i += 1
-    ccx, state, cur = [], None, None
+    ps1, state, cur = [], None, None
     for ln in read(args[0]):
         m = re.match(r"== state_(\d+)", ln)
         if m:
@@ -56,7 +56,7 @@ def main(argv):
             continue
         m = re.match(r"\s+mat (.*)", ln)
         if m and cur:
-            ccx.append((cur, [float(x) for x in m.group(1).split()]))
+            ps1.append((cur, [float(x) for x in m.group(1).split()]))
             cur = None
     by_pos, by_tick = defaultdict(list), defaultdict(list)
     for ln in read(args[1]):
@@ -72,7 +72,7 @@ def main(argv):
         res = []
         for off in range(-500, 801):
             ds = []
-            for (st, nm, pos), mat in ccx:
+            for (st, nm, pos), mat in ps1:
                 c = [o for t in range(st + off - win, st + off + win + 1) for o in by_tick.get((nm, t), [])]
                 if c:
                     ds.append(min(dist(mat, o) for o in c))
@@ -82,7 +82,7 @@ def main(argv):
             print("offset %d: matched %d mean delta %.3f" % (off, -n, mean))
         return
     per, miss = defaultdict(list), defaultdict(int)
-    for (st, nm, pos), mat in ccx:
+    for (st, nm, pos), mat in ps1:
         if offset is None:
             c = by_pos.get((nm, pos), [])
         else:
@@ -92,12 +92,12 @@ def main(argv):
             continue
         best = min(c, key=lambda o: dist(mat, o))
         per[nm].append((dist(mat, best), st, pos, mat, best))
-    print("ccx samples %d, ours keys %d%s" % (len(ccx), len(by_pos), "" if offset is None else ", offset %d +-%d" % (offset, win)))
+    print("ps1 samples %d, ours keys %d%s" % (len(ps1), len(by_pos), "" if offset is None else ", offset %d +-%d" % (offset, win)))
     for nm in sorted(set(per) | set(miss)):
         d = sorted(x[0] for x in per[nm])
         print("%-5s matched %3d unmatched %3d  median %.3f worst %.3f" % (nm, len(d), miss[nm], d[len(d) // 2] if d else -1, d[-1] if d else -1))
     for dlt, st, pos, mat, om in sorted((x for v in per.values() for x in v), key=lambda x: -x[0])[:3]:
-        print("worst %.3f state %d pos %s\n  ccx  %s\n  ours %s" % (dlt, st, pos, " ".join("%.3f" % x for x in mat), " ".join("%.3f" % x for x in om)))
+        print("worst %.3f state %d pos %s\n  ps1  %s\n  ours %s" % (dlt, st, pos, " ".join("%.3f" % x for x in mat), " ".join("%.3f" % x for x in om)))
 
 
 main(sys.argv[1:])

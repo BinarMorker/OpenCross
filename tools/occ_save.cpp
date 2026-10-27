@@ -124,6 +124,6 @@ int occ_save_main(const std::vector<std::string>& args) {
     std::fprintf(stderr, "error: %s\n", error.what());
     return 1;
   }
-  std::fprintf(stderr, "usage: occ (save-info <save.dat> | save-slots <save.dat> | save-roundtrip <save.dat> <out.dat>)\n");
+  std::fprintf(stderr, "usage: occ (save-info <save.dat> | save-slots <save.dat> | save-roundtrip <save.dat> <out.dat> | save-blank <save.dat> <out.dat>)\n");
   return 2;
 }

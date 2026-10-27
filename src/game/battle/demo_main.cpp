@@ -1,5 +1,6 @@
 // ocbattleview: runs one battle in its own window (development tool for BattleView).
-//   ocbattleview [scene] [--shot <frames>] [--orig]     scene = scenedat index (default 0)
+//   ocbattleview [scene] [--shot <frames>] [--orig] [--auto]     scene = scenedat index (default 0)
+//   --trans <frame>  start the battle-entry transition (field-to-battle hand-over) at that frame
 //   --cast <element id>  the first PC casts that pgdat element on the first enemy as soon as the view ticks (effect packs)
 //   --caster <unit> --casttgt <unit>  with --cast: that unit (PCs 0-2, enemies 3+) casts the element on that unit (ally elements, Pilfer ...)
 //   --ecast <element id>  the first enemy casts it on the first PC;  --weapon <0|1|2>  PC 0 attacks the first enemy (weak / medium / heavy);  --cam  camera overlay (F3)
@@ -7,7 +8,7 @@
 //   --autoframes <n>  --auto stops pressing after n frames (e.g. 60: one attack, then the menu comes back)
 //   --nofx  element casts take the generic path (no effect pack);  --castat <frame>  issue the --cast at that frame (after the intro / fade-in)
 //   --shotevery <n> --shotdir <dir> [--frames <n>] [--size <w> <h>]  deterministic run (one tick per frame) writing <dir>/shot_NNNNNN.png every n frames, exit after --frames
-//   --shotfrom <f> --shotto <f>  with --shotevery: only frames in that range write a shot
+//   --shotfrom <f> --shotto <f>  with --shotevery: only frames f1..f2 (inclusive; default 0..unbounded) write a shot
 //   --stats hp=1023,atk=1,def=127,hit=127,evd=0,mag=1,mdef=127  base stats of every party member (default party {0,1,22} when no --party); --enemyhp u3,u4,u5  HP (and max HP) of the enemy units 3 / 4 / 5 (-1 or empty = unchanged)
 //   --ko <unit>  that party unit starts KO'd (hp 0 + status KO: Revive / Full Revival targets)
 //   --equip <item id>  party slot 0 holds that weapon (e.g. 0x26 = Mastermune); armour / accessories stay the character table's

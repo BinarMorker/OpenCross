@@ -1,4 +1,4 @@
-"""PS1 (ccx -dumpaudio raw s16 stereo 44.1k) analysis helpers. usage: x2_audio.py raw [t0 t1]"""
+"""PS1 (ps1_audio.py audio.raw / audio.wav, raw s16 stereo 44.1k) analysis helpers. usage: x2_audio.py raw [t0 t1]"""
 import sys, numpy as np, wave
 def load(p):
     a = np.fromfile(p, dtype='<i2').reshape(-1, 2).astype(np.float64) / 32768.0

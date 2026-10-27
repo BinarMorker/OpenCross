@@ -13,10 +13,6 @@ void FieldVM::exec_ext(u8 sub) {
   const u16 key = static_cast<u16>(kExtPage | sub);
   if (const OpInfo* info = find_op(key); info && info->conf == '?') ++stats_.uncertain_ops[key];
   // `base_` is the sub-opcode byte; advance(n) = n bytes from it (instruction length - 1).
-  auto reg_set = [&](u32 addr, s32 value) {
-    regs_[addr] = value;
-    host_.set_register(addr, value);
-  };
   // Yield always, rewind while busy.
   auto idle_gate = [&]() {
     yield_ = true;
@@ -31,7 +27,7 @@ void FieldVM::exec_ext(u8 sub) {
       advance(2);
       break;
     case 0x01: set_flag(self.flags270, 9, byte_at(1) & 1); advance(2); break;
-    case 0x02: set_register(0x800EA060, operand_u(1)); advance(3); break;
+    case 0x02: set_global(Global::ExitTransition, operand_u(1)); advance(3); break;
     case 0x03:
       if (!(self.flags270 & 0x800)) {
         self.flags270 |= 0x800;
@@ -41,7 +37,7 @@ void FieldVM::exec_ext(u8 sub) {
       advance(5);
       break;
     case 0x04: set_global_bit(8, byte_at(1) & 1); advance(2); break;
-    case 0x05: set_register(0x800EA062, operand_u(1)); advance(3); break;
+    case 0x05: set_global(Global::FrameVsyncs, operand_u(1)); advance(3); break;
     case 0x06: set_flag(self.flags38, 13, byte_at(1) == 0); advance(2); break;
     case 0x07: turn_flag_13(self, byte_at(1) & 1); advance(2); break;
     case 0x08:
@@ -81,10 +77,10 @@ void FieldVM::exec_ext(u8 sub) {
       }
       break;
     case 0x11: set_global_bit(9, operand_u(1) & 1); advance(3); break;
-    case 0x12: set_register(0x800EA3D8, operand_u(1)); set_register(0x800EA3DC, operand_u(3)); set_register(0x800EA3E0, operand_u(5)); advance(7); break;
-    case 0x13: set_register(0x800EA3E8, operand_u(1)); set_register(0x800EA3EA, operand_u(3)); set_register(0x800EA3EC, operand_u(5)); advance(7); break;
+    case 0x12: set_global(Global::OverlayGridA0, operand_u(1)); set_global(Global::OverlayGridA1, operand_u(3)); set_global(Global::OverlayGridA2, operand_u(5)); advance(7); break;
+    case 0x13: set_global(Global::OverlayGridB0, operand_u(1)); set_global(Global::OverlayGridB1, operand_u(3)); set_global(Global::OverlayGridB2, operand_u(5)); advance(7); break;
     case 0x14: set_global_bit(10, byte_at(1) & 1); advance(2); break;
-    case 0x15: set_register(0x800EA3F0, operand_u(1)); advance(3); break;
+    case 0x15: set_global(Global::OverlayOt, operand_u(1)); advance(3); break;
     // 16: the handler is a bare return: no advance, the script stalls for good.
     case 0x16: park(); break;
     case 0x17: set_global_bit(11, byte_at(1) & 1); advance(2); break;
@@ -122,14 +118,17 @@ void FieldVM::exec_ext(u8 sub) {
     case 0x28: write_var(word_at(1), host_.query(Query::GlobalDiff)); advance(3); break;
     case 0x29: {
       const u32 bit = static_cast<u32>(((operand_u(1) & 7) + 8));
-      set_register(0x800EA404, reg(0x800EA404) | (1 << bit));
+      set_global(Global::KeepSfxSlots, global(Global::KeepSfxSlots) | (1 << bit));
       advance(3);
       break;
     }
     case 0x2A: set_flag(self.flags270, 22, byte_at(1) & 1); advance(2); break;
     case 0x2B: {
-      const u32 addr = byte_at(1) == 0x10 ? 0x800EA428 : byte_at(1) == 0x11 ? 0x800EA420 : byte_at(1) == 0x12 ? 0x800EA422 : 0;
-      if (addr) set_register(addr, static_cast<u16>(operand_u(2)));
+      const u8 which = byte_at(1);
+      if (which >= 0x10 && which <= 0x12) {
+        const Global target = which == 0x10 ? Global::FootstepVolume : which == 0x11 ? Global::FootstepDryType : Global::FootstepWaterType;
+        set_global(target, static_cast<u16>(operand_u(2)));
+      }
       advance(4);
       break;
     }
@@ -163,11 +162,11 @@ void FieldVM::exec_ext(u8 sub) {
       break;
     case 0x33: set_flag(self.flags270, 26, byte_at(1) & 1); advance(2); break;
     case 0x34:
-      set_register(0x800EA408, operand_s(1, 11, 0x80));
-      set_register(0x800EA40C, operand_s(3, 11, 0x40));
-      set_register(0x800EA40A, operand_s(5, 11, 0x20));
-      set_register(0x800EA410, operand_s(7, 11, 0x10));
-      set_register(0x800EA414, operand_s(9, 11, 0x08));
+      set_global(Global::FootstepListenerX, operand_s(1, 11, 0x80));
+      set_global(Global::FootstepListenerZ, operand_s(3, 11, 0x40));
+      set_global(Global::FootstepListenerY, operand_s(5, 11, 0x20));
+      set_global(Global::FootstepNear, operand_s(7, 11, 0x10));
+      set_global(Global::FootstepFar, operand_s(9, 11, 0x08));
       advance(12);
       break;
     case 0x35:  // facing target, y = S@1
@@ -263,7 +262,7 @@ void FieldVM::exec_ext(u8 sub) {
       advance(2);
       break;
     }
-    case 0x4D: set_register(0x800720C1, byte_at(1)); advance(2); break;
+    case 0x4D: set_global(Global::Byte4D, byte_at(1)); advance(2); break;
     case 0x4E: set_global_bit(15, byte_at(1) & 1); advance(2); break;
     case 0x4F: {
       const int target = entity_operand(1);
@@ -326,7 +325,7 @@ void FieldVM::exec_ext(u8 sub) {
     case 0x59:
       if (idle_gate()) {
         host_.table_op(0xFE59, 3, 0);
-        set_register(0x800EA4AC, 1);
+        set_global(Global::MenuPreamble3, 1);
         advance(1);
       }
       break;
@@ -360,7 +359,7 @@ void FieldVM::exec_ext(u8 sub) {
         yield_ = true;
         break;
       }
-      set_register(0x80079274, 1);
+      set_global(Global::MusicSwapArmed, 1);
       yield_ = true;
       advance(1);
       break;
@@ -382,8 +381,8 @@ void FieldVM::exec_ext(u8 sub) {
     case 0x66: opaque(0xFE66, 0, 0); advance(1); break;
     case 0x67:
       if (idle_gate()) {
-        set_register(0x800E8504, operand_u(1));
-        set_register(0x800EB351, 1);
+        set_global(Global::TradingPostRow, operand_u(1));
+        set_global(Global::TradingPostCue, 1);
         host_.table_op(0xFE67, 0xBD, 0);
         // Only selects the trading post; FE 61 opens it (as FE 5E / FE 68 do for the shops).
         if (menu_request(MenuKind::TradingPost, operand_u(1))) advance(3);
@@ -391,7 +390,7 @@ void FieldVM::exec_ext(u8 sub) {
       break;
     case 0x68: if (menu_request(MenuKind::WeaponShop, operand_u(1))) advance(3); break;
     case 0x69: host_.table_op(0xFE69, byte_at(1), 0); advance(2); break;
-    case 0x6A: set_register(0x800EA42A, operand_u(1)); advance(3); break;
+    case 0x6A: set_global(Global::Reg6A, operand_u(1)); advance(3); break;
     case 0x6B: set_global_bit(16, byte_at(1) & 1); advance(2); break;
     case 0x6C: set_global_bit(17, byte_at(1) & 1); advance(2); break;
     case 0x6D: opaque(0xFE6D, 0, 0); advance(1); break;
@@ -399,14 +398,14 @@ void FieldVM::exec_ext(u8 sub) {
     case 0x6F: host_.table_op(0xFE6F, byte_at(1), 0); advance(2); break;
     case 0x70: {
       const int target = entity_operand(1);
-      if (target >= 0) set_register(0x800EA41E, target);
+      if (target >= 0) set_global(Global::BattleIntroAnchor, target);
       advance(2);
       break;
     }
     case 0x71: set_global_bit(18, byte_at(1) & 1); advance(2); break;
     case 0x72:
       if (idle_gate()) {
-        set_register(0x800E9CF0, 1);
+        set_global(Global::SavePointPreamble, 1);
         host_.table_op(0xFE72, 3, 0);
         advance(1);
       }
@@ -419,13 +418,13 @@ void FieldVM::exec_ext(u8 sub) {
         yield_ = true;
         break;
       }
-      set_register(0x800791DD, operand_u(1) & 0xFF);
-      set_register(0x800E9D10, 1);
+      set_global(Global::Selection, operand_u(1) & 0xFF);
+      set_global(Global::SelectionFlag, 1);
       yield_ = true;
       advance(3);
       break;
     case 0x76: write_var(word_at(1), host_.query(Query::Field56)); advance(3); break;
-    case 0x77: set_register(0x800E9F80, word_at(1)); advance(3); break;
+    case 0x77: set_global(Global::PadMask, word_at(1)); advance(3); break;
     case 0x78:
       if (!host_.system_ready() || !host_.play_song_ex(operand_u(1), operand_u(3))) {
         yield_ = true;
@@ -435,7 +434,7 @@ void FieldVM::exec_ext(u8 sub) {
       break;
     case 0x7A: {
       const s32 v = operand_u(1);
-      if (v >= 0 && v < 16) set_register(0x800790D4, reg(0x800790D4) | (1 << v));
+      if (v >= 0 && v < 16) set_global(Global::WindowFrames, global(Global::WindowFrames) | (1 << v));
       advance(3);
       break;
     }

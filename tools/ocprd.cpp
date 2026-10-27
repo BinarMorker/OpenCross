@@ -37,7 +37,8 @@ const char* kParticleLib = "cdrom/effect/particle.prd";
 
 int usage() {
   std::fprintf(stderr,
-               "usage: ocprd [-g GameDir] (info <room> | validate | render <room> <outdir> | soak [ticks] | preview <room> <outdir>)\n");
+               "usage: ocprd (fx-soak [ticks] | fx-preview <overlay> <outdir>)\n"
+               "       ocprd [-g GameDir] (info <room> | validate | render <room> <outdir> | soak [ticks] | preview <room> <outdir>)\n");
   return 2;
 }
 

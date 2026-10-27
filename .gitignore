@@ -1,6 +1,5 @@
 build/
 out/
-docs/
 .vs/
 .vscode/
 *.user
@@ -18,3 +17,5 @@ tests/routes/shots/
 tests/routes/*.log
 *.rec
 !tests/routes/*.ini
+tools/duckstation/
+tools/ghidra/work/

@@ -1,4 +1,4 @@
-"""Side-by-side mean luma, retail (ccx run frame f) vs ours (tick f + 9):  python tools/py/trans_cmp.py retail.txt ours.txt first last step"""
+"""Side-by-side mean luma, retail (ps1 run frame f) vs ours (tick f + 9):  python tools/py/trans_cmp.py retail.txt ours.txt first last step"""
 import sys
 r = [l.split() for l in open(sys.argv[1])]; o = [l.split() for l in open(sys.argv[2])]
 v = lambda row: row[2] if row[1] == 'L' else row[1][1:]

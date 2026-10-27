@@ -22,18 +22,19 @@ battle::Battle::Cheats battle_cheats() {
   return out;
 }
 
-int story_byte_from_vars(std::span<const u16> vars, unsigned addr) {
-  constexpr unsigned kBase = 0x800EBAA8u;
-  if (addr < kBase || addr >= kBase + 0x400u) return -1;
-  const unsigned off = addr - kBase;
-  const size_t slot = off >> 1;
+int story_byte_from_vars(std::span<const u16> vars, unsigned var) {
+  if (var >= kStoryVarBytes) return -1;
+  const size_t slot = var >> 1;
   if (slot >= vars.size()) return -1;
-  return (vars[slot] >> ((off & 1) * 8)) & 0xFF;
+  return (vars[slot] >> ((var & 1) * 8)) & 0xFF;
 }
 
 namespace {
-bool bit(const StoryByte& story, unsigned addr, int bit_index, bool unknown) {
-  const int value = story ? story(addr) : -1;
+// Script variable byte ids the encounter rules test.
+constexpr unsigned kVarStoryBattle01 = 0x1C0, kVarStoryA = 0xDC, kVarStoryB = 0xC4, kVarStoryBattle45 = 0x1C6, kVarModelSwapGate = 0x108;
+
+bool bit(const StoryByte& story, unsigned var, int bit_index, bool unknown) {
+  const int value = story ? story(var) : -1;
   return value < 0 ? unknown : ((value >> bit_index) & 1) != 0;
 }
 }  // namespace
@@ -49,7 +50,7 @@ bool encounter_auto_won(int map, int ent, int id, bool c9, const StoryByte& stor
   bool runs = false;
   switch (id) {
     case 0x01:
-      if (bit(story, 0x800EBC68, 2, false)) return true;
+      if (bit(story, kVarStoryBattle01, 2, false)) return true;
       runs = at(0x32, 4) || at(0x34, 4) || at(0x36, 0x0A);
       break;
     case 0x03: runs = at(0x110, 0x16); break;
@@ -62,12 +63,12 @@ bool encounter_auto_won(int map, int ent, int id, bool c9, const StoryByte& stor
     case 0x42:
     case 0x43:
     case 0x44: {
-      const int b84 = story ? story(0x800EBB84) : -1, b6c = story ? story(0x800EBB6C) : -1;
-      if (b84 < 0 || b6c < 0) return false;
-      runs = (b84 & 5) == 1 && (b6c <= 3 || (b84 & 0x38) != 0x38);
+      const int a = story ? story(kVarStoryA) : -1, b = story ? story(kVarStoryB) : -1;
+      if (a < 0 || b < 0) return false;
+      runs = (a & 5) == 1 && (b <= 3 || (a & 0x38) != 0x38);
       break;
     }
-    case 0x45: runs = bit(story, 0x800EBC6E, 6, true); break;
+    case 0x45: runs = bit(story, kVarStoryBattle45, 6, true); break;
     case 0x54:
     case 0x55: runs = at(0xF1, 7) || at(0xF9, 6); break;
     case 0x56: runs = at(0x10A, 7); break;
@@ -78,7 +79,7 @@ bool encounter_auto_won(int map, int ent, int id, bool c9, const StoryByte& stor
 
 // D9 is skipped on maps 0x99..0xAD (entity >= 4, with a particular story flag bit set) except at the listed entities.
 bool model_swap_skipped(int map, int ent, const StoryByte& story) {
-  if (ent < 4 || !bit(story, 0x800EBBB0, 7, false)) return false;
+  if (ent < 4 || !bit(story, kVarModelSwapGate, 7, false)) return false;
   switch (map) {
     case 0x99: return ent != 0x0C;
     case 0x9D: return ent != 0x08;

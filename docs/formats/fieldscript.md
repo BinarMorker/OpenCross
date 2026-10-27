@@ -1,0 +1,755 @@
+# Field script (room event bytecode)
+
+The field script is the bytecode that drives every room: entity set-up, NPC behaviour, talk and trigger scripts, cutscenes, map changes, battles. It lives in subfile 003 of each room's `map/mapbin/<room>.bin`; the dialogue text it refers to is subfile 008. This document covers the file layout, the entity and script-slot model, operand and variable encoding, control flow, every opcode, the dialogue block, and the rules of the script interpreter (scheduling, blocking, call stack, timers). The format was checked against all 566 rooms of the RDE archive: every room decodes without an unknown opcode or operand overrun, and every jump lands on an instruction boundary. 93.98 % of code-area bytes are reached from entity entry points, 5.09 % is clean unreferenced code, 0.48 % is the pre-script table and about 0.4 % is data (palettes, arrays). `tools/py/cc_fieldscript.py` (`disasm`, `stats`, `dialogue`, `optable`) and `occ script-disasm <room> [entity]` disassemble a room.
+
+Notation used in the opcode tables: `U@k`, `S@k`, `V@k` is the operand k bytes after the opcode byte (for `FE` ops, after the sub-opcode byte); "pc += n" is the real advance of the handler (for `FE` ops counted from the sub-opcode byte, so the instruction length is n + 1). 16 main-page opcodes never occur in the data (06 0C 1B 1C 24 3E 4B 65 6E 76 77 78 89 A6 A7 AB), nor do 18 `FE` sub-opcodes (Uses 0 below); their lengths are unverified.
+
+## 1. Where the script lives
+
+`map/mapbin/<room>.bin` is a cpt: `u32 count`, `u32 offset[count+1]` (last = EOF). Subfile **003** is the field script, subfile **008** the dialogue; both are `sszl` LZSS blobs (12-byte header `"sszl"`, `u32 decoded length`, `u32 ?`).
+
+LZSS: bit stream read MSB first. `1` + 8-bit literal, or `0` + 12-bit ring position + 4-bit count (copy count+2). 4096-byte zero-initialised ring. **The write pointer starts at index 1** (not 0 and not 0xFEE): with start 0 the entity tables of the decoded script are corrupt, with start 1 they are clean and the decoded length equals the header length in every room. Unwritten ring bytes read as 0. (`import::lzss_decode` and `tools/py/cc_lzss.py` both start the write pointer at 1.)
+
+## 2. Decoded file layout
+
+```
+0x000  u32 locals[32]                 0x80 bytes: signedness bit mask for the variable slots (section 4)
+0x080  u32 entityCount
+0x084  entity[entityCount]            0x40 bytes each = u16 scriptPtr[32]
+code_base = 0x84 + 0x40 * entityCount
+code_base + 0   pre-script table      u8 0xFF, then n * { s16 x, s16 z, s16 facing, s16 floorLevel }   (8-byte records)
+code_base + p   code, arrays, palettes (p = any script pointer / jump target)
+```
+
+* All script pointers, jump targets and call targets are **u16 offsets relative to `code_base`** (the end of the entity table, not the end of the 0x80 header).
+* The pre-script table is `1 + 8n` bytes (556 of 566 rooms; first byte `FF`): **entrance records**. The record is selected by ROOM_PARAM, the second operand of the map jump (5A / DC). `SETUP_PC` places the leader there: x, z, and facing for both the heading and the turn target; the fourth word is the floor level (index into the walk-mesh triangles under the point, see opcode 25). A later SET_POSITION / SET_ROTATION still wins. Facing is the engine heading (cos h, -sin h; 4096 = a full turn). The table is not code and nothing in the bytecode jumps into it. A record is placed as written even where the walk mesh has no floor (ten_b07f entrance 1 = (0, -1800), below the mesh: the party walks in from outside the picture). OpenCross places such a party exactly there.
+* Unused script slots hold 0 or point at a shared one-instruction `STOP` stub (many slots can share one pointer).
+* After the last real script there can be unreferenced code (cutscene rooms `fin_*`, `dem_*` have about 400 bytes of leftovers) and small data blocks (4x4-byte colour tables for opcode 67, arrays for 6F/70).
+
+A typical room has 16.5 entities (max 75) and 1,335 instructions.
+
+## 3. Entity model
+
+Entity index = the `c` operand (< 0x80). A script slot is started by the engine (INIT, UPDATE, ACTION, COLLISION) or by opcodes 07/08/09 (`RUN_SCRIPT_*`: entity `c`, byte `d`: low 5 bits = script slot id, high 3 bits = priority class).
+
+| slot | name | meaning |
+|---|---|---|
+| 0 | INIT | runs synchronously to its terminating STOP, entity by entity in index order, while the room loads; yields are ignored in this mode (entity 0 is the "director", the last entity is often a debug stub) |
+| 1 | UPDATE | the default script: whenever all 8 slot records of an entity are idle the scheduler restarts it from its first byte (so even a script that ends in STOP is re-run every tick); priority class 7 (lowest) |
+| 2 | ON_ACTION | talk / examine (confirm button), started by the trigger test with class 3. An empty script (first byte 0) sets the entity's "not talkable" flag at load |
+| 3 | ON_COLLISION | step-on / proximity trigger, started with class 4. An empty script clears the entity's collision-trigger flag |
+| 4 | (touch) | started by the trigger test with class 2 for entities with the touch flag while the touch-trigger mode is 1 |
+| 5..31 | script N | free slots, started explicitly by `RUN_SCRIPT_*` (id = low 5 bits of `d`, class = `d >> 5`) |
+
+Character references (the `c` operand, one byte): `0x00-0x7F` entity index in this room; `0x80+n` playable character n (0 Serge, 1 Kid, 2 Guile, ... 43 Pip, engine order, see the name table in `cc_fieldscript.py`; resolved through the party table, "none" when that character is not in the party); `0xFB` THIS (the entity running the script); `0xFF` the entity in party slot 0 (leader), `0xFE` party slot 1, `0xFD` party slot 2 (empty slot = none). `0xFC` is not handled by the resolver (treated like character id 0x7C, i.e. "none"). "None" makes most entity-taking ops no-ops that still advance pc.
+
+## 4. Operand and variable encoding
+
+Instruction = 1 opcode byte (`0xFE` = extended page: a second byte selects the sub-opcode) + operands. All multi-byte values are little endian. Operand kinds (table column "Operands"):
+
+| tok | size | meaning |
+|---|---|---|
+| `b` / `d` | 1 | raw byte / small enum |
+| `c` | 1 | character reference (section 3) |
+| `w` | 2 | raw 16-bit value (message index, table offset, bit mask) |
+| `U` | 2 | immediate-or-variable: bit 15 set = **immediate** (`v & 0x7FFF`), clear = **variable** `v` |
+| `V` | 2 | always a variable (destination) |
+| `J` | 2 | jump / call target (offset from `code_base`) |
+| `Shh` | 2 | signed operand: if bit `hh` of the instruction's mode byte `M` is set the u16 is a signed 16-bit **literal**, otherwise it is a variable id |
+| `Thh` | 2 | like `S`, but when the mode bit is clear the value is a `U` (bit 15 = immediate) |
+| `M` | 1 | mode byte carrying the literal flags (bits 0x80, 0x40, 0x20, ... assigned to the S/T operands left to right) |
+| `A4` | 4 | four ASCII characters (effect / sound names such as `had1`) |
+
+In the data the `S` variable form never has bit 15 set and `U` immediates are 0..0x7FFF; signed literals (negative coordinates) only exist through `S`/`T` + `M`.
+
+**Variables.** A variable value `v` is a *byte offset* into a 16-bit variable array: slot = `v >> 1`. Observed range 0x000-0x701. `v < 0x400`: engine/story globals, `v >= 0x400`: room-local (`(v - 0x400)/2` is the room variable number). Known engine globals: 0x02 ROOM_PARAM, 0x04 MULTI_CHOICE_RESULT, 0x06 MAP_ID, 0x08 PREVIOUS_MAP_ID, 0x0C/0E/10 PARTY_MEMBER_0..2, 0x18 DIGIT_ENTRY_RESULT, 0x2A USED_KEY_ITEM, 0x32 BATTLE_RESULT, 0x34 DEBUG_MODE, 0x44 CURRENT_FRAME, 0x4C SAVE_RESULT (0x04 and 0x18-0x20 are by far the most used; the ids the engine itself reads or writes are listed in section 10.8). Variable 0x00 is `SCENARIO_FLAG`, the main story-progress counter (opcodes 69 6A 6B 6C 6D CD CE).
+
+The 32-bit `locals[idx]` words in the file header are a per-room signedness mask: `idx = v >> 6`, `bit = (v >> 1) & 0x1F`; **bit set = the slot is read as unsigned (zero-extended), clear = signed (sign-extended)**. Writes always store the low 16 bits. The single-bit ops 71/72/73 are not a separate array: operand `n` = `(variable id << 4) | bit`, they test/modify bit `n & 0xF` of 16-bit variable `n >> 4`.
+
+## 5. Control flow rules
+
+* Linear execution; **`00 STOP`, `03`, `04`, `0D RETURN`, `3B STOP_EXEC`** end a script/subroutine; `01 JUMP` and `D0` are unconditional gotos (the following bytes are never fall-through code).
+* `02 IF_JUMP`: `T80 T40 M J`, compares operand 0 with operand 1; condition = `M & 0xF` (0 `==`, 1 `!=`, 2 `>`, 3 `<`, 4 `>=`, 5 `<=`, 6 `&` non-zero; data uses only 0-6; 7-A: `!=`, `|`, `&`, `~a&b`). **Execution falls through (pc += 8) when the condition is TRUE and jumps to J when it is FALSE.** So `IF_JUMP a == b, J` reads as "if (a == b) { next instructions } else goto J". Mode high nibble in the data: 0x4 (second operand literal, 94 %), 0x0 (both variables), 0xC (both literal); 0x8 never occurs.
+* Other conditional jumps (operand-then-`J`): 50/51 key tests (jump when `(mask & keys) == 0`), 55/56 (jump when the entity is NOT inside the region), 69/6A/6B/CD/CE scenario flag (69 jumps when SCENARIO >= U, 6A when <= U, 6B when != U, CD when > U, CE when < U), 73 bit clear, 79/7A/D8 (jump when NOT near / state differs), 95/E5/E6/E8 (jump when a predicate on U is non-zero), 9A/B3/E9 character/state tests (E9 jumps when the "frame" bit is CLEAR), 94 not in party, B4 item missing, BC money below a threshold. Every `J` is an offset from `code_base`.
+* `05 CALL J` pushes a return address (stack of exactly 4 entries per entity; a fifth CALL stalls the script forever), `0D RETURN` pops (RETURN at depth 0 behaves like STOP). Subroutines are ordinary code reached by CALL (11,443 call sites).
+* **Start/wait pairs.** Many long-running commands come as two instructions with the same opcode: a *start* form with mode byte 0 and operands, and a *wait* form with mode byte 1 and no operands, e.g. `3F 00 x y z` ... `3F 01` (walk, then wait for arrival), `42/43`, `45`, `5D`, `5E`, `61`, `B9`, `BF`, `C1`, `DD`. The pair is two separate instructions.
+* A script is "done" when it hits a terminator; entity UPDATE scripts are loops and never end by themselves. Several "terminators" are parking loops: `3B`, `0B`, `03` do not advance pc and keep re-running (section 10.5).
+* **Companion skipping.** When a start form cannot run because its entity operand is "none", the engine skips the start *and* the wait-form that normally follows (44/45/B8/B9 advance 6/8 instead of 3/5, BF 5 instead of 3, C1 7 instead of 5, 5D with t=0 advances 11, 5E 6, 61 7, D9 6 so it jumps over the trailing DA, D2 4 so it jumps over the next 3-byte instruction, E4 8). The table lengths are the decode lengths of the start form alone.
+* Dialogue is read through `E0/E3/E4` (message index `w` into the room's subfile 008; all 54,374 uses are in range) and `E1 MULTI_CHOICE` (result in variable 0x04).
+
+## 6. Opcode table
+
+Columns: **Len** = total bytes including the opcode (and sub-opcode); several lengths mean the layout is chosen by the first operand byte (`by b1&MASK {value: layout; ...; default}`); **Uses** = number of instructions in the 566 rooms (reachable code only). Rows `FE xx` are the extended page: byte 0 = `FE`, byte 1 = sub-opcode. "Yield" means the entity ends its turn for the tick (section 10.4). "Gate" means the system-busy test (section 10.6): while a transition, load, fade or similar is running, the op yields without advancing. Entity flag bits (`EF.n`, `ES.n`, `EA.n`) and global flag bits (`GF.n`) are listed in section 8; entity fields are named in section 10.2. Conventions: a walk "target" is written `x z y` order in the operands as `S80 S40 S20`: X, Z, Y.
+
+### 6.1 Flow, scripts, set-up (00-0F)
+
+| Op | Len | Operands | Name | Uses | Effect |
+|---|---|---|---|---|---|
+| 00 | 1 | `-` | STOP | 47339 | Ends this script instance; the dispatcher releases the slot record itself. A STOP ending the UPDATE script (slot 1) is not final: next tick every record is idle and script 1 restarts from its first byte. |
+| 01 | 3 | `J` | JUMP | 92965 | pc = J. No yield. |
+| 02 | 8 | `T80 T40 M J` | IF_JUMP | 94498 | x = operand 0, y = operand 1. Mode byte M high nibble: 0x00 var/var, 0x40 var/literal, 0x80 literal/var, 0xC0 literal/literal. cond = M&0xF: 0 x==y, 1 x!=y, 2 x>y, 3 x<y, 4 x>=y, 5 x<=y, 6 (x&y)!=0, 7 x!=y, 8 (x\|y)!=0, 9 (x&y)!=0, A (~x&y)!=0. **TRUE: fall through (pc += 8). FALSE: pc = J.** Literals are zero-extended when the variable operand's signedness bit says unsigned, else sign-extended. |
+| 03 | 1 | `-` | STOP_RESET_UPDATE | 45 | Terminates this script and re-arms the entity: every record in the default UPDATE class (7) is reset to idle, the caller's own record goes idle, yield. pc is not advanced. Net effect: the entity's UPDATE script restarts from the top next tick. |
+| 04 | 1 | `-` | KILL_ALL_SCRIPTS | 53 | Hard reset of this entity's script machine: all 8 slot records idle, call depth 0, input lock cleared, pc 0, yield. Next tick the scheduler restarts script 1. (It also touches a flag on entity 8; purpose unknown.) |
+| 05 | 3 | `J` | CALL | 11443 | Pushes pc+3 on the entity's 4-entry call stack and jumps to J. With the stack full the handler yields forever (permanent stall). |
+| 06 | 1 | `-` | NOP06 | 0 | pc += 1; no other effect. |
+| 07 | 3 | `c d` | RUN_SCRIPT_ASYNC | 3591 | Starts script id (d & 0x1F) of entity c with priority class (d >> 5). Gate: system busy -> yield without advancing. "None" target, or an inactive target (`EF.4`): nothing is spawned, pc += 3. If the id is already live in any of the target's 8 records, the request is ignored (dedupe). Otherwise the first idle, unheld record receives {pc = scriptPtr[c][id], class, id}. No free record: retried next tick. pc += 3, no yield. |
+| 08 | 3 | `c d` | RUN_SCRIPT_AND_WAIT | 263 | Spawns as 07, holds the child record, then yields until the child **is the target's running record or is idle**, i.e. until it has started (not until it ends); then releases the hold and pc += 3. Dedupe, none-target and inactive-target paths advance immediately. tel_b11i ent 4 runs `08 ent5, 0x64` on a script that loops while `$room[6] == 1` and clears it itself after its dialogue: waiting for the child to end would deadlock there. |
+| 09 | 3 | `c d` | RUN_SCRIPT_BLOCKING | 4493 | Spawns as 07, holds the record, waits until the target's current record is the child or it is idle, then waits until the child's record is idle, then releases the hold and pc += 3. A dedupe hit advances immediately. A target made inactive after the wait began releases the hold and advances. |
+| 0A | 1 | `-` | UPDATE_CHARACTER | 1424 | Per-tick entity update: integrates position, advances animation, and runs the party-follow logic. pc += 1, no yield (the usual idiom is 0A, WAIT_FRAME, JUMP back). The follower branch runs for ANY entity that executes 0A or 0B with `EF.0` clear, not only the party: a non-party NPC takes follower-ring index 1 and follows follower 1's trail like a third follower (rule 1 away from the leader, stand within 200 of follower 1, else replay ring 1). Shipped users: crn_b02i e13, fin_30 e5, opn_a01i e0, wld_a00/a01/a04/b00/b01/b02/b04 e4. There is no other trail mechanism for NPC groups; groups that walk together use the 44 / 45 / B8 / B9 chases or shared WALK_TO scripts. OpenCross: `FieldWorld::step_followers` runs the NPC pass. |
+| 0B | 1 | `-` | UPDATE_CHARACTER_STOP | 243 | The 0A body, then pc is restored (net advance 0) and yield: the entity is parked on this opcode and updated every tick until a lower-class script preempts it or something rewrites pc. |
+| 0C | 1 | `-` | NOP0C | 0 | Same as 06. |
+| 0D | 1 | `-` | RETURN | 4175 | Depth 0: acts as STOP (record idle, yield). Otherwise pops the call stack into pc. No yield. |
+| 0E | 3 | `c b` | SETUP_PC | 1670 | Marks this entity as a playable-character slot. c is a **character reference** (resolver of section 3's second list): **FD = the character in party slot 0 (the leader), FE = slot 1, FF = slot 2** (the reverse of entity references, where FF = slot 0's entity), else a character id. The entity takes the first party slot holding that character (slot 0 also becomes the controlled entity); a character not in the party makes the entity inactive and hidden (`EF.4`, `EF.5`). The leader is placed at the entrance record selected by ROOM_PARAM. b is unused (always 0x80). `0E FD` is the leader (opn_a01i / dem_01 entity 1, whose UPDATE does `5F FB`). |
+| 0F | 3 | `U` | SETUP_NPC | 2689 | Loads NPC model number U (room model U, section 11.1) for this entity. A model without an animation-sequence table gets stand slot 0 and current animation 0; the stand clip is started at once (no blend). |
+
+### 6.2 Variables and arithmetic (10-24)
+
+All take the destination variable `V` first; the signedness mask (section 4) decides whether reads are signed. No yield.
+
+| Op | Len | Operands | Name | Uses | Effect |
+|---|---|---|---|---|---|
+| 10 | 6 | `V S40 M` | SET | 102960 | var[V] = value. M&0x40: signed literal at +3, else variable id at +3. |
+| 11 | 3 | `V` | SET_1 | 6535 | var = 1. |
+| 12 | 3 | `V` | SET_0 | 9127 | var = 0. |
+| 13 | 6 | `V S40 M` | ADD | 3802 | var += value. |
+| 14 | 6 | `V S40 M` | SUB | 2031 | var -= value. |
+| 15 | 6 | `V S40 M` | SET_BIT | 591 | var \|= 1 << (S & 31). |
+| 16 | 6 | `V S40 M` | CLEAR_BIT | 146 | var &= ~(1 << (S & 31)). |
+| 17 | 3 | `V` | INC | 1363 | var++. |
+| 18 | 3 | `V` | DEC | 192 | var--. |
+| 19 | 6 | `V S40 M` | AND | 176 | var &= S. |
+| 1A | 6 | `V S40 M` | OR | 167 | var \|= S (full-word OR). |
+| 1B | 6 | `V S40 M` | XOR | 0 | var ^= S. |
+| 1C | 5 | `V U` | SHL | 0 | var <<= (U & 0x1F). |
+| 1D | 5 | `V U` | SHR | 1 | var >>= (U & 0x1F); arithmetic when the variable is read as signed. |
+| 1E | 3 | `V` | RAND | 1 | var = rand(). |
+| 1F | 5 | `V U` | RAND_MOD | 538 | var = rand() % (U + 1): U is the inclusive maximum (`RAND_MOD r,#1` is a coin flip; wander loops `while r < 18: RAND_MOD r,#18` only end on 18). |
+| 20 | 6 | `V S40 M` | MUL | 1099 | var *= value. |
+| 21 | 6 | `V S40 M` | DIV | 550 | var /= value. |
+| 22 | 8 | `V S40 S20 M` | SIN | 325 | var = (sin(S40) * S20) >> 12 (angles 4096 = full turn, 4096 = 1.0). |
+| 23 | 8 | `V S40 S20 M` | COS | 54 | var = (cos(S40) * S20) >> 12. |
+| 24 | 8 | `V S40 S20 M` | ATAN2 | 0 | var = atan2(S40, S20), 12-bit angle. |
+
+### 6.3 Position, facing, controls, waits (25-3E)
+
+| Op | Len | Operands | Name | Uses | Effect |
+|---|---|---|---|---|---|
+| 25 | 8 | `S80 S40 M U` | SET_POSITION_XZ | 5366 | Sets X = S80, Z = S40 (stored 16.16), clears `EF.6` (free height), and places the entity on floor level U (also sets the moving flag `ES.16`). **U is the floor level**: Y = height of the U-th walk-mesh triangle under (x, z), hits sorted by Y descending (lowest floor first); U past the count = 0; no hit sets `EF.18` (no floor). Same rule as the entrance records' fourth word. |
+| 26 | 8 | `S80 S40 S20 M` | SET_POSITION_XYZ | 2279 | X = S80, Z = S40, Y = S20 (16.16); sets `EF.6` (free height); re-places on the mesh at level 0 unless fast mode. |
+| 27 | 3 | `U` | SET_SELF_AXIS_0 | 264 | Own pitch angle value (axis 0) = U. |
+| 28 | 3 | `U` | SET_SELF_AXIS_1 | 197 | Own model yaw (axis 1) = U. Axes 0, 1, 2 go to the model root as a rotation matrix inside the entity's facing yaw; unused while `ES.5` (op AD) is set. |
+| 29 | 3 | `U` | SET_SELF_AXIS_2 | 410 | Own roll angle value (axis 2) = U. |
+| 2A | 4 | `S80 M` | SET_SELF_WORD_B8 | 439 | Stores S as a 32-bit value: the entity's **ordering-table bias** (the "layer word"). It is added to the slot of every face of the entity's model (camera z >> 4 + bias) when it is filed against the background layers, and to the slot of its floor shadow; a larger value files the actor farther. Default 0. |
+| 2B | 2 | `b` | ENABLE_CONTROLS | 6102 | b != 0: clears the input-lock bit (`ES.0`) on every entity; b == 0: only on the current entity. |
+| 2C | 1 | `-` | DISABLE_CONTROLS | 4220 | Sets `ES.0` (input lock) on the current entity, sets `GF.1`, and adds 0x40 to the tick budget. 2B does not undo `GF.1`. |
+| 2D | 3 | `U` | WAIT | 14817 | Per-record counter: if 0 it is loaded from U, else decremented; pc advances only when it reaches 0; yields every tick. WAIT n takes n+1 ticks, WAIT 0 one tick. |
+| 2E | 2 | `c` | TURN_TO_ENTITY | 1888 | Facing target = bearing from this entity to entity c (`-atan2(dz, dx) & 0xFFF`, bit 15 set = turn requested); sets the scripted-turn flag `ES.14` unless fast mode. None = skip. Not a wait. |
+| 2F | 2 | `b` | SET_ROTATION_SIMPLE | 137 | Facing target = (b << 9) & 0xFFF (only the low 3 bits of b matter; 4096 = full turn), bit 15 set; `ES.14` unless fast mode. |
+| 30 | 3 | `U` | SET_ROTATION | 6577 | Facing target = U & 0xFFF, bit 15 set; `ES.14` unless fast mode. |
+| 31 | 4 | `c U` | TURN_TO_DIRECTION | 583 | As 30 on entity c (none = skip). |
+| 32 | 4 | `c U` | ADJUST_ROTATION | 55 | Operand 1 is a sign flag, not an entity: d = U (if d > 0x7FF then d -= 2, a quirk); facing target += d when the flag is 0, -= d otherwise; masked & 0xFFF with bit 15; `ES.14` unless fast mode. |
+| 33 | 3 | `c c` | TURN_TO_ENTITY_2 | 1686 | Entity A (operand 1) turns toward entity B (operand 2): A's facing target = `-atan2(dz, dx) & 0xFFF \| 0x8000`; `ES.14` unless fast mode. A none = skip; B is not checked. |
+| 34 | 2 | `b` | TOGGLE_COLLISION | 4137 | b == 0: sets `ES.29` and clears `EF.5`; b != 0: sets `EF.5` (hidden). Acts on self. |
+| 35 | 3 | `b c` | SET_HIDDEN | 1343 | As 34 on entity c (none = no-op): b == 0 clears `EF.5` and sets `ES.29`; b != 0 sets `EF.5`. |
+| 36 | 3 | `b c` | SET_VISIBLE | 7363 | Entity c (none = no-op). b == 0 sets `EF.4` (inactive: no script, animation update, collision or talk; the model is still drawn - the draw masks are `EF.5`, `EF.14`, `EF.15`). b != 0 clears it and, unless `EF.14`, re-submits the stand clip (current animation = stand slot, animation-done cleared, 8-tick fade), so a pose set by 3C / A9 before the show ends there. |
+| 37 | 2 | `b` | SET_FLAG_02 | 1729 | b == 0 sets `EF.1`, else clears it. No consumer anywhere, on the PS1 too: the bit is stored only. |
+| 38 | 2 | `b` | SET_NO_COLLISION_TRIGGER | 112 | b == 0 sets `EF.2` (no ON_COLLISION), else clears it. |
+| 39 | 2 | `b` | SET_NOT_TALKABLE | 51 | b == 0 sets `EF.3` (no ON_ACTION), else clears it. |
+| 3A | 1 | `-` | WAIT_FRAME | 7483 | Sets the "standing" marker on the entity's heading word, zeroes its per-tick movement deltas, pc += 1 and yield. The universal one-tick wait. |
+| 3B | 1 | `-` | STOP_EXEC | 7305 | Same marking as 3A but pc is NOT advanced and it yields: the script is parked on this opcode (the idle state of NPCs). The record stays in class 7, so a lower-class script (ON_ACTION 3, ON_COLLISION 4) can preempt it; when that ends the parked script resumes. Only an external writer (03 / 04 from another script, entity reset) removes it. A parked ON_ACTION record (door scripts: open the door, `SETUP_FLAG`, `3B`; 45 rooms, e.g. jac_b22i ents 13-15) stays class 3 forever, so the door cannot be used twice and the entity's UPDATE no longer runs, but it must not hold the player: `ES.7` is cleared when the id-2 record is first selected to run. OpenCross: `PARK` clears the marker for an id-2 record. |
+| 3C | 3 | `U` | SET_ANIMATION | 7028 | Yields while the room-entry window is open (the first two frames after a load). U == 0xFF re-submits the current clip; else current animation = U. Unless `EF.14`: the model's animation-done variable 0 and `EA.8` (anim-done) are cleared; the engine then starts the id's animation sequence when the model has one (field characters: the sequence starts the clip, its loop flag and sets variable 0), else the clip with a 0x20 cross-fade. U >= 0x80 = clip U-0x80 of the second motion table (the LOAD_ANIMATION pack). |
+| 3D | 4 | `b U` | SET_WALK_ANIMATION | 3238 | Stores U as the animation id for clip slot b (0..8; else no store): 0 stand, 1 walk, 2 run, 3 fall (used by 5C), 4..8 others. No yield. |
+| 3E | 3 | `U` | SKIP_FWD | 0 | Computed forward skip: pc += 3 + 3*U (over U three-byte instructions). Never used in the data. |
+
+### 6.4 Walking, moving, queries (3F-5C)
+
+**Movement belongs to the wait form.** The walk and move start forms only store the target and the saved facing; the velocity (42 / 43 / 46) or position step (3F / 40 / 44 / 45 / B8 / B9 / BA, 5B / 5C) is produced by the wait form's handler on each tick it runs. Because only the lowest-class record of an entity runs (section 10.4), a walk is frozen while a trigger script preempts it (ON_COLLISION class 4 or ON_ACTION class 3 over the UPDATE's class 7) and resumes afterwards; a record that is released (STOP, 03, 04, reuse by another id) ends it. Example, tel_b23e entity 15 (shrine guard): UPDATE `42 00 -1970, 2872` / `42 01` / `42 00 -2130, 7500` / `42 01`, `34 01`, `36 00`; ON_COLLISION `2C`, `3C 1`, `2E FF`, `WAIT 15`, `33 FF/FE/FD, FB`, `E0 57`, `E2`, `8D 01`, `71 #5197`, `2B 00`: the guard stops in front of the party for "What business brings you here?" and walks on to the town gate afterwards.
+
+Start forms of 3F / 40 / 42 / 43 / 44 / 45 / 46 / B8 / B9 set the facing target to the bearing (bit 15 set) only when the slot flag of op 47 is 0 and the entity's turn rate is not 0, and save the facing in the slot; each wait-form tick restores it (44 / 45 re-aim each tick). Wait forms of 3F / 40 / 42 / 43 test arrival first (3F / 40: `dist*16 <= S`; 42 / 43: `dist*16 <= 2S`), then snap, set the stand clip and advance without a yield in that tick; while moving they use the walk clip slot, never the run slot. 42 / 43 / 46 set a velocity and are collision-constrained; 3F / 40 / 44 / 45 write the position. OpenCross: `FieldWorld::start_motion` sets the facing; `FieldHost::motion_wait` runs the wait forms.
+
+| Op | Len | Operands | Name | Uses | Effect |
+|---|---|---|---|---|---|
+| 3F | 9/2 | `by b1&FF {0:b S80 S40 S20 M; b}` | WALK_TO | 4266 | Walk to (x, z, y). Start form (9 bytes): b = 0 absolute, 2 relative to the current position. Stores the target, sets the moving flag (`ES.16`) and `EF.6`, pc += 9, no yield. Wait form (`3F 01`, 2 bytes): steps toward the target each tick (16.16 position), yields until arrival, then pc += 2. |
+| 40 | 11/2 | `by b1&FF {0:b S80 S40 S20 M U; b}` | WALK_TO_2 | 374 | As 3F plus U = slot timer (stored by the start form, counted down by the wait form): the wait steps while far and ends (`pc += 2`, stand clip, no snap) on the step after the counter reached 0, i.e. U + 1 steps in all (3F stores no timer and runs until arrival). Data: U = 120 / 240 (49 + 46 uses), 1 (23 uses in 11 rooms: des_a03f's `40 .. #1` creeps two steps per run), 10, 180, 3, 360, 60, 300, 40. |
+| 41 | 3 | `U` | SET_MOVE_SPEED | 2660 | Entity movement speed (units per tick, script walks). |
+| 42 | 2/9 | `by b1&FF {1:b; b S80 S40 M U}` | WALK_TO_XZ | 4076 | Start form (9 bytes): writes 0xFFFF to the slot timer (no timeout) and stores the XZ target; b == 2 makes it relative (adds the entity position, like 43). Wait form (`42 01`): sets the moving flags, walks toward the stored target each tick with a velocity, yields; on arrival pc += 2. 42 has no timeout, so a walker pushing against a wall waits for ever. |
+| 43 | 2/11 | `by b1&FF {1:b; b S80 S40 M U U}` | WALK_TO_XZ_2 | 1588 | Start form (11 bytes), b != 1: slot timer = U@7, XZ target from S@2 / S@4 (M@6 bits 0x80 / 0x40; b == 2 adds the own position), pc += 11, no yield. Wait form (`43 01`): walks toward the stored target each tick (yield); pc += 2 on arrival (snap) or when the timer is 0 while still far. U@9 is not read. |
+| 44 | 3 | `b c` | WALK_FOLLOW_ENT | 124 | Slot timer = -1 (no timeout); chase entity c. Entity none: pc += 3, and +3 more if b != 1. Found and b == 1: follow the entity's position each tick (yield), pc += 3 on arrival. Found and b != 1: pc += 3, no yield. |
+| 45 | 5/3 | `by b1&FF {0:b c U; b c}` | WALK_TO_ENT_TIMED | 272 | b != 1: slot timer = U@3 (no movement yet); found -> pc += 5, no yield; none -> pc += 8. b == 1: follow entity c using the existing timer, yield; pc += 3 on arrival or timer == 0 while far. |
+| 46 | 2/6 | `by b1&FF {1:b; b U U}` | MOVE | 34 | b != 1 (start): slot counter N = U@4, heading U@2 -> target XZ = position + `(-cos, sin)(heading) * S * N / 8` (twice the distance N ticks at S/16 cover) stored in the slot; saves the facing; pc += 6, no yield. Wait form: steps toward the target with a velocity, yields while moving; the counter is tested before it is decremented and the wait steps first, so the walk takes N + 1 steps; ends once within `S / 8` of the target too; pc += 2. OpenCross ends it after N + 1 steps (`m.frames = N + 1`). |
+| 47 | 2 | `b` | SET_SLOT_FLAG | 1171 | Writes the current record's "no auto-turn" flag = b. While it is 0 and the entity's turn rate is not 0, walk start forms turn the entity toward the target. The flag lives in the record array and **survives the record being reused** by the next RUN_SCRIPT / UPDATE (only op 47 rewrites it). opn_a01i's door leaves set it to 1 in INIT so their sliding scripts (scripts 4 / 5, which do not repeat it) keep them facing the camera. |
+| 48 | 8 | `c V V V` | GET_POSITION | 1039 | var0 = X, var1 = **Z**, var2 = **Y** of entity c (the same order as the engine-published variables 0x12 / 0x14 / 0x16 and the walk operands `x z y`). |
+| 49 | 3 | `V` | GET_OWN_ROTATION | 87 | var = own current facing target & 0xFFF. |
+| 4A | 4 | `c V` | GET_ROTATION | 631 | var = entity c's facing target & 0xFFF (12-bit angle); 0 when the entity is not found. |
+| 4B | 3 | `V` | DEBUG | 0 | Prints the variable value (debug build only). No state change. |
+| 4C | 12 | `V S40 S20 S10 S08 M` | GET_DISTANCE_2D | 6 | var = 2D magnitude of (S10 - S40, S08 - S20); mode bits 0x40 / 0x20 / 0x10 / 0x08. |
+| 4D | 16 | `V S40 S20 S10 S08 S04 S02 M` | GET_DISTANCE_3D | 2 | var = 3-axis magnitude of (S08 - S40, S02 - S10, S04 - S20) (axis labels assumed). |
+| 4E | 5 | `V c c` | ENTITY_DISTANCE | 175 | var = distance between the two entities. |
+| 4F | 5 | `V c c` | GET_DISTANCE_3D_ENTITIES | 19 | var = 3-axis magnitude of the position deltas (x, y, z) between the two entities. |
+| 50 | 5 | `w J` | JUMP_IF_NOT_KEY | 1209 | If `(mask & held-buttons) == 0`, pc = J, else pc += 5. Held-button word = the field pad word (after the pad mask of FE 77). No yield. |
+| 51 | 5 | `w J` | JUMP_IF_NOT_KEY_LATCH | 14 | As 50 against the button latch cleared by 54. |
+| 54 | 1 | `-` | CLEAR_KEY_LATCH | 15 | Clears the latch read by 51. |
+| 55 | 4 | `b J` | REGION_TEST_JUMP | 95 | Region idx = b selects a four-vertex quad record in the room. Tests the **controlled entity's** position (the player entity set by FE 4C; not the executing entity: zone-watcher entities sit at the origin) against the quad (four edge sign tests). Inside: remember idx, pc += 4. Outside: budget +1, pc = J. |
+| 56 | 4 | `b J` | REGION_BAND_TEST_JUMP | 148 | First a height band on the controlled entity: the record's second short must satisfy `entY - height < recY < entY`. If the band passes, as 55; if it fails: budget +1, pc = J. |
+| 59 | 1 | `-` | TICK_BONUS | 6131 | pc += 1 and raises the per-tick instruction budget by 0x40. No yield. |
+| 5A | 5 | `U U` | SET_NEXT_ROOM | 6787 | Locks input (`ES.0`, `GF.1`), waits for the system gate (yield, no advance); then variable 0x08 (PREVIOUS_MAP_ID) = the old room id, the room-change request is raised, the room register = U@1 (next room id), ROOM_PARAM (variable 0x02 on arrival) = byte@3 (entrance index), pc += 5. The switch itself happens after the script phase of the tick. The room id is the lang.dat room id (252 = wld_a01, 37 = alu_a06f, 33 = alu_a04f, 29 = alu_a02i, 45 = alu_a10i, 47 = alu_a11i, 39 = alu_a07i). Exit scripts are typically the ON_COLLISION slot of a box entity: `2C`, `5A`, `3B`. OpenCross: the jump is processed after the VM tick (fade out, load, fade in); the VM is never re-entered from the host. |
+| 5B | 2/11 | `by b1&03 {3:b; b S80 S40 S20 S10 M}` | MOVE_TWEEN | 634 | Modes 0-2 (11 bytes): target X = S80, Z = S40, Y = S20, duration S10 (mode 1: XZ distance / S10; mode 2: a computed value); stores the frame count and per-frame steps, sets the facing, `EF.6`; pc += 11 and yield. Mode 3 (`2` bytes, must follow): yields each frame while the frame counter is below the count, then snaps to the previous 5B operands (re-read from pc-9 / -7 / -5) and pc += 2. |
+| 5C | 2/11 | `by b1&03 {3:b; b S80 S40 S20 M U}` | JUMP_MOVE | 600 | A ballistic hop. Start (modes 0-2, 11 bytes): n = ticks (mode 0: S20; mode 1: XZ distance / S20; mode 2: S20 = apex height h < 0, n = isqrt(-h) + isqrt(-h - (landing - y)), absolute); n == 0 -> 1. Landing Y = floor at the target on level U@9 (as the entrance records' fourth word). Vertical velocity = -n + (landing - y)/n (16.16); horizontal step = (target - pos)/(n+1). Faces the target (`-ratan2(dz,dx) \| 0x8000`) when the op-47 flag is 0 and the turn rate is not 0. pc += 11 and yield. Wait form (mode 3): per tick while the frame counter < n: position += (step, vy, step), **vy += 2.0 (gravity)**; **once vy > 0 and the current animation differs from the fall clip (slot 3, default 0): current animation = that clip and `EA.8` is set** (ends a WAIT_ANIMATION). Then it snaps x / z to the start-form operands and y to the floor, pc += 2. Yields every tick. |
+
+### 6.5 Camera, dialogue window, screen (5D-68)
+
+| Op | Len | Operands | Name | Uses | Effect |
+|---|---|---|---|---|---|
+| 5D | 9/2 | `by b1&FF {0:b S80 S40 S20 M; b}` | SET_CAMERA_POSITION | 1062 | Sets `GF.0`. Start (mode 0, 9 bytes): scroll target x = S80, y = S40, t = S20 frames. t == 0 snaps at once; else per-frame step from the current position; t == 0x7FFF means duration = 2D distance. Wait form (mode != 0): while frames remain it steps and yields without advancing; then snaps to the target re-read from pc-7 / -5 and pc += 2. With t == 0 the start form also skips the wait form behind it (pc += 11). The target is clamped to the pan limits unless `GF.8`. Afterwards the camera stays where it is (no follow) until a 5E or 61 hands it back. |
+| 5E | 4/2 | `by b1&FF {0:b U; b}` | SET_CAMERA_TO_ACTOR | 596 | Sets `GF.0`. Mode 0 (4 bytes): tweens the scroll to the player's follow point (centre = (160 - x, 120 - y) screen offset of the controlled entity) over U frames; U == 0 clears `GF.0`, snaps, pc += 6; else sets the step and pc += 4. Mode != 0 (wait form): when the frame count is exhausted clears `GF.0`, snaps, pc += 2; else steps. All paths yield. After this the camera resumes following. |
+| 5F | 2 | `c` | SET_CONTROLLED_ENTITY | 324 | The controlled (player) entity override = entity c (none = 0xFF = no override). |
+| 60 | 1 | `-` | CLEAR_CONTROLLED_ENTITY | 240 | Controlled-entity override = none. With the controls locked this also stops the party followers (the lift scene: Serge is still in the lift when Kid and the third member have run out; the follower ring also grows when a script moves the leader, so followers resumed afterwards replay the real path). |
+| 61 | 5/2 | `by b1&FF {0:b c U; 1:b; b}` | CAMERA_FOLLOW | 174 | Sets `GF.0`. Mode 0: entity c's point, target = (160 - x, 120 - y), clamped to the room's pan limits unless `GF.8`; U frames: 0 snaps, 0x7FFF = duration from distance, else sets the step and pc += 5. Mode != 0 (wait form): while frames remain the camera steps, yielding without advancing; when exhausted it zeroes the steps and pc += 2. Camera keeps following the entity afterwards. Entity none, or U == 0 (the camera snaps): pc += 7, skipping the wait form. |
+| 62 | 11 | `U U U U U` | SETUP_DIALOG_WINDOW | 14048 | Window parameters for the next dialogue (x, y, w, h = four U, then flags U@9 as a 32-bit word). pc += 11. No gate, no yield. Flag `0x10` makes it a frameless *label* (the world-map location names use 56 = 0x38); a label is non-modal (the party keeps control and the script goes on) and stays until `9D` (called by the marker entity itself when the party walks out of its radius) or its `{wend(255)}` auto-close (255 frames at 30 Hz). The parameters belong to the executing entity and persist until it sets them again; the other flag bits are in section 9. |
+| 63 | 3 | `U` | SET_CONTROL_YAW | 24 | Control yaw = U & 0xFFF (0 at every room load; Arni sets 4000): added to the heading the pad produces (and to the portrait-side test of dialogue), so the pad directions are relative to the screen. The tel_a03f / tel_b03f UPDATE scripts use bands of it together with D0. |
+| 64 | 4 | `S80 M` | SET_CAMERA_Y_OFFSET | 163 | Camera y offset = S: added to the y of the entity the camera aims at before it is projected into the follow target. |
+| 65 | 3 | `w` | STORE_GLOBAL_TO_VAR | 0 | var[w] = a global (source unnamed). Never used; OpenCross has no source and stores 0. |
+| 66 | 5 | `b S80 M` | SET_WATER_LEVEL | 188 | water_level[b] = S (signed 16 bit) in a 256-entry table (entries 0-2 default 10, zero-filled beyond; reset at room load). Entry 0 / 1 / 2 is the level used for walk-mesh flag `0x20000` / `0x40000` / both (`room.md` section 6). |
+| 67 | 3 | `w` | SET_SHADOW_COLOR | 469 | w = offset of a 16-entry table in the script buffer (4 bytes per entry: R G B and a fourth byte that is not read); the 16 RGB triplets become the room's zone colours (actor lighting by walk-mesh zone, `room.md` section 6). |
+| 68 | 11 | `U U U U U` | SET_SCREEN_FOG | 3626 | `abr, r, g, b, frames`: slot 1 of the two full-screen flat-colour quads: colour 0..255 interpolated linearly from its current value to (r, g, b) over `frames` ticks (0 becomes 1), with PS1 semi-transparency mode `abr` (2 = subtract in every shipped room: values like `2, 190, 90, 10, 1` are an orange-green removal, not a multiply). OpenCross: `FieldWorld::fog_`. |
+
+### 6.6 Scenario, arrays, bits, flag bytes (69-78)
+
+| Op | Len | Operands | Name | Uses | Effect |
+|---|---|---|---|---|---|
+| 69 | 5 | `U J` | JUMP_IF_SCENARIO_GE | 434 | S = variable 0x00. Falls through when S < U, else pc = J: jumps when SCENARIO >= U. |
+| 6A | 5 | `U J` | JUMP_IF_SCENARIO_LE | 202 | Falls through when U < S, else pc = J: jumps when SCENARIO <= U. |
+| 6B | 5 | `U J` | JUMP_IF_SCENARIO_NE | 151 | Falls through when S == U, else pc = J: jumps when SCENARIO != U. |
+| 6C | 3 | `U` | SET_SCENARIO | 187 | Variable 0x00 = U; adds 0x20 to the tick budget. |
+| 6D | 3 | `V` | GET_SCENARIO | 60 | var = SCENARIO_FLAG. |
+| 6E | 5 | `V V` | SWAP | 0 | Swaps two variables. |
+| 6F | 7 | `w V U` | ARRAY8_GET | 8 | var[V] = u8 at script buffer offset `(w + U) & 0xFFFF` (offset from `code_base`). |
+| 70 | 8 | `w V U b` | ARRAY16_GET | 67 | Mode b == 0: var = zero-extended u16 at `(w + U) & 0xFFFF`. b != 0: two bytes combined and sign-extended to s16. |
+| 71 | 4 | `S80 M` | SET_VAR_BIT | 759 | Operand n (literal or variable per M) = (variable byte-offset id << 4) \| bit. var[n>>4] \|= 1 << (n & 0xF). |
+| 72 | 4 | `S80 M` | CLEAR_VAR_BIT | 152 | var[n>>4] &= ~(1 << (n & 0xF)). |
+| 73 | 6 | `S80 M J` | JUMP_IF_BIT_CLEAR | 1893 | Bit clear: pc = J. Bit set: pc += 6. |
+| 74 | 5 | `S80 M c` | SET_TARGET_10E | 40 | Entity c's animation rate (the "10E" value, signed 16 bit, 4096 = normal speed; 0 = normal; negative plays the clip backwards) = S. |
+| 75 | 5 | `b b U` | SETUP_FLAG | 1417 | Writes U into byte lane b2 (0..3; >3 no-op) of 32-bit word b1 of the **walk-mesh attribute flag table**. U is not masked: U > 0xFF bleeds into neighbouring lanes. |
+| 76 | 5 | `b b U` | FLAG_BYTE_OR | 0 | Byte (b1, b2) of the flag table \|= U (unmasked). |
+| 77 | 5 | `b b w` | FLAG_BYTE_GET | 0 | var[w] = byte (b1, b2) of the flag table (w is a raw variable id). |
+| 78 | 5 | `b b U` | FLAG_BYTE_AND | 0 | Byte (b1, b2) &= U. |
+
+The flag table behind 75-78 is the walk mesh's attribute -> flag table (room subfile 6, 0x400 bytes copied at room load); a move is blocked by `table[tri.attr] & 0x600000 / 0x800000`. It is room state, freed with the room, and **not part of the save**. The AF pair table (parallax extras) is room state too. OpenCross: `FieldVM::load(module, flag_table)` seeds it and `FieldWorld::sync_flag_table` feeds it back to `WalkMesh`.
+
+### 6.7 Proximity, party, movies, backgrounds, sound, shape (79-B4)
+
+| Op | Len | Operands | Name | Uses | Effect |
+|---|---|---|---|---|---|
+| 79 | 6 | `c U J` | JUMP_UNLESS_NEAR | 94 | Entity c absent: pc = J. Else 3D distance between this entity and c < U: pc += 6, otherwise pc = J. |
+| 7A | 6 | `c U J` | JUMP_IF_TILE_ATTR_NE | 258 | Entity c absent, or the **attribute of the walk-mesh triangle the entity stands on** (`room.md` section 3.4; -1 off the mesh) != U: pc = J. Else pc += 6. opn_a02i's Cybot 5 (`7A LEADER #79`: idle while the leader stands on attr-79 tiles) relies on it. OpenCross: `FieldWorld::entity_state` returns the entity's triangle attribute (-1 off the mesh). |
+| 7B | 3 | `U` | ADD_TO_PARTY | 791 | Waits (yield, no advance) while a model swap is pending. Character id U (< 0x2C) goes into the first empty party slot (and is marked recruited) and its field model is staged; the following 7C commits it. pc += 3. Refused (id >= 0x2C, already in the party, party full): **pc += 4, skipping the 7C**. |
+| 7C | 1 | `-` | COMMIT_PARTY_MODEL | 791 | Waits for the model load (yield, no advance), then copies the staged model into the slot's buffer and rebuilds the entities of the character. pc += 1. |
+| 7D | 2 | `c` | REMOVE_FROM_PARTY | 257 | c is a **character reference**: FD / FE / FF = the character in slot 0 / 1 / 2, FC = none, else a character id. The first slot holding it is emptied and the slots behind it move up. The party entities stay bound to their slots, so the emptied last slot's entity loses its model and the entities of the slots that moved up show their new occupants (OpenCross rebinds the entities). The party may become empty. The attract demo (dem_01 INIT) does `7D FF, 7D FE, 7D FD` then `7B 00 / 7C, 7B 01 / 7C, 7B 13 / 7C` = Serge, Kid, Glenn; with the title's blank slot (party bytes 0, 0, 0 = three Serges) each removal finds Serge in slot 0. |
+| 7E | 3 | `U` | PLAY_MOVIE | 27 | Gate -> yield. Movie table row = low byte of U (not a movie number, `movies.md` section 1), wipe variant = high byte; marks the movie active; pc += 3. Does not wait; 7F does. |
+| 7F | 1 | `-` | WAIT_MOVIE | 47 | While a movie runs: yield without advancing; else pc += 1. |
+| 80 | 3 | `U` | BG_GROUP_ON | 758 | Shows background tile **group** U (0..0x1F) (a bit of the group mask, cleared at room load). It addresses groups, not layer indexes: indexing by layer made gal_b09i lose a layer at the entrance. OpenCross: `FieldWorld::layer_report` is the sweep check. |
+| 81 | 3 | `U` | BG_GROUP_OFF | 1371 | Hides background tile group U. |
+| 82 | 5 | `b c U` | AXIS_SCALE | 5741 | Entity c (none = skip): for each bit of b (bit 0 x, bit 1 y, bit 2 z) the entity's scale on that axis = U (model units / 4096; Arni NPCs 455 = 0.111, default 0x200 = 0.125). No yield. |
+| 83 | 10 | `S80 S40 S20 S10 M` | SET_CAMERA_LIMITS | 81 | Camera pan limits: x0 = S80, x1 = S40, y0 = S20, y1 = S10. |
+| 84 | 23 | `S80 S40 S20 S10 S08 S04 M U U U b b b` | SETUP_FORMATION | 335 | Waits (yield) while formation mode (`GF.3`) is set; then sets `GF.3` and `GF.4`. Sets per-slot formation targets for the three party slots: slot 0 at (S80, S40), slot 1 at (S20, S10), slot 2 at (S08, S04) (direct, no trig), facing words U@14 / U@16 / U@18, floor levels b@20 / b@21 / b@22; mask M@13. pc += 23, then yield. |
+| 85 | 1 | `-` | GO_TO_FORMATION | 560 | BLOCKING WAIT: each of the three party members walks to its spot (state 0: follow the waypoint ring; 1: direct step by speed toward the target; 2: arrived). Empty slots count as done. When all three are done it clears `GF.3` and pc += 1; otherwise pc is unchanged and it re-runs. **On arrival the member's facing target is set to the slot's facing word** (the facing operands of 84 / the heading of DF), unless the calling record's op-47 flag is set or the member's turn rate is 0: the walk itself only faces along the path, so without this a party that walks to its spots (tel_b19i Van, the Termina tent lady, hid_b04f) ends facing wherever the last step pointed. Always yields. |
+| 86 | 2 | `b` | CAMERA_AUTO_FOLLOW | 1492 | b == 1 disable: moves each party entity toward the camera, counting done slots; all 3 done -> releases (clears the auto-follow flag), pc += 2, yield; else yield without advancing (wait). Other b enable: sets the auto-follow flag, fills the three slot records, pc += 2, yield, no wait. It is the party-follow switch, not the scroll. |
+| 87 | 7 | `U U U` | SET_UNDERWATER_RGB | 2187 | R, G, B (bytes) of the underwater tint (default `20 20 B4`). **Not a screen tint**: entities standing on water-floor triangles (walk-mesh attr 2, 11, 12, 40..71, attribute flag `0x60000`) get this model colour. OpenCross multiplies the actor colour by `rgb / 128` there. |
+| 88 | 3 | `U` | PLAY_SONG | 1072 | BGM U (0xFF = stop the music; 0xFFFF starts nothing). Fast mode (replay): stores the id, pc += 3. Otherwise gate, then starts the song: a non-zero result from the sound system -> yield without advancing (retry); zero -> pc += 3 and the tick budget grows by 1. |
+| 89 | 5 | `U w` | PLAY_SONG_POLL | 0 | As 88 (`w` unread). |
+| 8A | 1 | `-` | WAIT_SONG | 268 | While a song change is still in progress: yield without advancing; else pc += 1. |
+| 8B | 5 | `U U` | SET_RADIUS_HEIGHT | 740 | Collision radius = U@1, height = U@3 (defaults 0x26 / 0x12C): actor-vs-actor and probe tests, talk range. NOT the shadow size (that is 8C). |
+| 8C | 5 | `U U` | RECT_SIZE | 2287 | Half extents of the oriented box (defaults 0x26): the trigger / solid rectangle (with a 0x20 outer margin) AND the shadow quad half-size. A chest with `8B 75` keeps a 38-unit shadow. Box = half-width w along the facing's right axis, h along its forward axis (e.g. entity 19 `RECT_SIZE #300, #100` at rotation 0 spans x +-300, z +-100). Used by the Arni exits. |
+| 8D | 2 | `b` | SET_BOX_FLAGS | 2307 | b == 0: sets `EF.9` (box actor); 1: clears `EF.9`; 2: sets `EF.9` and `EF.12`; 3: clears both; other b: no write. |
+| 8E | 2 | `b` | SET_SOLID | 2225 | b == 0 sets `EF.8` (the entity is a solid for the controlled mover: section 8.2); b != 0 clears it (walk-through). SETUP_NPC, D1 and the party binding set it. Opposite polarity to 93. Clam `opa_a01f` ent 17 uses `8E 00` + `8D 00`: a solid box that must be talkable although the player cannot enter. |
+| 8F | 17 | `U U U U U U U U` | BG_WAVE_ON | 98 | Starts the background wave (ripple) effect. p1 / p2 = x / y amplitude (pixels), p3 / p4 = x phase step per column / y per row (4096 = one turn), p5 / p6 = x / y phase advance per tick, p7 = ticks to ramp from the current values, p8 = ordering-table index of the grid (clamped >= 7). Details: section 6.11. pc += 17. |
+| 90 | 4/2 | `by b1&FF {0:b U; b}` | BG_WAVE_OFF | 320 | b = 0: all six values ramp to 0 over U ticks (the wave switches itself off the tick after the ramp ends, so the last ramp value stays one more tick), pc += 4. 1: wait until the wave is off, then pc += 2. 2: switch off at once, pc += 2. 3: switch off and free the buffers, pc += 2. >= 4: never advances. All paths yield. Implemented (`FieldWorld::bg_wave`). |
+| 91 | 2 | `b` | SET_GF5 | 3 | `GF.5` = b & 1. No consumer. |
+| 92 | 4 | `b U` | BG_GROUP_SEMITRANS | 1 | Makes every tile of background group U semi-transparent (b != 0) or opaque (b == 0). One real use: jac_b35e `92 01 #0` before its 8F (all 651 tiles carry the semi flag and every texel the STP bit, so on a PS1 the backdrop would turn (B + F) / 2). **RDE: no visible effect in either art mode** (its background layer is drawn from records built at load that never see this bit). OpenCross follows RDE: the state is kept (`FieldWorld::bg_group_abe_`), nothing is drawn differently. |
+| 93 | 2 | `b` | SET_NO_SHADOW | 1118 | b != 0 sets `EF.10` (no shadow), b == 0 clears it. OpenCross honours it in `step_shadows`. |
+| 94 | 5 | `U J` | JUMP_IF_NOT_IN_PARTY | 1109 | Jump if character U is not in the party. |
+| 95 | 5 | `U J` | JUMP_IF_NOT_RECRUITED | 95 | Jump when bit U of the recruited-character bitmap is clear (also for U >= 0x2C); else pc += 5. |
+| 96 | 3 | `U` | ADD_TO_ROSTER | 377 | Sets bit U (< 0x2C) of the recruited bitmap. |
+| 97 | 3 | `U` | REMOVE_FROM_ROSTER | 74 | Clears that bit. |
+| 98 | 5 | `V U` | FIND_PARTY_SLOT | 759 | V = the party slot (0..2) holding character id U, or -1. |
+| 99 | 5 | `V U` | GET_PARTY_CHARACTER | 369 | V = character id in party slot U (a slot outside 0..2 reads slot 0). **An empty slot holds 0xFF**, so V = 255, not -1: tel_b02f's painter (ent 7, 049B) tests `99 $room[8], #2` / `$room[8] == #255` to choose message 37 (two names + No thanks, `E1 0x13`) over 38 (three names, `E1 0x14`). |
+| 9A | 5 | `U J` | JUMP_IF_LEADER_IS | 12 | If the executing entity is one of the three party entities and the character in that slot is U: pc = J; otherwise pc += 5. |
+| 9B | 6 | `A4 c` | ATTACH_NAMED_OBJ | 245 | Looks up the type-10 object named A4; if found, attaches it to entity 5's model attach point and activates it. c is never read. |
+| 9C | 5 | `A4` | NAMED_OBJ_MODE0 | 1002 | Named-object control, mode 0 (a different action from E7; "0000" applies it to all objects). |
+| 9D | 2 | `c` | ENTITY_FREE_OBJECT | 275 | Frees the effect object (dialogue label / window) owned by entity c, if any. Not a wait. |
+| 9E | 3 | `U` | SET_DIALOG_FACE | 679 | Portrait for the next dialogue; belongs to the entity that runs it (entity 9 sets it once in INIT and uses it on every later talk). |
+| 9F | 1 | `-` | CLEAR_DIALOG_FACE | 70 | Clears the portrait. |
+| A0 | 2 | `b` | WANDER | 543 | The engine's random walk, one call per tick. A window timer counts down; below 0 a new window of `(rand & 0x1F) + 0x20` ticks starts and `ES.2` = `rand & 1` (walk / stand). `ES.2` clear: heading = facing target (no move), stand clip, done unless b == 1. `ES.2` set (or b == 1): walk clip; 1/256 per tick flips the turn-side bit `ES.3` = `rand & 1`; 1/16 per tick the heading = facing +- 0x80 (the side bit picks, 1 in 8 the other), else heading = facing; the entity walks along the heading at its speed through the wall probe / slide (the facing follows; a slide re-aims it). opn_a02i's Cybots and the Lizard Rock monsters' idle roam this way. pc += 2. OpenCross: `FieldWorld::entity_effect(0xA0)` moves it (`move_on_mesh`); route `opn_wander`. |
+| A1 | 8 | `c U U U` | ENTITY_RGB | 7357 | Entity c's colour tint bytes R, G, B = U@2, U@4, U@6. |
+| A2 | 4 | `c U` | SET_ENTITY_SPEED | 187 | Entity c's speed (the value 10C) = U << 4. (FE 0E / FE 0F store it raw.) |
+| A3 | 7 | `U U U` | BATTLE | 519 | Starts a battle: battle id U@1, field U@3, flags U@5. Locks input, sets `GF.1`; waits (yield) while the system gate fails, a pending request exists, or the battle state is not done; the success tail pc += 7 and yield once. First pass: unless flag 1 the field song is suspended; the encounter effect `enct` plays in the field for 105 ticks while field frames keep running (input locked, other scripts and actors live) from the anchor entity (FE 70, else the leader); no field fade on the way out. Then the field saves and the battle starts (it clears to white); on return the field fades in from black over 0x30 ticks. Battle flags and the result variable: section 6.11. OpenCross: `FieldWorld::request_battle`, `BattleState::Intro`, `BattleView::begin_transition`. |
+| A4 | 3 | `U` | SET_SUBMERGED_OT | 21 | Ordering-table push applied to the faces of submerged models (those with a corner below the water level). Room default = layer 0's z. |
+| A5 | 3 | `U` | SET_SELF_TURN_RATE | 162 | Own turn rate per tick = U (default 0x80; 0 = never turns, and the walk start forms then leave the facing alone). Same field as CF on another entity. |
+| A6 | 2 | `b` | SET_REGISTER_INV | 0 | Writes 1 to a global byte if b == 0, else 0. |
+| A7 | 9 | `U U U U` | GFX_CALL | 0 | Graphics call (unnamed); gated by a global byte, else pc += 9 only. |
+| A8 | 4 | `b U` | FADE | 495 | Screen fade: mode 1 = to black, mode 0 = back to the picture; frames U. Scripts open with `FADE 1,#0` (black at once) and reveal with `FADE 0,#n`. The system gate is false while a fade runs, so 5A, 7E, 88, BF / C1 wait for it. OpenCross shares one fade value and draws A8 as an alpha veil. |
+| A9 | 4 | `c U` | PLAY_ANIMATION | 2954 | Plays animation U on entity c (like 3C; U >= 0x80 = clip U-0x80 of the second motion table). |
+| AA | 5 | `b c U` | SET_AXIS_ROTATION | 3472 | Entity c (none = skip): axis b (0 pitch, 1 yaw, 2 roll; others no-op) = U. As 27 / 28 / 29 on another entity. |
+| AB | 5 | `U U` | GFX_CALL_U32 | 0 | Calls an unnamed graphics routine with a 32-bit value (U@1 low, U@3 high). |
+| AC | 4 | `c U` | MODEL_SEMITRANS | 355 | Entity c (none, or `EF.14`, = no-op). n = U. n == 0: model semi-transparency off. n >= 1: on, with blend mode n - 1 (1 = average, 2 = add, 3 = subtract, 4 = B + F/4). Every primitive of every drawn construct becomes semi-transparent; the model's blend mode REPLACES the constructs' own. As always only texels with the STP bit blend; the rest stay opaque, 0x0000 transparent. Colour unchanged (model colour x construct colour >> 7). Models routed to the environment-map routines do not OR the flag in. pc += 4. OpenCross: `Ent::model_abr` -> `MeshPipeline::DrawParams::model_abr` (every construct in the Semi pass with that blend, its non-STP texels in the Solid pass). |
+| AD | 2 | `b` | SET_OWN_YAW_OFF | 39 | `ES.5` = b & 1 (the model's own axis rotation is unused while set). |
+| AE | 2 | `b` | SET_ES6 | 116 | `ES.6` = b & 1 (name unknown; `ES.6` is also the touch-trigger enable of section 10.5). |
+| AF | 8 | `S80 S40 M U` | SET_PAIR_TABLE_ENTRY | 58 | If U < the table size: pair table[U] = (S80, S40) (two u16). Parallax extras; stored, no consumer in OpenCross. |
+| B0 | 4 | `S80 M` | SET_Y_OFFSET | 278 | Entity y-offset (signed 16) = S: a world-y offset added to the MODEL translation (`(y >> 4) + offset * 0x1000`) and to the cull box; the shadow and walk height keep the real Y. Negative = up (y is down). alu_a03i / alu_b03i curtains: the strip mesh hangs DOWN from its origin (bind y 0..2505), ents 5 / 6 set -505 / -514 to hang from the rod. OpenCross: `Actor::y_offset` (`model_matrix`). Used in about 99 rooms (alu_*, bak_*, chi_*, crn_*, gal_*, hid_*, jac_* and others). The same field is the B1 counter. |
+| B1 | 2 | `b` | WAIT_TIMER | 76 | b == 0: clears the accumulator, pc += 2. b != 0: acc += 0x4000 per call, the y-offset field += acc >> 16; once the signed field > 0 it is cleared and pc += 2; else a BLOCKING wait (no pc advance). The accumulator is not reset on completion. |
+| B2 | 2/4 | `by b1&FF {0:b; 1:b U; b}` | OVERRIDE_FOLLOW | 599 | b = 1 (enter, key character U, 4 bytes): if `GF.6` is clear, set it, save the party entity and character-id tables, then 3 bubble passes over both tables together: slots j / j+1 swap when t[j+1] == key or (t[j] != key and t[j+1] < t[j]); the key character leads, the others follow in ascending id order, 0xFF last. b = 0 (leave, 2 bytes): only with `GF.6` set - restore both tables and the controlled entity, clear the bit. Both then clear `EF.0` on every party entity and make the entity of the new slot-0 character the controlled one. No models change. Implemented (`FieldWorld::party_override`). |
+| B3 | 4 | `c J` | JUMP_IF_ENT_MISSING_OR_FLAG | 5 | The entity operand is ignored (a constant 1 is used). If that entity is none or has `EF.15` set: pc = J; else pc += 4. |
+| B4 | 5 | `U J` | JUMP_IF_NO_ITEM | 129 | Jump if item U is not in the inventory. |
+| B5 | 3 | `U` | SET_PUSH_STRENGTH | 69 | Terrain push strength A = U (room default 5). An entity standing on a walk-mesh tile whose attribute word has bit 0x800 is pushed every tick by `(rcos(d), -rsin(d)) * A * 12` (16.16; A = 5: 3.75 units / tick), d = `(attr & 0x700) << 1` (8 directions), added to its own walk; attribute bit 0x1000 halves the move. Not pushed: entities with `EF.4` or `EF.6`, `ES.18`, the controlled entity while `GF.1`. Implemented (`FieldWorld::step_push`). |
+### 6.8 Named objects, walk chases, items, sound, battles, dialogue (B6-E9)
+
+| Op | Len | Operands | Name | Uses | Effect |
+|---|---|---|---|---|---|
+| B6 | 5 | `A4` | ACTIVATE_NAMED_OBJ | 887 | Looks up the type-10 object named A4 and activates it if found. No variable writes. |
+| B7 | 4 | `S80 M` | SET_SELF_10E | 635 | Own animation rate = S. As 74 on self. |
+| B8 | 3 | `U` | WALK_FOLLOW_ENT_3D | 32 | As 44 but 3D: low byte of U = mode (1 = follow), byte@2 = entity c. Slot timer -1, sets `EF.6` and the moving flag. Follow also tracks the entity's Y. Arrival pc += 3. Entity none: pc += 3, +3 more if mode != 1. |
+| B9 | 5/3 | `by b1&FF {0:b c U; b c}` | WALK_TO_ENT_3D_TIMED | 70 | As 45 in 3D: b != 1 sets timer = U@3, found -> pc += 5 no yield, none -> pc += 8. b == 1: 3D follow with the existing timer, pc += 3 on arrival or timeout. |
+| BA | 8/2 | `by b1&FF {0:b U U U; 1:b; b}` | MOVE_3D | 10 | Start (b != 1, 8 bytes): slot counter N = U@6, heading U@2 (cos -> X, sin -> Z), pitch U@4 (sin -> Y), speed S as in 46; x / z target = the 46 target, y target = y + `(short)(((rsin(pitch) * S >> 4) * N * 0x2000) >> 12)` (this y term lacks the / 4096 of x / z, so only pitch 0 is sane: all 10 uses in tel_b01f, tel_b23e, tel_b31e pass pitch 0); sets `EF.6` (both forms) and the facing target = the bearing (gated by the op-47 flag and the turn rate). pc += 8, no yield. Wait form: walk clip, facing = saved value; while `2 * S < 16 * (3D distance to the target)` the position moves by the unit vector toward it times S (direct write, no wall probe, y included), then the counter is tested for 0 and decremented after the step, so N + 1 steps; at the target the clip becomes the stand slot and pc += 2 without a step. OpenCross: `Motion` kind `Move3D`. |
+| BB | 4 | `b U` | RECEIVE_ITEM | 464 | b == 0 give item, b != 0 take. U < 0x200 = gear / material id, 0x200..0x3FF = element (U - 0x200), 0x401..0x440 = key item number U - 0x400 (1-based, 64 of them; giving it sets its bit, taking clears it). Id 0 is ignored. |
+| BC | 7 | `b b b b J` | CHECK_MONEY | 19 | Money (signed) compared with the 4-byte little-endian threshold at bytes 1..4. Money < threshold: pc = J; else pc += 7. Non-blocking. |
+| BD | 4 | `b U` | MONEY | 23 | b == 0 add U, else subtract; add clamps at 9,999,999, subtract clamps at 0. Non-blocking. |
+| BE | 1 | `-` | CAMERA_AUTO_FOLLOW_WAIT | 414 | If `GF.3` (formation mode) is set: yield, no advance. Else sets the "follow wait" flag (it makes follow rule 1 skip; OpenCross `FieldWorld::follow_wait`; reset at room init) and a timeout counter (init 0xF0 ticks, decremented while the flag is set). Counts party slots that are empty or whose animation is not 2 / 3; if all 3, or the counter reached 0: sets the auto-follow flag, clears the follow-wait flag, pc += 1, yield. Else yield without advancing (wait). |
+| BF | 3/2 | `by b1&FF {0:b c; b}` | ANIM_PACK_RESTORE_START | 1568 | b == 0 (start): gate -> yield; entity c is a literal slot lookup (the operand byte is never read); pack = the character's default pack; sets `EA.8` and `ES.12`; starts the pack load; pc += 3, no yield. Slot lookup fails: yield, pc += 5. b != 0 (stop): when the data read is done restores the entity's position / animation, pc += 2; else yield. |
+| C0 | 2 | `c` | FREE_EXTRA_ANIMATION | 1063 | The operand is never read (literal slot). Gate -> yield. If the slot is valid, `ES.12` is set and the pack is still in use (the entity's clip has bit 0x80 set, or the extra model is busy): yield without advancing. Else if `ES.12`: frees the extra pack on the display model (and the secondary with `ES.11`), clears `ES.12`; pc += 2. |
+| C1 | 5/2 | `by b1&FF {0:b c U; 1:b; b}` | LOAD_ANIMATION | 1670 | Start (b == 0): gate -> yield; the entity operand is a literal slot (never read). U@3: bit 8 clear -> pack id = (U & 0xFF) + 0x7D6 (the `<char>00` / numbered event packs), bit 8 set -> (U & 0xFF) + 0x795 (the character's own pack); ids local to directory group 5 and mapped to `cdrom.fnd` records (`fieldobj/ex` order: 0-43 characters in table order, 65-115 the `00` event packs; `0x7D6 + k` also covers numbered event packs after that block, e.g. k = 0x40 `selju01` = Serge's bed clips in gal_b09i, 0x37 `kid06`, 0x3B..0x3D `kid02..04`; dummy records load nothing). Slot valid: current animation = stand slot, `EA.8` set, the model's animation set replaced, `ES.12` set, load started, pc += 5, no yield. Slot none (0xFF): yield AND pc += 7. Stop (b != 0): when the read is done frees the pack, pc += 2; else yield. **The pack hangs on the entity's display model whatever the entity is** (a party member, or an NPC built from a room model: dem_02's Zoah = room model 1 loads `zoah` / `zoah00` and plays 0x86..0x89); clips are decoded against that model's skeleton (`import::load_ex_clips`). OpenCross: the host receives `extra_animation(key, start, ent, arg)`; the load is instant. |
+| C2 | 9 | `U U U U` | SET_LAYER_OPACITY | 124 | Background layer-group colour: idx = U@1; R, G, B = U@3 / @5 / @7 written to the group's colour entry and to the matching background records. pc += 9, then yield. |
+| C3 | 5 | `V V` | GET_CAMERA_POSITION | 29 | V1 = camera scroll X, V2 = camera scroll Y. |
+| C4 | 2 | `c` | WAIT_ANIMATION | 2833 | Advances (pc += 2) if the entity is none, or has `EF.14`, or has `EA.8` set (animation done). Otherwise yields without advancing. A walk also sets `EA.8`, so the bit may also mean "moving". A culled (off-screen) actor's animation freezes where it is, so a WAIT_ANIMATION on it waits until it is on screen again (the softlock watchdog names it). |
+| C5 | 7 | `U U U` | SOUND_EMITTER | 407 | Positional sound of the executing entity: id U@1, volume U@3, one-shot U@5. A record of the same source is reused, else appended (8 records max). Per tick: volume ramp; distance to the leader; sort; the nearest 4 own voices play; volume 0x7F within 0x100, `(0x900 - d) >> 4` up to 0x900, 0 beyond, times record volume >> 7; pan = `(screen x * 0x6666 >> 16) + 0x40`; idle and not started -> start; idle again -> restart unless one-shot (one-shot frees the record); playing -> volume / pan updated. A source with `EF.4` stops. `C5 #255` silences. Record id: 0xFF free, bit 0x100 = a global effect00 id. OpenCross: `FieldWorld::step_sound_emitters` does records, ramp, distance, nearest four, start volume / pan and key-off; NOT the per-tick volume / pan of a playing voice nor the restart on idle (no per-voice API in the Sfx sink). |
+| C6 | 6/10 | `by b1&FF {0:b U U; b U U U U}` | PLAY_SFX | 7601 | `C6 0 id slot` (centre pan, full volume) or `C6 mode id PAN VOLUME slot`: pan = operand 4 & 0xFF (0x80 centre, default 0x80), volume = operand 6 & 0x7F (default 0x7F), last = channel slot (& 7, mask bit 8 + slot). Ids below 256 = frame of the room's `yos1` list (`yos0` banks); 256 and above = effect00 id - 256 (ids 260 / 339 / 280 / 283 dominate). See audio.md. |
+| C7 | 3 | `U` | END_SLOT_SOUNDS | 31 | Ends the sounds C6 started on slot (U & 7) and clears the slot's volume / pan record (opa_b04f 14 uses, opa_a04f 7, bak_a16e 5). OpenCross: `Sfx::evict_field(mask)`. |
+| C8 | 14 | `U S40 S20 S10 M U U` | SOUND_EMITTER_AT | 22 | A positional sound at a fixed point (a new record every time): id U@1, x S@3, z S@5, y S@7 (M@9 bits 0x40 / 0x20 / 0x10), volume U@10, one-shot U@12. Same processing as C5. |
+| C9 | 7 | `U U U` | BATTLE_200 | 164 | As A3 with battle id = U@1 + 0x200. |
+| CA | 1 | `-` | FACE_WALK_TARGET | 98 | A one-byte op that reads the operands of the walk two bytes on (all 98 uses are `CA CB 42\|43 00 X Z M ...`: it skips the CB and peeks at the WALK_TO_XZ's b @+3, X S@4, Z S@6, literal flags M @+8). Phase 1 (`ES.14` clear): target = (X, Z), added to the entity's position when b == 2; if the op-47 flag is 0 and the turn rate is not 0, facing target = `-ratan2(dz, dx) & 0xFFF \| 0x8000`; sets `ES.13` and `ES.14`; yield, pc unchanged. Phase 2 (`ES.14` still set): pc += 1; yield. The engine takes the request up once per frame (clears `ES.14`, turn rate = \|turn\| / 0x30, a fixed ~48-tick turn with the turn clip for turns over 0x13F), so the second call always sees the bit; the CB that follows waits for the yaw. The walk therefore starts only after the entity has turned toward its goal. OpenCross: `FieldVM` case 0xCA + `FieldHost::face_point`. |
+| CB | 1 | `-` | WAIT_ROTATION | 1593 | If the tile under the entity is a stair / slide (walk attribute `& 0xC000`): pc += 1, yield without waiting (the engine overwrites the facing from the plane normal every tick, so the target could never be reached; OpenCross `FieldWorld::rotation_busy` returns false there - wld_a00 / wld_b02 entity 4 had polled for 860 ticks). Otherwise, if `(shown facing + 0x400) & 0xFFF != facing target & 0xFFF`: yield, no advance. Else pc += 1 and yield (the finishing pass yields too: without it tel_b23e's boarding script spawned the leader's walk one tick late, so the leader's UPDATE `ATTACH_TO_ENTITY boat` ran first). With turn rate 0 and `ES.13` clear the yaw never moves (an engine hang); OpenCross ends that case. |
+| CC | 2 | `c` | WAIT_ROTATION_ENTITY | 787 | Entity c: pc += 2 when it is done turning (or none); always yields. |
+| CD | 5 | `U J` | JUMP_IF_SCENARIO_GT | 7 | If U < S: pc = J (jumps when SCENARIO > U), else pc += 5. |
+| CE | 5 | `U J` | JUMP_IF_SCENARIO_LT | 748 | If S < U: pc = J (jumps when SCENARIO < U), else pc += 5. |
+| CF | 4 | `c U` | SET_ENTITY_TURN_RATE | 15 | Entity c's turn rate = U (none = no-op). |
+| D0 | 3 | `J` | JUMP_UNLESS_STICK_TILTED | 2 | Reads the left analog stick (the pad must be analog; the field forces the stick centred while input is locked). Falls through (pc += 3) when the left stick is outside the dead box: X < 0x4C or X > 0xB4 or `(u8)(Y - 0x4C) > 0x68`; otherwise (centred stick, digital pad) pc = J. Used by tel_a03f / tel_b03f UPDATE once per tick: their 63 control-yaw bands only change while the stick is not held. Implemented (predicate `BoxOutside`). |
+| D1 | 3 | `U` | SPAWN_MONSTER | 355 | Like 0F with room model U (a model of the room's list). Differences: re-placed on floor level 0; `EA.11` set, `ES.20` set; the entity takes the room's D1 ordinal (a counter zeroed at room init, then incremented); if that ordinal's bit is set in the room's **defeated-monster mask** the entity is made inactive and hidden (`EF.4`, `EF.5`, plus `EF.21`). Both set model index U and entity flags with `EF.21` set and `EF.14` cleared, `EF.8` set. The mask lives in a 3-record most-recent-first cache {u16 room, u32 mask}; the room's record is moved / created at room load (dropping the oldest); D2 sets the bit after a won battle; FE 1A forgets the cache. The cache is **not in the save**. Implemented. |
+| D2 | 1 | `-` | MONSTER_DEFEATED_IF_WON | 378 | Adds 0x40 to the budget. If the last battle result code is < 2 (won): makes the entity inactive and hidden (`EF.4`, `EF.5`), sets its bit in the room's defeated-monster mask, pc += 4 (skipping the next 3-byte op); else pc += 1. Implemented. |
+| D3 | 5 | `A4` | PLAY_EFFECT | 372 | Looks up the effect named A4 (type 0x10); if found, starts it by name. No yield. |
+| D4 | 5 | `U U` | PLAY_MOVIE_SKIPPABLE | 20 | Gate -> yield. Sets the movie request flags, copies the movie record (stride 0x18) for table row U@1 (low byte; its high byte is the variant; the second U is not read by OpenCross), maps variants 3 / 4 to a skippable mode; pc += 5, no yield. Row semantics: `movies.md`. |
+| D5 | 5 | `V U` | GET_ITEM_COUNT | 250 | V = owned count of U, with BB's id ranges: U < 0x200 gear / material count, 0x200..0x3FF element count, U >= 0x400 = 1 if key item U - 0x400 is owned, else 0. Written as a byte (0..255). B4 uses the same count. |
+| D6 | 4 | `c U` | ATTACH_TO_ENTITY | 257 | c == 0: detach (parent cleared, `EF.23` cleared). Else (entity c; none = no-op): parent = c, `ES.9` on both entities, attach point = U, `EF.23` set. No yield. See FE 46 / FE 47. |
+| D7 | 5 | `A4` | STOP_EFFECT | 33 | A4 == "0000": stops all effects, no lookup. Else looks up the effect (type 0x10) and stops it. |
+| D8 | 8 | `c U U J` | JUMP_UNLESS_NEAR_AND_FACING | 10 | Entity c absent: pc = J. If the 3D distance < U@2 and the angle error between the entity's visible body yaw and the bearing to the target is < U@4 (12-bit wrap; the visible yaw chases the facing target at the turn rate): pc += 8, else pc = J. A sight cone. opn_a02i's Cybots: `D8 LEADER, #600, #1024` after a height gate on variable 0x16 (the leader's Y): they chase only a leader on their own floor, within 600 units, in front of them. OpenCross: `FieldWorld::near_and_facing` (3D distance + `shown_facing()`). |
+| D9 | 5 | `U U` | SET_CHARACTER_MODEL | 1905 | Gate -> yield. char = character reference U@1; b = U@3. None, or the model byte already b: pc += 6 (skips the DA). Else the character record's model byte = b. Not in the party: pc += 6. In the party: if a replacement is pending yield without advancing; else start loading model b (files `2b + 2` object, `2b + 3` texture of fieldobj/player: 0..43 the characters, 0x31 Serge's Lynx body (yamaneko), 0x32 gren2, 0x3B adk_sp, 0x3C..0x3E neko..neko3, 0x2C..0x30 tu_*), pc += 5 onto the DA, yield. Data: ryu_b29i / cao_a01f / fin_05 / fin_32 (Serge -> Lynx), tel_b01f, zel_a10i, jac_*; the `D9 FD/FE/FF #0/#19/#43/#44..` copies in ~60 rooms are a debug routine. The Viper Manor disguise is model byte 0x3B: jac_b22i `D9 #59`; BATTLE flag 4 writes it too. Implemented (a record the new-game builder left unfilled shows the character's own model). |
+| DA | 1 | `-` | WAIT_CHARACTER_MODEL | 1905 | While the read is busy: yield. Then the slot entity's old model objects are torn down, the new model copied into the slot buffer, the texture uploaded, the objects built on the slot's entity; the pending flag is cleared; net pc += 1. Implemented (the model is set on the slot's entity). |
+| DB | 5 | `U V` | GET_CHARACTER_MODEL | 181 | var@3 = model byte of character U@1 (character reference), 0 when none. Implemented. |
+| DC | 5 | `U U` | MAP_JUMP_DC | 12 | Queues a room transition (room U@1, param U@3) with a pending flag; stores PREVIOUS_MAP_ID and the room register like 5A; pc += 5, no yield (unlike 5A it does not lock input, does not wait for the system gate and does not mask the param to a byte). |
+| DD | 4/2 | `by b1&FF {0:b U; b}` | DATA_READ | 2 | b == 0 (start): gate -> yield; starts an async read of file `id + 0x8B`; pc += 4. b != 0 (stop): when the read is done frees it, pc += 2; else yield. No effect in OpenCross (2 uses, ryu_b29i). |
+| DF | 9 | `S80 S40 M b b b` | SETUP_FORMATION_ANGLE | 225 | If formation mode (`GF.3`) is clear: sets `GF.3` and `GF.4`; leader target (S80, S40), heading = the angle b/U@6; slot 1 and 2 targets = leader target offset by trig(angle + 0x200) and trig(angle - 0x200) >> 5 (a party V, 128 units, behind the leader); fills the three slot records (0xFF = absent); pc += 9 then yield. If `GF.3` is set: yield only, pc NOT advanced (wait). |
+| E0 | 4 | `w b` | DIALOG | 50320 | Opens dialogue message w (index into subfile 008) with flag byte b (a non-zero b replaces the low byte of the window flags set by 62; section 9), using the window set up by 62. Success: pc += 4. **Windows are per entity, up to 4 at once** (dem_11's tombstone scene shows three windows at once - entities 6, 7, 8): the call fails (returns -1, retried by the dispatcher) only while the running entity already owns an open window, no window is free, or the system gate failed. Does not wait for the text; E2 does. |
+| E1 | 2 | `b` | MULTI_CHOICE | 11800 | If the entity's window is open: choice mode on, first line F = b >> 4, last line L = b & 0xF, cursor = F; pc += 2 and yield. The options are lines F..L of the message just opened by E0 (3-line lists with a 3-space indent, e.g. alu_a01f message 33). Up / Down move the cursor (wrapping L <-> F); on confirm the **cursor's line number in the message** (F..L, not 0-based) becomes the dialogue result, which E2 copies to variable 0x04. There is no per-line visibility code: party-dependent lists are separate messages the script picks. The rows are lines of the **disc (PS1) message page**, not of the translated text: the hand goes to `translated first choice line - guest first choice line + row`; the result stays the row (text.md). A list may sit in a message ending `{wend(n)}` (jac_b22i msg 5): the window takes the pick while its auto-close timer runs; on timeout E2 leaves variable 0x04 unchanged. `occ dialogue-choices [room] [-v]` lists every site (11800 in all rooms, 465 with an EN text row, the rest are debug-menu scripts). |
+| E2 | 1 | `-` | WAIT_DIALOG | 54242 | While **the running entity's own** dialogue window is open: yield without advancing (if `EF.15` is set and the window allows it, the window is force-closed - skip). When closed: variable 0x04 = the entity's dialogue result byte, budget +0x20, pc += 1, yield. The result byte is only written by a confirmed choice, so after a plain message variable 0x04 repeats the entity's previous choice. |
+| E3 | 5 | `c w b` | CHARACTER_DIALOG | 3980 | Message w spoken by entity c (FF / FE / FD = the entities of party slot 0 / 1 / 2; a speaker not in the party reaches the host as "none"; the per-speaker text variants then use speaker 0). **A "none" speaker (empty party slot) skips the op and the E2 behind it: pc += 6** (hid_b04f's two plants speak through `E3 FE` / `E3 FD`; with a two-member party the second plant says nothing). Otherwise as E0: fails (retried) while the *running* entity already owns a window or none of the 4 windows is free. Flags b seen: 0, 4, 8, 0x0D, 0x4D. |
+| E4 | 5 | `c w b` | DIALOG_ENTITY | 74 | Entity c found: pc += 1 then as E3 (pc += 4 on success). Entity none: pc += 8. |
+| E5 | 5 | `U J` | JUMP_IF_NOT_IN_CARRYOVER | 4 | Jump when bit U (< 0x2C) of the New Game+ carry-over roster bitmap is clear (also U >= 0x2C); else pc += 5. The bitmap is saved, zeroed at a new game, ORed into the carry-over set by the title code; no field op writes it. |
+| E6 | 5 | `U J` | JUMP_IF_NOT_RECRUITED_OR_CARRYOVER | 58 | Jump when bit U is clear in (carry-over bitmap OR recruited bitmap); else pc += 5. |
+| E7 | 5 | `A4` | NAMED_OBJ_MODE1 | 9 | Named-object control, mode 1: A4 == "0000" applies to all type-10 objects; else looks the name up and acts on it. (Compare 9C = mode 0.) |
+| E8 | 5 | `U J` | TEST_CLEAR_CARRYOVER_JUMP | 42 | Test-and-clear of bit U in the New Game+ carry-over set (saved): falls through (pc += 5) when the bit was set and U is not recruited, else jumps to J; the bit is cleared either way (U < 0x2C). |
+| E9 | 5 | `w J` | JUMP_IF_FRAME_CLEAR | 15 | Tests bit (low byte of w & 0x1F) of the owned-frames mask (set by FE 7A). Bit CLEAR: pc = J (no yield). Bit SET: pc += 5. (The name suggests the opposite polarity.) FE 7A only sets bits 0-15. |
+
+### 6.9 Extended page: `FE` sub-opcodes 00-3F
+
+Instruction = `FE`, sub-opcode, operands; **Len** includes both bytes. Waits at this level rewind with `pc -= 1` (back to the `FE` byte) and yield. 134 sub-opcodes (00-85) exist; any other sub-opcode is a two-byte no-op (OpenCross logs it once as not in the table).
+
+| Op | Len | Operands | Name | Uses | Effect |
+|---|---|---|---|---|---|
+| FE 00 | 3 | `b` | SET_GROUND_TILT | 2 | b == 0: sets `ES.8` and `ES.29` on this entity; b != 0: sets `GF.7` (for EVERY entity). The actor matrix is built from the Euler angles only while `ES.8` and `GF.7` are both clear; otherwise from the ground plane: the model's up axis follows the plane normal of the tile it stands on (axes `A = up x N`, `B = A x N`, picked among three cross products by size) with the yaw (facing - 0x800) applied inside it. The tilt matrix is rate-limited per element by 0xAA / 0x1000 per tick unless `ES.29` (snap), which the engine clears after the frame it was used, so only the first frame snaps. OpenCross: `Actor::update_ground_tilt` (crn_b02i e13, dry_a03f; the global b != 0 form has no user in the data). |
+| FE 01 | 3 | `b` | SET_NEVER_CULLED | 423 | `ES.9` = b & 1: the entity is never off-screen culled (section 8.1). |
+| FE 02 | 4 | `U` | SET_EXIT_TRANSITION | 217 | Room-exit transition kind = U, read at the next room change (then reset to 0, and passed to the new room's entry; forced 0 while the 8F wave runs). Kinds in section 6.11. Data: 0 x190, 1 x20, 2 x7, 3-6 never. |
+| FE 03 | 6 | `b S80 M` | SPAWN_MIRROR | 82 | Mirror copy (reflection). If `ES.11` is set: nothing. Else a second instance of the entity's model (room model, or the party slot model) is created with the same texture / CLUT, `ES.11` set, axis b (0 x, 1 y, 2 z) negated in its root matrix; its plane = S@2 << 1 (M@4 bit 0x80). The copy is placed like the entity with that axis = plane - pos: the reflection across the plane S. It is drawn only while `ES.11` is set and `EF.14` clear, in a second pass at ordering-table slot `0xB8 + submerged-OT` (= layer 0's z by default). Head ops mirror their target for it. pc += 5. 29 rooms (y plane 0 x42; z / x planes in mja / jac / tel / zel). Details in section 6.11. |
+| FE 04 | 3 | `b` | SET_NO_PAN_CLAMP | 58 | `GF.8` = b & 1: skips every pan-limit clamp (follow target, 5D target, shake). |
+| FE 05 | 4 | `U` | SET_FRAME_VSYNCS | 3 | Minimum VSyncs per drawn frame = U: 1 = 60, 2 = 30, 3 = 20 fps (opening / ending #1, zel_a13f #3). Display rate only; a no-op in OpenCross (60 Hz logic with interpolated rendering). |
+| FE 06 | 3 | `b` | SET_PUSHABLE | 39 | b == 0 sets `EF.13` (pushable), else clears it. See section 8.2. |
+| FE 07 | 3 | `b` | SET_SCRIPTED_TURN | 1475 | `ES.13` = b & 1. If `ES.13` ends clear: if `ES.15` was set, turn rate = saved turn rate (the value stashed at `ES.15` time); then clears `ES.15` and `ES.14`. |
+| FE 08 | 5 | `c U` | STORE_ENTITY_REF_A | 0 | If entity c is not none: byte entity-reference table A[U] = c. Only written, never read by the field overlay. |
+| FE 09 | 5 | `c U` | STORE_ENTITY_REF_B | 43 | Same for table B (byte index U & 0xFF), the **caster list** of the room's effect emitters: emitter actor selectors 1 / 9 read slot 0, selectors 10 / 11 slots 1 / 2 (`room_effects.md` section 4.6; the readers see 6 slots). |
+| FE 0A | 5 | `c U` | STORE_ENTITY_REF_C | 44 | Same for table C, the **target list**: selectors 2 / 13 read slot 0, selectors 14..18 slots 1..5. All three tables are empty (0xFF) at room load. |
+| FE 0B | 3 | `b` | CALL_0B | 0 | Passes b to an unnamed routine. |
+| FE 0C | 4 | `b c` | FORCE_DIRECTION | 418 | As FE 07 on entity c (none = no-op). |
+| FE 0D | 4 | `U` | SET_ALL_SCALES | 22 | Every entity's scale x / y / z = U (32-bit stores). |
+| FE 0E | 4 | `U` | SET_SELF_SPEED_RAW | 95 | Own speed (the 10C value) = U raw. |
+| FE 0F | 5 | `c U` | SET_ENTITY_SPEED_RAW | 134 | Entity c's speed = U raw, no shift. |
+| FE 10 | 2 | `-` | BATTLE_RELEASE | 683 | Adds 0x40 to the budget. If a battle is pending: pc unchanged, yield (blocking). Else pc += 1 and the input lock (`ES.0`) is released. |
+| FE 11 | 4 | `U` | SET_CAMERA_SNAP | 306 | `GF.9` = U & 1: puts the scroll on the follow target each tick instead of easing `S -= (S - T) / 12`. |
+| FE 12 | 8 | `U U U` | SET_OVERLAY_GRID | 6 | Three overlay-grid globals = U@1, U@3, U@5 (the ending / opening overlay grid). Stored. |
+| FE 13 | 8 | `U U U` | SET_OVERLAY_GRID_2 | 1 | Three u16 globals = U@1, U@3, U@5. Stored. |
+| FE 14 | 3 | `b` | SET_GF10 | 178 | `GF.10` = b & 1 (overlay grid enable). Stored. |
+| FE 15 | 4 | `U` | SET_OVERLAY_OT | 3 | Ordering-table slot (0 = map layer, 2 = object layer) of the FE 12 / 13 / 14 overlay grid. All 3 uses (ending, opa_a04f, opa_b04f) write 0 = the default; a no-op. |
+| FE 16 | ? | `-` | NOOP_NO_ADVANCE | 0 | The handler does nothing and pc does not advance: re-dispatches the same byte, so the script stalls permanently (the dispatcher loops at most 0x40 times per frame). OpenCross parks the record on it (yield, like 3B). |
+| FE 17 | 3 | `b` | SET_LEADER_ROTATE_LOCK | 40 | `GF.11` = b & 1: locks the pad leader rotate. The rotate (Select) turns the party order: slot 0 <- slot 1, slot 1 <- slot 2, slot 2 <- old leader (two members trade places); the entities keep their places and show their slot's new character, and the per-slot disguise words (variables 0x170 / 0x172 / 0x174) move with their characters. It is refused with fewer than two members, while the controls are not free, a menu or battle is active, `GF.6` (B2) or `GF.11` is set, or variable 0x36 is not 0, and for the first frames after a room load. OpenCross: `FieldWorld::rotate_party`. |
+| FE 18 | 3 | `b` | SET_MENU_LOCK | 19 | `GF.12` = b & 1: when set the pad cannot open the main menu. Set by the opening, ending, gal_b06i's bed scene, gal_b09i, cao_a03f, crn_b02i, inj_b03i, kji_b01i, ryu_a29i, ryu_b29i, you_b11f, zel_a10i. OpenCross: `FieldWorld::menu_key_allowed()`, checked by the Tab / Start handler. |
+| FE 19 | 3 | `b` | SET_ES19 | 419 | `ES.19` = b & 1. |
+| FE 1A | 2 | `-` | FORGET_DEFEATED_MONSTERS | 31 | Resets the three defeated-monster records (room 0xFFFF, mask 0), so field monsters respawn. Also done on Load and at new game; battles, the world map and room changes keep the cache. The cache is NOT in the save. 24 area-entry rooms, usually under `IF ROOM_PARAM == ...`. Implemented (session state, like the PS1). |
+| FE 1B | 4 | `U` | SET_WINDOW_SKIN | 29 | Gate -> pc -= 1 and yield. Then the window-frame option byte = U, variable 0x44 = U, and an async read of `map/window/w<N>.tim` starts (file `0x725 + U`: U 0 -> w4, 1..3 -> w1..w3, 4..14 -> w5..w15); FE 1C waits and uploads it (VRAM x 0x380). It is the dialogue window skin, not a still image. Implemented (`GameState::skin`). |
+| FE 1C | 2 | `-` | UPLOAD_WINDOW_SKIN | 29 | If the read is still busy: yield, pc -= 1 (retry). When done: uploads the skin to VRAM x 0x380, frees the buffer, builds a 256-entry table; pc += 1. |
+| FE 1D | 6 | `U U` | FADE_MASTER_VOLUME | 730 | Fades the music master volume: target U@1 (stored for FE 76), over U@3 & 0x7F frames. Non-blocking. |
+| FE 1E | 6 | `U U` | FADE_MASTER_PITCH | 0 | Fades the master pitch scale: U@1 over U@3 & 0xFF. Non-blocking. |
+| FE 1F | 6 | `U U` | CALL_1F | 0 | Unnamed sound call (U@1, U@3). |
+| FE 20 | 6 | `U U` | CALL_20 | 0 | Unnamed sound call (0, U@1, U@3). |
+| FE 21 | 8 | `U U U` | SETUP_SHAKE | 325 | Screen shake: horizontal amplitude, vertical amplitude, time to max. |
+| FE 22 | 8 | `U U U` | CHANGE_SFX_VOLUME | 458 | slot, frames, volume: slides the volume of every sound C6 started on the slot (e.g. `FE 22 #0, #240, #0` after a C6 on slot 1 = fade the old ambient out over 4 s). OpenCross: `FieldWorld::sfx_volume` / `step_sfx_slides` (60 Hz frames, starting at the volume of the slot's last C6). |
+| FE 23 | 8 | `U U U` | SFX_PAN_SLIDE | 2 | slot, frames, pan (64 = centre): the same for the pan (fin_31 pairs `FE 22 .. #96` with `FE 23 .. #64`). `FieldWorld::sfx_pan`. |
+| FE 24 | 8 | `U U U` | UNKNOWN_24 | 0 | Handler unknown. |
+| FE 25 | 3 | `b` | SET_PASS_THROUGH | 443 | `ES.21` = b & 1: a solid with this bit stops blocking the controlled mover once it has pressed against it for 0x40 ticks (the press counter is tested before the increment and reset by any tick without a press). OpenCross: `Ent::press_ticks`. |
+| FE 26 | 3 | `b` | SET_MOVIE_REC | 0 | Movie record fields: one = 1, other = b. Unnamed. |
+| FE 27 | 2 | `-` | SET_MOVIE_REC_2 | 0 | Movie record field = 1. Unnamed. |
+| FE 28 | 4 | `V` | STORE_DIFF_TO_VAR | 0 | var[V] = difference of two unnamed globals. |
+| FE 29 | 4 | `U` | KEEP_SFX_SLOT | 409 | Sets bit `(U & 7) + 8` of the keep-sound mask: the C6 slot U & 7 keeps its sound through the next room change (the teardown evicts every other sound; room init clears the mask). |
+| FE 2A | 3 | `b` | SET_ES22 | 159 | `ES.22` = b & 1. |
+| FE 2B | 5 | `b U` | SET_FOOTSTEP_REG | 886 | b == 0x10: footstep master volume = U (room default 0x7F); b == 0x11: floor type on dry ground; b == 0x12: floor type on water (0xFF = silent; persist across rooms). Other b: no store. |
+| FE 2C | 3 | `b` | SET_FOOTPRINTS | 93 | `ES.23` = b & 1. Bit 23 = **no footprints** (the `asi1` effect at the feet on dry ground); set for every actor at load, so `FE 2C 0` turns footprints on. |
+| FE 2D | 4 | `U` | SET_CURVE_WALK | 32 | Curve turn rate (default 0x80) = U, and `ES.25` set: 42 / 43 / 44 / 45 / 46 turn their heading toward the target by that rate per tick instead of aiming straight. |
+| FE 2E | 2 | `-` | CLEAR_CURVE_WALK | 1 | Clears `ES.25`. |
+| FE 2F | 2 | `-` | FIELD_RESET_STATE | 1 | The boot / dream state again (the title room `opening` INIT when ROOM_PARAM != 0, the title re-entered after a game): default records and names, 20 stars, options reset, play time 0, the room register = 8, **MAP_ID (variable 6) ends 0**, party / key items / roster reset (+ RDE's Time Shifter), all global variables 0..0x3CF = 0 and the room-local ones cleared; variable 0x34 kept; variable 0x42 = disc number - 1. Variables 0x3D0..0x3FF are saved separately and survive. New Game+ runs the same routine. OpenCross: `FieldWorld::field_reset` -> `newgame::boot_state`. |
+| FE 30 | 9 | `S80 S40 S20 M` | HEAD_LOOK_POINT | 9 | Executing entity (not `EF.14`): head look target = world point (x S@1, y S@5, z S@3) (M@7 bits 0x80 / 0x20 / 0x40), then the head turn code runs; with `ES.11` the mirror copy gets the point reflected. pc += 8. Implemented. |
+| FE 31 | 3 | `c` | HEAD_LOOK_AT | 144 | Target entity c; when neither has `EF.14`: the executing entity's head target = attach point 1 of c's model (world, engine frame). OpenCross takes the attach point in the engine frame (`Actor::attach_world`, the render matrix with x / z rows negated), the frame the head code works in; before it was the render frame, which mirrors the head offset around the entity. Implemented. |
+| FE 32 | 2 | `-` | HEAD_RESET | 190 | Resets the executing entity's head (and the mirror's): only while turning, target = attach point 1 + (0, 0, -0x1000) (straight ahead) and the "returning" bit; the head is released to the animation once settled. Implemented. |
+| FE 33 | 3 | `b` | SET_ES26 | 33 | `ES.26` = b & 1. No consumer; stored only. |
+| FE 34 | 13 | `S80 S40 S20 S10 S08 M` | SET_FOOTSTEP_LISTENER | 137 | Footstep listener and distance band: S20 -> listener y, S40 -> listener z (S80 = x is stored but never read), S10 = near distance (full volume nearer), S08 = far distance (silent farther); room init 0x7FFF / 0x7FFF. |
+| FE 35 | 5 | `S80 M` | HEAD_LOOK_DIR | 67 | Executing entity: head target = (rcos(a), y S@1, -rsin(a)) with a = (facing + 0x400) & 0xFFF, the 4.12 trig values as they are (a point at radius 4096 around the WORLD origin - the handler adds no position). pc += 4. Implemented as decoded. |
+| FE 36 | 4 | `U` | HEAL_GROUP | 146 | Current HP = max HP of the target; **status untouched**. Target U: 0xF9 = every recruited character, 0xFA = the 3 party slots, 0xFD / 0xFE / 0xFF = party slot 0 / 1 / 2, other < 0x2C = that character id, else nothing. |
+| FE 37 | 6 | `V U` | GET_CHAR_LIFE | 5 | V (raw varid at byte 1) = current HP of character U@3 (slot via the character reference), 0 when none. (A 0xFF reference resolves to the global leader, not to 0xFF.) |
+| FE 38 | 7 | `S80 U M` | SET_CHAR_LIFE_CLAMPED | 178 | Character U@3: HP = S clamped to [1, max HP]. |
+| FE 39 | 7 | `S80 U M` | ADD_CHAR_LIFE_CAPPED | 0 | Character U@3: HP += S, capped at max HP; no floor, so the result can reach 0 or below. |
+| FE 3A | 7 | `S80 U M` | DAMAGE_CHAR_LIFE | 106 | Character U@3: HP -= S, or 2*S when status bit 0x8 is set in either status word; floored at 1 (cannot kill), no upper clamp. |
+| FE 3B | 6 | `V U` | GET_CHAR_STATUS_BYTE | 7 | V (raw varid at byte 1) = `(status word 1 \| status word 2) & 0xFF` of character U@3; no write if none. |
+| FE 3C | 4 | `U` | SET_SELF_HEAD_RATE | 1 | Own head turn rate = U (4 bytes: `FE 3C U`). |
+| FE 3D | 6 | `U U` | SET_STATUS | 258 | **Inflict**: status word \|= U@3 (1 poison, 8 burn, 0x10 sprain, 0x20 flu) for target U@1 (targets as FE 36). Data: the status debug menus (FA 1 / 8 / 0x10 / 0x20) and hid_b04f / you_b04f traps. |
+| FE 3E | 6 | `U U` | CURE_STATUS | 95 | **Cure**: status &= ~(U@3 & 0xFF) for target U@1; `FE 3E F9 39` cures everyone. |
+| FE 3F | 2 | `-` | START_OF_GAME_RESET | 1 | alu_a03i INIT at scenario 4 = the real start after the dream. Variable 0x7E == 0: every character record is rebuilt from char.bin (replacing the dream's char20.bin records; names kept; growth for 0 stars; element nibbles 5; items / elements cleared, gold 100, stars 0, variables 0x3D0.. from a table, 0x3D2 = 0x3F), then the party / roster reset, and the owned-frames mask = 0x203. Variable 0x7E != 0 (New Game+): party / roster reset and the Relief Charm + Time Shifter flags set. The reset = party {0, FF, FF}, key items 0 (+ the Time Shifter), recruited = Serge, lock bitmap = 1, other carry words 0, monster cache reset. OpenCross: `FieldWorld::opaque_op`, `ngplus::fe3f`, `newgame::real_records`. |
+
+### 6.10 Extended page: `FE` sub-opcodes 40-85
+
+| Op | Len | Operands | Name | Uses | Effect |
+|---|---|---|---|---|---|
+| FE 40 | 4 | `U` | SET_FOOTSTEP_ID | 255 | If `EF.22` is clear: footstep walker id (u16) = U and `ES.24` set (plays footsteps); else no-op. Walker ids 0x0C / 0x19 are own sounds. |
+| FE 41 | 3 | `b` | SET_PARTY_FOOTSTEPS | 206 | `ES.24` = b & 1 on the three party entities (0xFF = empty slot skipped): the party members play footsteps. |
+| FE 42 | 3 | `b` | SET_PAUSE_ALLOWED | 1 | `GF.14` = b & 1: the pad may pause the field (Start). Every room load sets it; `FE 42 0` forbids the pause for the room. The pause is also refused while the low byte of variable 0x36 is not 0, on maps 8 / 9 (title, game over), and during a room switch, menu, movie or battle. OpenCross: `FieldWorld::pause_allowed`. |
+| FE 43 | 6 | `U U` | SOUND_EMITTER_RAMP | 21 | The executing entity's C5 record ramps its volume to U@1 over U@3 ticks (0 becomes 1). Implemented (the ramp; see C5 for the voice limits). |
+| FE 44 | 2 | `-` | DRAW_SYNC | 1 | Waits for the GPU draw queue. No-op in OpenCross. |
+| FE 45 | 4/6 | `by b1&FF {0:b c; b c b b}` | MODEL_FLASH | 393 | Entity c@2, flag b@1. If c is valid, without `EF.14` and b != 0: builds a white copy of the model's palette (every non-zero entry ORed with 0x7FFF, STP kept: 0x8000 -> 0xFFFF, 0 stays transparent) at palette row `0xF5 + U@3` and selects it. Always `ES.27` = b & 1. pc += 3 (flag 0) / 5. Draw details: section 6.11. |
+| FE 46 | 9 | `S80 S40 S20 M` | SET_ATTACH_OFFSET | 42 | Attach offset x = S@1, z = S@3, y = S@5 (u16): the offset from the parent's attach point in that joint's space; used only by entities attached with D6 (`EF.23`). pc += 8. Implemented. |
+| FE 47 | 9 | `S80 S40 S20 M` | SET_ATTACH_ROTATION | 137 | Attach rotation rx = S@1, rz = S@3, ry = S@5. Per frame, for an entity with `EF.23` (and none of the hidden / culled masks): reads the parent's joint world matrix (R, T) and attach point J; entity matrix = R x RotMatrix(rx, ry, rz) (Rx Ry Rz), translation = R (J + offset) + T, model rotation 0, model scale = entity scale << 3 (R carries the parent's scale); the entity's own position stays. fin_15 spins a prop with a per-tick `FE 47 #0,#0,var; SUB var,#20`. Implemented (`FieldWorld::step_attached`, `Actor::set_attached`). |
+| FE 48 | 11 | `b U w w w` | GET_ATTACH_POINT | 265 | Entity c@1 (entity reference), attach point U@2: the point's WORLD position (joint matrix x offset + translation) as the joint's drawn position (render matrix; the engine-frame variant mirrored x / z about the actor, putting tel_b23e's boat gangway - points 5, 6, 3, 1 = pier edge -> deck - 508 units out in the water). var@4 = x, var@6 = z, var@8 = y. No entity: all 0. Used as walk targets (crn_b13i ent 1: `FE 48 ent6, #5 ...; WALK_TO $0,$1,$2`). Implemented. |
+| FE 49 | 7 | `S80 S40 M` | HEAD_LOOK_DIR_OFS | 88 | As FE 35 with a = (facing + S@3 + 0x400) & 0xFFF (M@5 bit 0x40), y = S@1 (bit 0x80). Implemented. |
+| FE 4A | 4 | `U` | RENAME_CHARACTER | 93 | Selects the name-entry screen for character U (launcher mode 0x10). It only selects; the FE 61 that follows every FE 4A opens it. RDE shows the user guide (controls / key map) first when variable 6 is 0 or 8 - the title New Game and New Game+ (OpenCross: `GameFlow::begin_rename(.., guide)`). |
+| FE 4B | 3 | `b` | SET_NOT_DRAWN | 32 | `EF.20` = (b != 0): the actor is not drawn and casts no shadow; it still animates, walks and collides. tel_b23e / dem_08 / cao_a03f hide the sword or tool, then `FE 4B 0` + D6 attach it to a hand. |
+| FE 4C | 3 | `c` | SELECT_ENTITY_EXCLUSIVE | 31 | Entity c (none = no-op): clears `EF.0` on every entity, sets the controlled entity (the player entity used by 55 / 56 and the field's player tests) = c and sets `EF.0` on it. |
+| FE 4D | 3 | `b` | SET_BYTE_4D | 0 | Stores b in a global byte. |
+| FE 4E | 3 | `b` | SET_GF15 | 14 | `GF.15` = b & 1. Stored. |
+| FE 4F | 5 | `b U` | REGISTER_SLOT_ENTITY | 31 | Entity b (none = no-op) is registered in slot (U & 7) of the 8-entry slot table. Every frame the engine publishes the registered entities' X / Z / facing to variables `0x300 + 6k`, `+2`, `+4` and the scroll to `0x330` / `0x332` (the saved variable block). |
+| FE 50 | 2 | `-` | RESTORE_WORLD_MAP | 8 | Scroll := variables 0x330 / 0x332 (the camera mode is not changed). A world-map room entered from a Load (`ROOM_PARAM == 6`, `SET $3A, #6`) runs this; on the first tick the registered entities are put back from the 0x300.. variables (OpenCross `FieldVM::restore_slots_`; test `test_fe50_restore`). |
+| FE 51 | 4 | `U` | REFRESH_MIRROR_OBJ | 0 | Only if `ES.11` is set: rebuilds the mirror copy's display object; U == 0xFF = the room-model asset, else sets the alternative asset U and a bit. Never used. |
+| FE 52 | 4 | `U` | SWAP_LEADER | 36 | U@1 = character id, found in the party table at slot k; only k = 1 / 2 act: swaps the slots' texture images, palette rows and model buffers, then swaps the character ids of slots 0 and k. The party entity table is not swapped: the controlled entity now shows character U. Implemented. |
+| FE 53 | 8 | `S80 S40 M c` | HEAD_LOOK_DIR_ENT | 329 | Entity c@6: as FE 49 on that entity (its facing, its head turn rate), yaw offset S@3, y S@1; no position added. Implemented. |
+| FE 54 | 10 | `S80 S40 S20 M c` | HEAD_LOOK_POINT_ENT | 0 | Entity c@8: as FE 30 (target (x S@1, y S@5, z S@3)) but the executing entity's head turn rate. Implemented. |
+| FE 55 | 4 | `c c` | HEAD_LOOK_AT_ENT | 43 | A = c@1, B = c@2 (neither none / `EF.14`): B's head target = attach point 1 of A (world, engine frame). gal_b14f: `FE 55 ent4, ent5` (Kid looks at Serge), `FE 56 ent5`. Implemented. |
+| FE 56 | 3 | `c` | HEAD_RESET_ENT | 209 | FE 32 on entity c. Implemented. |
+| FE 57 | 6 | `S80 M c` | HEAD_LOOK_DIR_ENT2 | 126 | Entity c@4: as FE 35 on that entity (y = S@1, M@3). Implemented. |
+| FE 58 | 3 | `b` | SET_ENV_MAP | 0 | b == 0: clears `ES.30`; b == 1: sets it; b >= 2: sets it and the model flag byte (low byte of `EA`) = b. Bit 30 selects the environment-map draw routine: b = 2 -> an extra semi-transparent environment-map primitive over each textured face (UV from the vertex normal, `u = (nx >> 1) + 0x40, v = (ny >> 1) + 0xC0`, clut 0x3C10, tpage 0x8D), b = 3 -> the environment map INSTEAD of the texture; other values only switch the routine. Not ported (no room uses it). |
+| FE 59 | 2 | `-` | MENU_PREAMBLE_3 | 1 | Gate (pc -= 1 and yield while busy); when idle: queues menu cue 3 and sets a register; pc += 1. OpenCross logs the registers as stubs; FE 61 opens the right menu without them. |
+| FE 5A | 3 | `b` | SET_FLAT_LIGHT | 198 | `ES.31` = b & 1: flat light - the entity's colour target is 0x80 on every channel, ignoring the room's zone table (op 67). OpenCross: `RoomLighting::tick(..., neutral)`. |
+| FE 5B | 2 | `-` | PARTY_SCREEN | 117 | Opens the character exchange / party screen. |
+| FE 5C | 6 | `b c U` | SET_FOOTSTEP_SOUND | 125 | Entity c (resolved from byte 2): footstep sound id array[b] = U@3 (b = 0 left foot, 1 right foot; 0xFF = from the floor type). Then **the executing entity** (not the target) gets `ES.24` cleared if U == 0xFF, else set. |
+| FE 5D | 5 | `c U` | SET_OR_CLEAR_LOCK_BIT | 8 | c == 0: sets bit U (< 0x2C) of the party-lock bitmap (saved); c != 0: clears it. |
+| FE 5E | 4 | `U` | ELEMENT_SHOP | 15 | Opens the element shop (row U) at the next FE 61. |
+| FE 5F | 3 | `b` | CLEAR_LOD_SKIP | 0 | `EA.9` = b & 1; clears the joint-matrix LOD skip. No visible effect. |
+| FE 60 | 5 | `c U` | SET_OR_CLEAR_LOCK_BIT_2 | 19 | As FE 5D on a second bitmap. |
+| FE 61 | 2 | `-` | OPEN_MENU | 291 | Opens the menu selected by the preceding FE 4A / 5E / 67 / 68 / 72 / 84 / 85 (main menu, shop, trading post, save list, name entry). |
+| FE 62 | 5 | `c U` | HEAD_SPEED | 60 | Entity c's head turn rate = U@2 (FE 3C: the executing entity's). Default 0xE00; the next head op hands it to the head code: when 1..0xFFF it is the weight the current head direction keeps per tick (0xE00 = 7/8). |
+| FE 63 | 2 | `-` | ARM_MUSIC_SWAP | 416 | Gate (pc -= 1, yield); then sets the song-change mode so the next song loads the sequence first and then fades / restarts. Only a load order; a no-op for the streamed BGM. |
+| FE 64 | 4 | `b c` | SET_LIT | 84 | Entity c (none = skip): `EA.10` = b & 1. Bit 10 sets the model's lit flag each frame = the **lit draw** (section 8.3). |
+| FE 65 | 5/3 | `by b1&FF {0:b U; b}` | CHANGE_DISC | 8 | Disc change prompt: n = U = disc - 1 (= story variable 0x42). The disc is data-driven: `DiscCheck` at every map transition compares variable 0x42 + 1 with the disc in the drive and reloads the disc index. Map jump -> record 368 + 3 * room id, movie opcode -> record 6035 + movie number of the disc's `.fnd` (`game/disc_index.h`). 240 map records differ between the discs (id 459 is bak_a02f / fin_06). The op is a menu request and returns at once in FieldWorld. |
+| FE 66 | 2 | `-` | FLUSH_ENTITY_SNAPSHOTS | 33 | Copies entity fields into the follower-trail snapshot table 128 times for the leader and for party slot 1. A stub in OpenCross (the follower model does not need it). Unknown: purpose of the 128x loop. |
+| FE 67 | 4 | `U` | TRADING_POST | 6 | Gate (pc -= 1 and yield while busy); then selects trading-post row U (launcher mode 0x21) and queues a menu cue; pc += 3. The FE 61 after it opens the post. |
+| FE 68 | 4 | `U` | WEAPON_SHOP | 14 | Blacksmith / weapon shop (row U) at the next FE 61. |
+| FE 69 | 3 | `b` | SAVE_OR_RESTORE_GRID | 3 | Acts on character record 1 (Kid) only: her 48-cell element grid (cell id = `v & 0x1FF`, flag bits `v & 0xC000` kept). b == 0 SAVE: every cell whose id is < 0x80 is cleared (flags kept) and (id, copies) remembered; the stock is NOT touched. b != 0 RESTORE: each remembered element is added to the element STOCK (cap 99), not back into the grid, and the copies are cleared. gal_b06i, gal_b09i, gal_b10i. OpenCross: ported in `FieldWorld::table_op` (the pending list is kept in memory, not in the save). |
+| FE 6A | 4 | `U` | SET_REG_6A | 0 | A 16-bit global = U. |
+| FE 6B | 3 | `b` | SET_GF16 | 139 | `GF.16` = b & 1. Stored. |
+| FE 6C | 3 | `b` | SET_GF17 | 2 | `GF.17` = b & 1 (alt portrait: Serge's face switches to the Lynx portrait when his model byte is 0x31 and the bit is clear). Ignored in OpenCross. |
+| FE 6D | 2 | `-` | RECOVER_STARS | 143 | Current stars = total stars. |
+| FE 6E | 4 | `V` | GET_SONG_ID | 39 | var[V] = current song id (-1 = none). A recruit / jingle scene saves the song and its volume and restores them after (`FE 6E $r0 / FE 76 $r1 / FE 1D #10 #0 / 88 #23 ... FE 78 $r0, $r1`, cao_a02f and 34 more rooms). OpenCross: `FieldWorld::query` answers `last_song_`. |
+| FE 6F | 3 | `b` | ROSTER_SAVE_RESTORE | 2 | b == 0 SAVE: for every recruited character, grid elements return to the element stock (cells keep `0xC000`) and the three accessories go back to the stock; the roster is copied to the saved words, the live roster becomes Serge only, the party lock bitmap = 1 and three other lock words = 0. b != 0 RESTORE: roster \|= saved; grids and accessories stay empty and the lock words stay as SAVE left them. cao_a01f, ryu_a28i. Ported in `FieldWorld::table_op`. |
+| FE 70 | 3 | `c` | SET_BATTLE_INTRO_ANCHOR | 53 | Entity c (not none): battle-intro anchor (room init: none). Read by A3 / C9: the encounter effect `enct` is centred on this entity's waist attach point (else the leader). Timeline of `enct` (ticks): 0 full-screen subtractive dim over 7 + sound 0x24 + e01 / e06 + rumble, 1 sound 0x23 + e00, 12 dim back to 0 over 58, 50 e04, 60 e061, end 105. Nothing centres a screen effect on the anchor. OpenCross stores the anchor (`battle_intro_anchor()`); `enct` plays in the field (`FieldWorld::request_battle`) and the battle starts when its task ends. |
+| FE 71 | 3 | `b` | ALT_PORTRAIT | 37 | `GF.18` = b & 1 (alt portrait: face 1 -> 0x5B). Ignored in OpenCross. |
+| FE 72 | 2 | `-` | SAVE_POINT_PREAMBLE | 40 | Gate (pc -= 1, yield while busy); when idle sets a register and queues menu cue 3; pc += 1. The FE 61 after it opens the save list (this is how save points work). |
+| FE 73 | 6 | `U U` | LEARN_LIMIT_2 | 2644 | Debug-room element-grid editor (bak_* rooms, 64 rooms): idx = U@1, value = U@3. Writes (value - 0x200) with the flag bits kept into the character's grid cell number T - 1, where T = total popcount of the first 7 grid words; T == 0 gives index -1 (unhandled). Not reachable in play. **Not implemented in OpenCross** (logged stub). |
+| FE 74 | 6 | `U U` | LEARN_LIMIT_1 | 2644 | As FE 73 with 5 words. Not implemented. |
+| FE 75 | 4 | `U` | WAIT_SELECTION | 3 | Gate (pc -= 1, yield while busy); when idle stores U in a byte register and sets a selection flag; pc += 3. Both paths yield. Not implemented (logged once in 1 room). |
+| FE 76 | 4 | `V` | GET_SONG_VOLUME | 55 | var[V] = current song's volume field (0 when no song). OpenCross answers the tracked music volume (PLAY_SONG / FE 78 volume, FE 1D target). |
+| FE 77 | 4 | `w` | SET_PAD_MASK | 1 | Pad mask (room init 0xFFFF) = w@1. Every field pad word is ANDed with it. zel_a12i `FE 77 FE FF` removes pad bit 0 (an L2 shoulder action). Implemented on the key words of ops 50 / 51. |
+| FE 78 | 6 | `U U` | PLAY_SONG_EX | 275 | Song U@1 at volume U@3. Fast mode: stores them, pc += 5 without waiting. Else gate (pc -= 1, yield); then starts the song; a non-zero result yields with pc -= 1 (retry), zero: budget +1 and pc += 5. |
+| FE 79 | 6 | `U U` | LEARN_LIMIT_0 | 2643 | As FE 73 with 3 words. Not implemented. |
+| FE 7A | 4 | `U` | ADD_FRAME | 12 | Sets bit U (0..15 only) in the owned-window-frames mask (a U >= 16 is a no-op). OpenCross: the slot's `frames` (save image 0xE1E8, `SaveSlot::frames`), seeded at room load. The menu's skin picker still ignores the mask. |
+| FE 7B | 4 | `U` | SET_LIMIT_MODE | 122 | Character record byte: bits 0-2 kept, bits 3-7 replaced by one bit (U = 0..4 sets bit 3+U, U >= 5 clears them). Not a toggle. Debug-room editor. Not implemented. |
+| FE 7C | 6 | `U U` | ENQUEUE_AND_SET_SLOT | 1 | Debug-room: appends the character's accessory slot 0 value to the item queue (cap 99), then stores U@3 there. Not implemented. |
+| FE 7D | 4 | `U` | CLEAR_RECORD_SLOTS | 2 | Debug-room: empties character U's 48 grid cells and 3 accessory slots (returning them to stock). Not implemented. |
+| FE 7E | 2 | `-` | CODE_CHECK | 1 | Compares a 12-byte global buffer with a fixed 12-byte table; on a full match writes 0x33 and 0x5D into two bytes of the buffer. Never yields. Meaning unknown (looks like a fixed input-code check). Not implemented. |
+| FE 7F | 3 | `b` | SET_MENU_LOCK_ALIAS | 0 | Alias of FE 18. |
+| FE 80 | 3 | `b` | SET_GF13 | 1 | `GF.13` = b & 1. Stored (a HUD gate). |
+| FE 81 | 3 | `b` | SET_GF19 | 8 | `GF.19` = b & 1. Stored (a HUD gate). |
+| FE 82 | 4 | `V` | GET_STARS_TOTAL | 1 | var[V] = total stars. The operand is a u16 variable id, so the instruction is 4 bytes (`FE 82 V`). |
+| FE 83 | 2 | `-` | CLEAR_BIT20 | 1 | Clears bit 0x20 of a save field and of variable 0x3D2. Seen once. OpenCross clears the variable bit only. |
+| FE 84 | 2 | `-` | NEW_GAME_PLUS_LIST | 1 | The New Game+ title list: the cleared game's RAM is copied to a buffer for the new game, a menu cue is queued, launcher mode 0x30 (menutest variant 2) is selected for the FE 61 after it. Only in `ending` ROOM_PARAM 3 (a Continued cleared save). |
+| FE 85 | 2 | `-` | CLEARED_SAVE | 1 | Gate; every character recruited or in the carry-over bitmap gives its grid elements and its 5 gear slots back to the stock; variable 0x7E = 3; launcher mode 4 (save list only) for the FE 61 after it. Only in `ending` ROOM_PARAM 2 (the ending's save prompt; it saves with variable 0x3A = 3 in map 9). Not a save point (those are FE 72 + FE 61). |
+
+Opcodes `52 53 57 58 DE EA-FD FF` are in no source and never occur in reachable or unreferenced code: treat them as invalid. Table coverage: 229 main opcodes + the FE prefix = 230 of 256 first bytes; 134 FE sub-opcodes (00-85). 329 distinct opcodes occur in the data (213 main, 116 FE) and all are in the table (363 rows).
+
+### 6.11 Long-form notes for individual ops
+
+**8F BG_WAVE_ON (ripple).** The eight operands are read by the effect itself. Each frame the ramp advances, the x phase += p5 and the y phase += p6, and at ordering-table slot p8 the engine draws the picture back out of the frame buffer through a grid of 20 x 14 quads (row r samples buffer rows 16r..16r+15 and is drawn at 16r + 32; the first 32 buffer rows are never redrawn and show a moved copy of rows 32..63). Grid line x of column c (1..19) = `16c + rcos(phase_x + c * p3) * p1 >> 12` (column 0 at 0, the right edge 0x141); line y of row r = `16r + 32 + rcos(phase_y + r * p4) * p2 >> 12` for r 1..12 (row 0 pinned at 32), rows 14..16 at `16r - 48 + rcos(phase_y + (r - 3) * p4) * p2 >> 12` with the bottom pinned at 224. It is rcos, not sin. Everything filed deeper than p8 is warped; content at slots <= p8 (and the UI) is drawn after it, unwarped. While active the room-exit kind (FE 02) is forced to 0. OpenCross: implemented in both art modes (`render::build_screen_warp`; main.cpp draws the slab with OT > p8 into a target, the warp into the picture, then the slab with OT <= p8 over it; `FieldWorld::set_draw_slab` filters layers, shadows, actor faces and effect quads); the frame's STP bits are not tracked, so the grid is drawn opaque. **OpenCross departs on purpose:** `build_screen_warp` continues the grid over rows 0..31 (two more rows, row 0 unpinned) so the whole picture ripples; the original's static top band read as the effect "only working on the lower 80 %".
+
+**FE 02 transition kinds.** Kind 0 = subtractive fade to black out (0x50 ticks) and in (0x30), kind 2 = additive fade to white out (0x40) and in (0x20); the fade colour steps `0xFF0000 / n` per tick and the room switches on the fully black / white tick. Kinds 1 / 3 / 4 / 5 / 6 have no fade out: the shown frame is captured and held for 4 frames while the room loads. Kinds 1 / 3 / 4 cross-dissolve: the old frame is drawn over the new room (additive, brightness b / 128, b falling 0x80 -> 0 over 96 ticks for kind 1 or 32 for kinds 3 / 4) while the new room fades in from black under it (0x30 for kinds 1 / 4, 0x20 for 3). Kinds 5 / 6 slide the opaque old frame off to the right / down by 12 per tick (done past 0x140 / 0xF0). No random numbers. OpenCross draws all kinds (`FieldWorld::begin_jump` / `step_transition` / `step_capture` / `draw_capture`; the host hands over the presented window, `VkContext::request_capture`); loads are instant, so the CD hold is not reproduced. Kinds 0 / 2 use the retail lengths (`kRoomFadeOut` 0x50, `kRoomFadeIn` 0x30, `kWhiteFadeOut` 0x40, `kWhiteFadeIn` 0x20). A8 does not use this slot.
+
+**FE 03 mirror copy.** The copy is drawn with the back-face test inverted (the negated root-matrix row flips the projected winding), OPAQUE, and untinted and unlit: zone colour, ENTITY_RGB, ambient and the lit draw (FE 64) apply to the original only, the copy keeps the model default 0x808080 (neutral, brighter than a dimmed original). Its ordering-table slot is `0xB8 + submerged-OT` (= 3000 in jac_b34i = layer 0's z), behind layer 0 and every layer nearer than that. jac_b34i's polished-floor look is the layers, not the copy: layer 0 (z 3000) is cut out (alpha 0) around the round floor ring and the semi-transparent ring layers 1 / 2 (z 2000 / 2500) are filed nearer than the copy, so the copy is seen through the cut-out and blended with the floor art (retail: faint red glints under the followers' feet). OpenCross: `DrawParams::mirror` inverts the test; the copy is drawn in the WetOnly pass (before `draw_background`, depth written), so the nearer layers hide / blend over it. Rules in `src/game/mirror_copy.h`, test `test_mirror_copy`.
+
+**FE 45 MODEL_FLASH draw.** Entities with `ES.27` are drawn with two semi-transparent primitives per polygon (colour = model x construct >> 7): first the white palette with blend mode 2 (B - F), then the model's own palette with blend mode 1 (B + F) (the white one is linked last = drawn first). Texels without STP are opaque in both, so they keep the normal colour; STP texels give `B - light + texel x light` (a colour-driven fade of the model, not a white silhouette). The routine is skipped on water triangles (the water routine wins) and overridden by `ES.30`. OpenCross: `Ent::flash` -> `MeshPipeline::DrawParams::flash` (passes white Solid / white Semi blend 2 / Solid / Semi blend 1). Unknown: whether the white primitive carries the second palette row's select bit on 2-row models.
+
+**A3 / C9 battle flags** (operand 3): `1` keep the field music (no change-music: neither the encounter-time stop + song 2 nor the 0x14 theme; a room whose own song is 2, e.g. opn_a02i, keeps it too), `2` losable (a wipe is not game over), `4` every PC except Poshul / Mojo gets model byte 0x3B (`adk_sp`, the Dragoon disguise) written into its character record by the battle loader and again on the field's battle return: the field party stays disguised after the fight (OpenCross: `FieldWorld::apply_battle_disguise`; jac_b25i restores the normal models just before its flag 4 battle), `0x10` no victory song, `0x20` the field does not restart its song after the battle, `0x40` unknown. `field` (the battlefield index) is not used by OpenCross's battle view (the scene's own `bg` picks the stage). After a win (not scenes 0x1D7 / 0x1D8 / 0x1DD) the victory song 0x17 (boss) / 0x16 (BGM024 / BGM023) plays. Result variable `$BATTLE_RESULT` (0x32): 0 victory, 1 wiped, 2 fled; D2 treats a result < 2 as won. After a battle the field replays its saved song (every battle unless flag 0x20) at the position it was cut off (remastered). Flow in OpenCross: the op yields while `battle_active()`; the field plays `enct`; the host runs `BattleView` for the field party (starting from white) and calls `FieldWorld::end_battle(code)`; the field fades in from black over 0x30 ticks (subtractive) and the script continues (`FE 10` then releases the input lock). A wipe in a battle that is not losable loads map 9, the game-over room (`app_battle.cpp`). RDE's "encounters off" option patches A3 / C9 for the battles of a fixed table (keyed by map, entity and battle id, gated on story flags) into an auto-win: the battle is not fought, the last battle result becomes 2 (so D2 does not mark the monster defeated), variable 0x32 is untouched and the op instead runs script 2 of entity 0 (`09 00 02`) and waits for it; the same option skips a D9 model swap (pc += 4). OpenCross: the Cheats tab "No encounters" (`FieldHost::skip_battle` / `skip_model_swap`; off by default).
+
+
+## 8. Entity and global flag bits
+
+Scripts set bits in three per-entity words and one global word. The notation used in the tables above:
+
+* **`EF.n`**: bit n of the entity flag word. 0 selected / controlled (FE 4C, B2); 1 unused (op 37; stored only); 2 no ON_COLLISION script (op 38; also set at load for an empty slot 3); 3 no ON_ACTION script (op 39; empty slot 2); 4 **inactive**: scripts, trigger tests, collision and talk skip the entity (36 b = 0; the model is still drawn); 5 hidden (34 / 35); 6 free height / Y-position valid (26, walks); 8 solid for the controlled mover (8E b = 0 sets it, b != 0 clears it; SETUP_NPC, D1 and the party binding set it); 9 box actor (8D); 10 casts no shadow (93); 12 (8D mode 2 / 3); 13 pushable (FE 06); 14 no 3D display model (most visual ops skip); 15 off-screen culled (engine only); 16 idle-hold (dead: nothing sets the clip id it needs); 17 joint-matrix LOD skip (engine only; FE 5F clears it; no visible effect); 18 no floor under the entity (25); 19 "touched by the controlled mover this tick" (engine only); 20 not drawn and no shadow (FE 4B; it still animates, walks and collides); 21 NPC class (SETUP_NPC, D1): the walk-mesh walls of attr 3 / 5 block it (`room.md` section 3.5); 22 player class (set on the party entities): blocked by walls of attr 4 / 5, and FE 40 does nothing for it; 23 attached to a parent entity (D6).
+* **`ES.n`**: bit n of the entity state word. 0 **input lock** (2C sets, 2B clears); 2 / 3 wander walk / turn side (A0); 5 own axis rotation unused (AD); 6 touch-trigger enable (AE); 7 ON_ACTION running (set when script 2 starts); 8 model orientation from the ground normal (FE 00); 9 never culled (FE 01; D6 sets it on both entities); 11 secondary (mirror) display model (FE 03); 12 extra animation pack loaded (BF / C1); 13 scripted turn (FE 07, CA); 14 turn pending (2E-33, CA); 15 saved-turn-rate stash (FE 07); 16 moving (walk / position ops; cleared once per tick); 18 not pushed by terrain (B5); 19 (FE 19, stored); 20 field-monster marker (D1); 21 pass-through after a 0x40-tick press (FE 25); 22 (FE 2A); 23 no footprints (FE 2C); 24 plays footsteps (FE 40 / 41 / 5C); 25 curve walks (FE 2D / 2E); 26 stored only (FE 33); 27 flash (FE 45); 29 snap / no smoothing (FE 00, 34 b = 0, 35); 30 environment-map draw (FE 58); 31 flat light (FE 5A).
+* **`EA.n`**: bit n of the entity animation word. 8 animation done / moving busy (3C clears it; walks and C1 set it; C4 waits on it; 5C sets it on the way down); 9 clears the LOD skip (FE 5F); 10 lit draw (FE 64); 11 field monster (D1).
+* **`GF.n`**: bit n of the global script flag word, reset at room init (`FieldVM::load`; only `GF.14` starts set). 0 camera script busy (5D / 5E / 61; OpenCross never stores it: the wait forms poll the camera tween); 1 input / interaction lock (set by 2C, 5A, A3 / C9; **derived in OpenCross**: set while any entity has `ES.0`; the VM itself only ever sets it, so the host recomputes it once per tick, otherwise ON_ACTION would stay refused after the first cutscene); 3 formation mode (84 / DF set, 85 clears; entities of the party are skipped by the scheduler); 4 (84 / DF set it; never cleared); 5 (91); 6 party override active (B2); 7 ground-tilt for all entities (FE 00 b != 0); 8 no pan-limit clamps (FE 04); 9 camera snap (FE 11); 10 overlay grid (FE 14); 11 leader rotate lock (FE 17); 12 pad cannot open the main menu (FE 18 / 7F); 13 HUD gate (FE 80); 14 pause allowed (FE 42); 15 (FE 4E); 16 (FE 6B); 17 Lynx portrait (FE 6C); 18 alt portrait (FE 71); 19 HUD gate (FE 81). Bits 4, 5, 10, 13, 15-19 are stored with no consumer in OpenCross.
+
+### 8.1 Off-screen cull
+
+Once per frame, for every model entity (without `EF.5`, `EF.14`): unless the entity is exempt (`ES.9`, `ES.24`, `EF.22`, or the first two frames after a room load) the bounding box is projected and tested against the 320 x 224 screen (scroll added): points P0 = (-w/2, 0, 0), P1 = (+w/2, 0, 0), P2 = (0, 0, -w/2), P3 = (0, -h, +w/2) around (x, y + y-offset, z), scaled by the entity scale, camera-rotated, with w = max(model extent x, z), h = extent y; the actor stays when `P0.x + R < 321 && P1.x + R >= 0 && P2.y + R' >= 0 && P3.y + R' < 225`. A culled actor (`EF.15`) runs no animation sequence, no clip time, no head matrices, no attach, and is not drawn: its animation freezes where it is, so a WAIT_ANIMATION on it waits until it is on screen again (the softlock watchdog names it). OpenCross: `step_cull` / `Actor::set_culled`; it widens the x test by the widescreen margin and ignores the entity's own pitch / roll in the box; `OC_NO_CULL=1` switches the freeze off for an A/B check.
+
+### 8.2 Pushable actors
+
+The hit test is "the controlled mover's next position P' = P + V lies in the actor's rect"; the rect is built at the actor's **position + pending velocity**. A hit blocks the player for the tick; if the actor has `EF.13` it also receives V as its velocity, unless its next centre would lie inside another box actor (`EF.9`, none of the hidden / inactive masks) or the wall probe refuses the step. Next tick the rect sits one step ahead, P' is outside it: no hit, so the actor moves by its velocity, the player moves by V, the velocity is cleared and the following tick is a hit again. A pushed block therefore advances one player step every second tick (half the walking speed). Without `EF.13` (or with the push refused) the player just stays. A solid with `ES.21` stops blocking after 0x40 ticks of pressing. OpenCross: `Ent::pend*`, `push_step_ok` / `push_target_inside_box` / `apply_push`, `blocked_by_solids`; a pending push is also applied when the player stops. Route `push_block` (jac_b34i entity 4: 761 units in 530 ticks). 9 rooms use FE 06: jac_a32d, jac_b26i, jac_b32d, jac_b34i (a sliding-block room: the block's UPDATE script watches its position and plays the scraping sound), opa_a02f, opa_b02f, ten_a01f, cao_a01f, chi_b02d. With IF_JUMP's polarity, `IF_JUMP $0118 & 8 -> L010E` in jac_b34i's INIT puts the pushable block at (0, -650) while bit 3 of variable 0x118 is CLEAR.
+
+### 8.3 Lit actors
+
+The model's lit draw builds light and colour matrices from the three light slots for the model's waist attach point (point 9); faces are Gouraud-shaded from the vertex normals; the back colour is the room's BK colour (0 at room init, then the pack's type-0x24 entry; opn_a01i uses 159, 160, 115). The light slots are written by the room's type-17 emitter objects (`EmitterSystem::set_lights`; zel_a13f has 3 lights, fin_02, ten_b07f, jac_a29i and bak_a12f also have them; `ocprd info` lists `type=17`). FE 64 is used in 16 rooms (bak_a11f / a12f / a16e, end_a01e, fin_02 / 16 / 29, jac_a29i, kji_b09e, opn_a01i, ryu_a24i / b24i, sui_a09e, ten_b05f / b07f, zel_a13f). OpenCross: `FieldWorld::lights_`, `MeshPipeline::Light`; a lit actor is lit always, also with no light alive (ambient only), as on the PS1. Deviation: until a light has lit a slot the actor keeps its flat zone colour instead of the PS1's black.
+
+## 9. Dialogue block (subfile 008)
+
+Decoded layout (checked on all 566 rooms, 57,360 messages):
+
+```
+u16 firstTextPtr                 (= 8 * messageCount; the header table is 8-byte records)
+record[i] (8 bytes): u16 textPtr, u16 w1, u16 w2, u16 w3
+text area: messages back to back; message i = bytes [textPtr_i, textPtr_{i+1}); pointers strictly increasing
+```
+
+* `w1` = box width in characters, `w2` = number of lines, `w3` = width in pixels (35,649 messages: `w3 = 12 * w1`, 3,138: `8 * w1` for ASCII); records whose `w1 == 0` (623) probably take their size from the script (`SETUP_DIALOG_WINDOW`, opcode 62).
+* Every message ends with `00 01` or with a timed close (`06 xx 01`, `xx` = frames) -- the final `01` is part of the message. Byte 0x00 is END, 0x01 newline. 99.99 % of messages parse exactly to their end with the control table below; the two exceptions are unusual terminators.
+* Bytes `F8..FF` are glyph-page prefixes: the **next byte is part of the same glyph** (including 0x00/0x01), so a kanji/extended glyph is 2 bytes. All other bytes `>= 0x20` are single glyph codes in the game's *relative alphabet* (a font-order index, not ASCII; e.g. `35 46 3E 3E 4A` spells "Hello" in an ASCII test string, case and punctuation follow the font sheet). The `dialogue` tool prints glyph bytes as hex and decodes control codes. The JP glyph lookup is in `text.md` section 3.
+* Message text often opens with `05 FF` (instant text speed) or the indentation glyph `75` x3.
+
+Control codes (byte < 0x20; arguments follow). "args" = bytes consumed; the counts reproduce the exact message boundaries of 99.99 % of messages, and the text renderer has a case for each:
+
+| code | args | name | meaning |
+|---|---|---|---|
+| 00 | 0 | END | end of text |
+| 01 | 0 | NL | newline |
+| 02 | 0 | PAGE | wait for confirm, clear, next page |
+| 03 | 0 | WAIT | wait for confirm |
+| 04 | 1 | DELAY | pause xx frames |
+| 05 | 1 | SPEED | text speed (FF = instant) |
+| 06 | 1 | AUTOCLOSE | close after xx frames |
+| 07 | 2 | ITEM | item name (u16 item id) |
+| 08 | 1 | NAME | character name (id as in section 3; 0x16 = Harle ...) |
+| 0A, 0B | 1 | NUM | number from a script variable |
+| 0E | 1 | COLOR | colour index (table in the executable; 00 white, 01 blue) |
+| 10 | 1 | DIGITS | numeric-entry field of xx digits; xx placeholder glyphs follow. The field starts with the last xx decimal digits of variable 0x18 and writes the entered number back to it every frame while the window takes input; Up / Down change the cursor digit (wrapping 9 <-> 0), Left / Right move the cursor (wrapping), a held direction auto-repeats, the cursor digit is drawn in colour 6 (`{input(n)}`) |
+| 12 | 1 | ACCENT | auto-accent/suffix lookup |
+| 15 | 1 | SCRNAME | name set by script |
+| 16, 17 | 1 | C16/C17 | 16 = wait until variable 0x22 equals the byte (`{fwait(n)}`), 17 = store the byte in variable 0x22 when the reveal reaches it (`{fset(n)}`) |
+| 18 | 1 | PARTYNAME | party member name (slot xx; an empty slot holds 0xFF) |
+| 19 | 1 | SCRSTR | string from script |
+| 1B | 1 | BUTTON | PSX button glyph |
+| 1C | 1 | CASE | case mode (0 none, 1 capitalise, 2 lower) |
+| 1E | 1 | SUFFIX | name suffix (arg 00) |
+| 1F | 0 | ACCENTPH | accent placeholder |
+| 09 0C 0D 0F 11 13 14 1A 1D | 0 | unknown | no-ops in the renderer; no arguments |
+
+Dialogue is requested by `E0 w b` (text only), `E3 c w b` (entity c speaks, b = flags: 0, 4, 8, 0x0D, 0x4D seen), `E4 c w b` (same shape), after `62 SETUP_DIALOG_WINDOW` and `9E SET_DIALOG_FACE`; `E2 WAIT_DIALOG` always follows.
+
+**`{fset(n)}` / `{fwait(n)}` = variable 0x22.** Code 0x17 writes its byte to variable 0x22 when the reveal reaches it; 0x16 continues only when variable 0x22 equals its byte, else the text pointer is moved back onto the code (the reveal stalls there and re-tests every frame). Scripts poll / answer through the same variable: gal_b14f entity 5 loops on `IF $0022 <= 2` until Kid's msg 7 ends with `{bwait}{fset(3)}`, answers `SET_1 $0022` (releasing `{fwait(1)}{wend(1)}`) and collapses at msg 8's mid-text `{fset(3)}`. OpenCross: implemented in `ui::Typewriter` (`event_get` / `event_set`, wired to variable 0x22 by FieldWorld). The text tokens `{playwork(n)}`, `{itemwork(n)}`, `{num(n)}` read script variable `0x1A + 2n` (text.md).
+
+The `E0 / E3 / E4` message index is the row in the room's text (`lang.dat` by room id). **Window flags** = the word of op 62 with its low byte replaced by the dialog op's flag byte when that is non-zero: 0x02 fixed window (4 lines, 0xF0 wide, centred at x 0xA0, y 0x41, or 0xB7 when bit 0x04 is set), bits 0x0C placement mode (0 auto: above the speaker when its heading is below 0x800, else below; 1 below; 2 above; 3 screen centre 0xA0 / 0x6C), 0x10 frameless label, 0x20 opens at full size (no grow), 0x40 no portrait, 0x800 / 0x1000 force the portrait to the right / left (otherwise by the speaker's heading plus the control yaw). Size: width = the widest line of the message in PS1 pixels (glyphs below 0x75 are 8 wide, the rest 12) or op 62's columns x 12; lines = the message's line count or op 62's lines (13 px each); a portrait forces 4 lines and adds 0x40 to the width. Op 62's x / y, when non-zero, are the window centre. Placement is clamped to x 0x20..0x120 and y 0x14..0xC4. Placement (`FieldWorld::place_dialogue_window`): mode 2 (flags 0x08) puts the window above the speaker; Kid's window in gal_b14f sits at the bottom only while she stands off screen below the jetty (op 25); with her on the jetty it is at (32, 38), top left. A frameless label (op 62 flag 0x10; OpenCross `label_`, `ui::DialogueBox::set_label`) is non-modal, has no frame or portrait, and is placed like any window (flag 56 = mode 2, above the speaker = the running entity).
+
+## 10. Interpreter
+
+The field script runs on a small cooperative interpreter: each entity has its own script state; entities take turns every logic tick; a script runs until it yields. The world map has no interpreter of its own: `wld_*` rooms run the same one.
+
+### 10.1 Machine state
+
+* Script base: every pc / jump target / call target is a byte offset from `code_base` (the 16-bit `J`).
+* A **yield flag**: a handler sets it to end the entity's turn for this tick (reset at dispatcher entry).
+* **Run mode**: time-sliced (normal) or run-to-completion (yields ignored; used for INIT).
+* An **instruction budget** for the current dispatcher call (section 10.4).
+* A **fast-forward / instant flag**: set while a script is replayed to restore state; several ops (turn, BGM, movies, system gates) skip their waits when it is set.
+* The **controlled (player) entity** and its override (set by 5F / 60, none = no override). Party slots 0..2 hold entity indices (empty = 0xFF) and character ids (also variables 0x0C / 0E / 10).
+* The **entity array** (stride per entity; count) and the **logic tick count** per displayed frame (1 in normal play; it scales animation / movement steps throughout the engine).
+* The **global flag word** `GF.n` (section 8).
+
+### 10.2 Entity fields
+
+Identified from the handlers (everything else is unnamed):
+
+| field | meaning |
+|---|---|
+| axis angles | per-axis angle values set by 27 / 28 / 29 (and AA on another entity): pitch, yaw, roll of the model |
+| flag words | `EF` (entity flags), `ES` (entity state), `EA` (animation flags): section 8 |
+| position | X, Y, Z as signed 16.16, with integer halves; previous Y |
+| movement deltas | per-tick velocity (zeroed by 3A / 3B) |
+| scale | x / y / z (82, FE 0D) |
+| tween state | frame count and frame counter (5B, 5C, 46, BA), per-frame steps; the B1 accumulator |
+| dialogue window | parameters set by 62; owner of the window (up to 4 windows exist) |
+| display models | primary, and secondary (the mirror, `ES.11`) |
+| animation ids | clip ids per walk mode (3D slots 0..8: stand, walk, run, fall, ...), the current animation, and the heading word with the "standing" marker |
+| facing | **facing target** (12 bit, 4096 = full turn; bit 15 set = turn requested) and **current (shown) facing**, which chases the target at the turn rate |
+| trigger geometry | radius and height (8B), rectangle half extents (8C) |
+| misc | speed (A2, FE 0E / 0F, 41), animation rate (74 / B7), y-offset (B0 / B1 counter), curve turn rate (FE 2D), footstep walker id (FE 40), turn rate (A5 / CF; default 0x80), head turn rate (FE 3C / 62; default 0xE00), footstep sound ids (FE 5C), D1 ordinal, attach parent / point / offset / rotation (D6, FE 46, FE 47) |
+| script state | 8 script slot records (section 10.3), the 4-entry call stack and its depth, pc and index of the record that is executing |
+| results | dialogue result byte (to variable 0x04 by E2), model index (D1) |
+
+Defaults (set when the entity is created): radius 0x26, height 0x12C, rectangle half extents 0x26, turn rate / curve turn rate / saved turn rate 0x80, head turn rate 0xE00, scale 0x200 per axis (OpenCross `script::Entity` starts with the turn rates, head rate and scale at these values and stores 0 for radius, height and rect extents, which the host reads as the defaults).
+
+### 10.3 Script slot records
+
+Each entity can have up to 8 scripts alive (one record each):
+
+| field | meaning |
+|---|---|
+| pc | saved pc of the script |
+| class / state | **priority class**: 0xF = idle, 7 = default UPDATE script, otherwise the `d >> 5` class given to RUN_SCRIPT (ACTION 3, COLLISION 4, touch 2). **The lowest value runs**; the others are suspended until it ends |
+| id | script id (`d & 0x1F`; 0xFF = none). Used to refuse starting a script that is already running |
+| hold | a record held by a blocking RUN_SCRIPT (09 / 08) is not reused |
+| movement timer | -1 = no timeout; rewritten by walk ops |
+| wait counter | the 2D counter |
+| no-auto-turn flag | set by 47; survives reuse of the record |
+| blocking state | state / child record index of 08 / 09 |
+| walk target | per-slot 8-byte target vector and saved facing |
+
+### 10.4 Per-tick scheduling
+
+The field main loop runs the following once per logic tick (the tick count per displayed frame is normally 1): all entity scripts, then entity motion, the trigger test, effects. It then publishes variables 0x12 / 0x14 / 0x16 (player X / Z / Y), 0x0A (facing), 0x0C / 0E / 10 (party) and runs the camera. For entities in index order 0, 1, 2, ...:
+
+1. Skip the entity if it is inactive (`EF.4`), or if formation mode (`GF.3`) is set and the entity is a party member.
+2. Choose the record with the smallest class value (`<=` comparison, so among equals the highest record index) and make it current. OpenCross skips a record that is waiting in an 08 / 09 for a still-live child on the same entity, so a child of equal class is not starved by its parent.
+3. If every record is idle (0xF): start script **1** (UPDATE): record 0 := {pc = scriptPtr[entity][1], class 7}.
+4. Load pc from the record, run mode = time-sliced, call the dispatcher, store the pc back into the record.
+
+Dispatcher loop: reset the yield flag, refresh variable 0x4E (bitmask of "subsystem busy" gates), then `while (opcode != 0) { call handler; count++; stop when ... }`:
+
+* When the opcode byte is **0** the record is released (class 0xF, id 0xFF) and the call ends.
+* Run-to-completion mode: never returns on a yield and sets the budget to 0xFFFF; used for INIT.
+* Time-sliced mode: returns as soon as a handler left the yield flag set, or after the **budget** (8 instructions per tick), or after 0x41 handler calls. Handlers that neither advance pc nor yield (the gate failures of E0, 07, 09, ...) are simply called again immediately, up to that cap. A few ops *raise* the budget so a setup sequence can finish in one tick: 6C +0x20, E2 +0x20, 2C +0x40, 59 +0x40, FE 10 +0x40, D2 +0x40, 88 +1, and the "false" branches of 55 / 56 +1.
+
+So per tick an entity executes at most 8 instructions (plus those bonuses), and **a script that never yields still gives the other entities their turn**; there is no preemption inside the 8 instructions.
+
+### 10.5 Starting, ending, parking
+
+* **INIT (slot 0).** Room load first scans slots 2 and 3 of each entity: an empty script (first byte 0, or any script of entity 0) sets `EF.3` / `EF.2` so the trigger test ignores it. Then for entity 0, 1, 2, ... it runs script 0 to its STOP in run-to-completion mode (yields do nothing, so WAIT_FRAME is a no-op there; an INIT must not block on a condition that only later ticks can satisfy). Afterwards current facing := facing target - 0x400. A party-member swap reruns this scan. OpenCross: INIT scripts parked at the 65535-step cap are counted as "INIT overruns" (6 in the sweeps: mja_a02f, mja_b02f; `occ script-soak`).
+* **UPDATE (slot 1)**: section 10.4 step 3. Ending (STOP, or RETURN at depth 0) releases the record; next tick it starts again from the top. `3B STOP_EXEC` is the usual end of an UPDATE script: it parks the record forever (pc never advances, still class 7), which is why 7,305 uses exist; the entity stays "alive" but does nothing, and lower-class triggered scripts can still preempt it. `0B` is the same with a per-tick movement / animation update; `03` ends the script and resets the UPDATE record; `04` resets all records.
+* **ON_ACTION / ON_COLLISION (slots 2 / 3, 4).** The trigger test takes the controlled entity against each other entity i >= 1 (skipping inactive / hidden ones, requiring the vertical ranges to overlap using height): inside the inner radius (radius + 0x10..0x30), facing the entity (angle window) with the confirm input, not input-locked (`GF.1` clear), and `EF.3` clear -> start script **2** with class 3; otherwise inside the outer radius and `EF.2` clear -> script **3** with class 4; entities with `ES.6` while the touch-trigger mode is 1 -> script 4 with class 2. The new script takes a free record (class replaces 0xF); script 2 also sets `ES.7`. A script id already live on the entity is not started twice. Box triggers (`EF.9`) test the player point against the oriented rectangle grown by the touch margin 0x10; solid boxes must be talkable although the player cannot enter them: the original runs the solid test after the move, so the trigger sees a player one step inside.
+* **RUN_SCRIPT 07 / 08 / 09.** Operand `d`: id = `d & 0x1F`, class = `d >> 5`. 07 is fire-and-forget, 08 waits for the child to start, 09 waits for the child to end (and holds the record so it cannot be recycled before the parent sees it). All three skip an inactive target (`EF.4`) at once with pc += 3 (a party slot nobody occupies after 7D, a character not in the party, a monster beaten in this room, anything `36 00` made inactive); an 08 / 09 already waiting on it releases the hold and goes on. The scheduler never runs an inactive entity's scripts, so the blocking forms would otherwise wait for ever (test `test_run_script_inactive_target`). OpenCross does not model the system-busy gate of the spawn (pending jump / battle / menu / movie / shop).
+* Replay: an engine routine replays entity 0's script `id` immediately to completion in fast mode, saving and restoring entity 0's state; used to rebuild room state (e.g. after loading a save).
+
+### 10.6 Blocking versus asynchronous operations
+
+Three patterns, all expressed through pc and the yield flag:
+
+* **Advance and continue** (SET, ADD, IF_JUMP, position setters, flags): `pc += len`, no yield.
+* **Advance and yield** (3A WAIT_FRAME, E1 MULTI_CHOICE, C2): `pc += len; yield` - resumes at the next instruction next tick.
+* **Poll (blocking wait)**: the handler does *not* advance pc until a condition holds, usually setting the yield flag so other entities run: 2D WAIT, 7F WAIT_MOVIE, 8A WAIT_SONG, E2 WAIT_DIALOG, C4 WAIT_ANIMATION, CB / CC WAIT_ROTATION, BE / 85 formation waits, A3 / C9 battle, B1 timer, 3F / 42 / 43 / 44 / 45 / 46 / B8 / B9 / BA walk waits and 5B / 5C / 5D / 5E / 61 camera / move waits. The "wait form" instructions (`xx 01 ...`) of the start/wait pairs are such polls; they read their target again from the start form (5B / 5C / 5D operands are re-read at pc-9 / -7 / -5).
+
+Many ops first test a system gate (composed of ~20 busy checks such as pending screen transition, loading, fade); if it fails they yield without advancing, so they are implicit waits too (E0 does not yield but returns -1 and is retried by the dispatcher). Movies: 7E selects and starts, 7F polls; BGM: 88 starts (poll until the sound system accepts it), 8A polls until the change finished.
+
+### 10.7 Call stack
+
+Per entity, 4 entries plus a depth. `05 CALL` stores `pc + 3` and jumps; `0D RETURN` pops. The stack belongs to the entity, not to a script record, so a triggered script that CALLs while the UPDATE script is suspended inside its own CALL shares (and can overflow) the same 4 entries; a fifth CALL stalls the script permanently. RETURN at depth 0 behaves like STOP.
+
+### 10.8 Variables
+
+* One array of u16; variable id `v` is a byte offset, slot = `v >> 1`; reading goes through the room file's signedness mask (bit set = unsigned, else sign-extended). Operand `U` bit 15 set = literal 0..0x7FFF.
+* **Globals** `0x000-0x3CF` are the game-state variables (story, flags, party); the region is part of the save. `0x3D0-0x3FF` (24 words) are saved separately and survive `FE 2F`. **Room-local** `0x400-0x7FF` (0x200 words) are **zeroed on every room load**, so they never persist across rooms.
+* Engine-written variables: 0x04 dialogue / choice result (E2), 0x08 previous map id (5A / DC, from the room register), 0x06 map id, 0x0A player facing, 0x0C / 0E / 10 party member ids, 0x12 / 0x14 / 0x16 player X / Z / Y (every tick), 0x2C / 0x2E / 0x30 play time h / m / s (every tick), 0x38 (pad has actuators; not published), 0x3C = 0 and 0x46 = 1 at room load (scripts that allow the Tele-Porter / Relief Charm / Smith Spirit key items set 0x3C = 1; the field refuses them unless 0x46 and 0x3C are both 1), 0x40 flu cough timer (set to 1 at random intervals while a party member has flu), **0x3A = ROOM_PARAM, 0x34 = 0, 0x50 = 0 at room init**, then **0x34 = (debug build flag set && release-flag clear) = 1 in RDE** by the room load (the "DEBUG_MODE" name is misleading: every room tests `IF $0034 == 1` and hides its debug entities then), **0x22 = the text event register** ({fset} / {fwait}, section 9), 0x44 current window-skin index (FE 1B), 0x4E busy-gate bitmask (every dispatcher call), 0x300 + 6k.. registered-entity positions and 0x330 / 0x332 scroll (FE 4F, section 6.10). Written by the menus and the game: 0x2A USED_KEY_ITEM = 0x400 + item number when a key item is used from the field list, 0x32 BATTLE_RESULT, 0x42 = disc - 1 (FE 65), 0x4C SAVE_RESULT (1 when the menu saved), 0x7E New Game+ state (3 = cleared save, set by FE 85), 0x18 DIGIT_ENTRY_RESULT (section 9, number entry). Read by the engine: 0x36 (non-zero: no leader rotate; its low byte non-zero: no pause), 0x4A (smith shop id for the Smith Spirit key item), 0x170 / 0x172 / 0x174 (per-slot disguise model bytes), and by the No Encounters cheat the story bytes (byte ids: even = low byte, odd = high byte of the slot) 0xC4 and 0xDC (battles 0x42-0x44), 0x1C0 bit 2 (battle 1), 0x1C6 bit 6 (battle 0x45) and 0x108 bit 7 (op D9 model swaps).
+* **ROOM_PARAM of a Load = variable 0x3A.** The menu-return load path (also the title Continue: the title is a field room) does `var 2 = var 0x3A`, copies the variable block back and loads room `var 6`. Room init sets `var 0x3A = var 2`; save events overwrite 0x3A with the entrance they resume at. gal_b09i's wake-up event (entity 9 UPDATE, `ROOM_PARAM == 4`) does `SET $3A, #4` + `FE 72 / FE 61` (save menu) and plays on; a Continue of that save (location 0xDC = gal_b09i, var 0x3A = 4) re-enters with param 4, skips the save menu (bit #6144 set) and runs the bed pose, the camera pan and the lady's "You're finally awake?". OpenCross: `FlowMachine::on_load`.
+* **SCENARIO_FLAG = variable 0x00.** 6C writes it (adding 0x20 to the tick budget), 6D reads it, 69 / 6A / 6B / CD / CE compare it.
+* **Bit variables.** Opcodes 71 / 72 / 73 address bits inside the same array: `n = (v << 4) | b` (v even byte id, b 0..15) reads / sets bit `b` of variable `v`; this is how the story / event flags are stored. They persist with the globals; bits in room-local ids vanish at the next room load.
+* Other persistent tables touched by ops: party table, character records (current life, max life, status words, model byte), item count tables, money (clamped 0..9,999,999), owned window frames (bit mask, FE 7A), lock bitmaps (FE 5D / 60), the recruited and carry-over bitmaps, pad key latches (50 / 51, cleared by 54).
+
+### 10.9 Timers
+
+There is no real-time clock. Time is counted in logic ticks: `2D WAIT n` uses the per-record counter (n + 1 ticks), movement ops use the record timer (-1 = no timeout; 0 ends the move), `B0` / `B1` use the y-offset field as a counter (B0 sets, B1 accumulates `acc += 0x4000` per call and finishes when the field `+= acc >> 16` exceeds 0), camera moves count frames left, dialogue text uses its own `04` / `06` control codes. The per-tick budget is an artefact of the dispatcher, not a timer.
+
+### 10.10 What a "frame" means
+
+Two unrelated things carry the name:
+
+1. **Logic tick.** One WAIT_FRAME (3A) = one tick; script timings (WAIT n, move durations, text delay) are in ticks. At 30 fps timing the engine runs one tick per displayed frame; OpenCross runs 60 Hz logic with interpolated rendering.
+2. **Window "frame"** (opcodes `FE 1B / 1C` SET / UPLOAD window skin, `FE 7A` ADD_FRAME, `E9` JUMP_IF_FRAME). A frame is a **dialogue window skin** (the Frame option byte, 0..14): `FE 1B` loads `map/window/w<N>.tim` = file `value + 0x725` (0 -> w4, 1..3 -> w1..w3, 4..14 -> w5..w15), writes the value to variable 0x44 (restored from it on Load), `FE 1C` waits for the load and uploads it (VRAM x 0x380). `FE 7A` sets bit `v` (0..15 only) in the owned-frames mask, `E9` jumps when bit `U` is **clear**.
+
+### 10.11 Operand helpers (exact semantics)
+
+* Raw u16 at pc + k. `U` operand: bit 15 set -> `v & 0x7FFF`, else the variable's value.
+* Signed 16-bit literal at pc + k. `S` operand with mode byte M: **mask bit set in the mode byte -> literal, clear -> variable**; the masks are 0x80 for the first S operand, 0x40 the second, 0x20 the third, 0x10, 0x08, 0x04, 0x02 (same as the `S80 S40 ...` tokens).
+* Entity reference at pc + k (section 3): 0xFB -> the running entity, 0xFF / 0xFE / 0xFD -> party slot 0 / 1 / 2 entity (none when empty), 0x00-0x7F -> index, >= 0x80 -> the entity of that playable character if it is in the party, else none.
+* **Character reference** (used by 0E, 7D, D9, DA, DB, FE 36-3B): **FD / FE / FF = the character in slot 0 / 1 / 2**, FC = none, 0..0x2B = id. These two decoders differ (entity references have FF = slot 0). OpenCross had both as FF = slot 0: SETUP_PC then bound the third member to the entity the scripts treat as the leader, and 7D took FF as a character id (no-op), so the attract demo kept the title's blank party (three Serges) and its 7B adds were refused.
+* Entity-taking handlers test the result against "none" and become no-ops (or, for the pair ops, skip the companion instruction, section 5).
+* FE page: the dispatcher does `pc += 1` then calls the sub-handler, which adds its own length, so a handler that does `pc += 2` is a 3-byte instruction. Waits at FE level (FE 1B, 63, 67, 72, 59, 75, 78) rewind with `pc -= 1` and yield.
+
+## 11. What a host needs to know
+
+Findings from building OpenCross's `FieldWorld` (`src/game/field_world*.cpp`) on this format; the `alu_*` rooms (Arni) were the first test set.
+
+### 11.1 Entities and models
+
+* `0F SETUP_NPC n`: `n` is the index of the room model, i.e. `.bin` subfile `11 + n` (`room.md` section 3.6). `alu_a01f` has 7 models and its NPCs use n = 0..6. The model is the Mdl pack that follows the 12-byte subfile header (model.md section 2; stage 5 = 0 in room models: the animation pack runs to the end), the texture is the `.ctd` TIM whose image and palette positions are the four values in that header. All 2,203 room models of the 566 rooms import (`occ room-models`). Animations are the model's own clips: the script id of `3C SET_ANIMATION` / `A9` is the clip slot (1 stand, 2 run, 3 walk, 4 idle2, 5.. model specific).
+* `0E SETUP_PC ref`: `ref` = `FD / FE / FF` = party slot 0 / 1 / 2 (the data never uses a character id here). The entity shows the character in that slot (`fieldobj/player/<folder>`, folder = index in the engine's 44-entry character table: selju kid guill ishito slash jakotu riddle carshu zoah malchera colcha lutianna poshul lazzuly zappa ocha radius farga mamacha gren lena miki harley jyaness dragon hosi spri dan kabuo rablue jilbelt hone kinoko ilenes mell liia banc sunef steena doc gyada pierre olha tumaru); an empty slot leaves the entity out of play (the director script later re-enables it with `36 01`; it simply has no model). `SET_ANIMATION 0x80 + k` plays clip k of `fieldobj/ex/<folder>.bin` (event animations) after the `LOAD_ANIMATION` that precedes it in the scripts.
+* Which clips loop **is** in the data for character models: their animation sequences (Mdl stage 5 / ex .bin entry 1, model.md 6.1) set the loop flag, chain clips and set the anim-done variable that `C4 WAIT_ANIMATION` waits for. Room models have none; OpenCross uses the split that makes every Arni script terminate: clip slots 1-4 loop, every other clip plays once and holds its last frame (inferred).
+* `D1 SPAWN_MONSTER U` indexes the room's model list, the same list `0F` uses: OpenCross shows room model U (355 uses in the 566 rooms).
+* Followers replay the leader's trail 14 ticks apart. The follower ring also grows when a script moves the leader (MOVE / WALK_TO), not only on pad moves, so followers resumed afterwards replay the real path. Walk flags, free-height entities and the default heading 0: tel_b23e's boat ent 11 is dry although it sits on a water triangle; ent 10, never turned by its script, faces world +X.
+* The player is the entity set by `5F SET_CONTROLLED_ENTITY` (the pad moves it and the camera follows it), else the party leader; nothing in the engine chooses between the two by room or arrival parameter, the room's own scripts do. `D6 ATTACH_TO_ENTITY` changes only the drawn matrix of the attached entity (the parent's joint matrix times the attach rotation, the attach offset in joint space); the attached entity's own position, tile and collision are not changed.
+* Formation ops: `DF` (9 bytes: x, z, heading) and `84` (23 bytes: x, z per slot, facings, tiles) set per-slot targets (DF: leader at (x, z), slots 1 and 2 in the party V, 128 units, heading +- 0x200 off straight behind); `85` walks the members there and waits. Op `86` (mode 0 / 1) is the follower lock. opn_a01i uses only `86` and the lift scripts' own positions. OpenCross: partial - members walk straight to their spots at their own speed; facings are written on arrival.
+
+### 11.2 Rooms, entrances, exits
+
+* The pre-script table (section 2) holds the entrance records; ROOM_PARAM (variable 0x02) = the `5A` / `DC` second operand indexes them (`alu_a01f` record 3 = (-1531, 1180) is exactly where the door of `alu_a02i` leads back to: `5A #27, #3`). Rooms without a table (28 cutscene rooms) place the PC by script only.
+* Room ids in 5A are the lang.dat room ids (`tools/py/cc_text.py` `text_room_ids`).
+* Entities that script a hop onto a ledge (`5C`, `3F` with Y) leave the actor free-height; the route planner ignores heights.
+
+### 11.3 Softlock watchdog and sweeps (OpenCross tools)
+
+`FieldWorld::step_watchdog` / `FieldVM::stuck_records` (both builds): a record that yields on one and the same instruction for 30 s (1800 ticks) is logged at warn level with room, entity, record, script id, class, pc (offset from `code_base`), opcode and name, the tick count and a wait-specific detail: walk (units left to the target, paused), formation (which slot still walks, units to go), dialogue (windows open, own window), rotation (facing, shown yaw, turn rate, flags). A polling loop (`3A / IF_JUMP / JUMP`: the dispatch starts at the same pc every tick) is reported for class < 7 scripts (ON_ACTION, ON_COLLISION, touch, async with a class) and for entities holding the input lock. A player input lock held 60 s with nothing the player could be doing (no menu, battle, movie, modal window or transition) logs every live record. Timers (`2D`, `3B`, `0B`, `FE 16`) never count. A report repeats when its tick count doubles. Grep for `softlock watchdog`. Unit test `test_stuck_watchdog`; limit override `OC_STUCK_TICKS=n`.
+
+Talk sweep: `[Debug] SweepTicks=60 SweepTalk=700` loads each room, starts every non-party entity's ON_ACTION and then ON_COLLISION script one after the other, presses confirm every 10 ticks, wins battles, ends movies / menus at once and reloads the room when a script asked for a map jump or left scripts running (`FieldWorld::sweep_talk`, `tests/routes/sweep_talk.ini`). Env: `OC_SWEEP_ROOMS=a,b`, `OC_SWEEP_FROM=room`, `OC_SWEEP_COUNT=n`, `OC_SWEEP_SCENARIO=n` (the story counter every swept room is entered with).
+### 11.4 Op coverage in OpenCross
+
+Every op is ported except the following (uses = reachable instructions in the 566 rooms):
+
+* **Not implemented (logged stub):** the debug-room element-grid editor FE 73 / 74 / 79 (2,644 / 2,644 / 2,643 uses, 63 bak_* rooms, not reachable in play), FE 7B, FE 7C, FE 7D, FE 7E; FE 75 (1 room); FE 66 (not needed by the follower model); alt portraits (FE 6C / 71); FE 58 environment map (0 uses). Logged no-ops because the engine has no source or sink for them: 65 and FE 28 (a global read that always yields 0), FE 0B, FE 1E, FE 24, FE 26, FE 27, FE 51, A7, AB, FE 1F, FE 20 (see section 12). Variable 0x38 (pad has actuators) is not published (no script reads it).
+* **State kept, no consumer** (stored where the PS1 stores it): AF, FE 08, FE 12 / 13 / 14, FE 4E, FE 6B / 6C / 71, FE 80 / 81 (HUD gates), 37, FE 33, 92.
+* **Partial:** C5 / C8 / FE 43 positional sounds (see C5); 84 / DF formation (members walk straight to their spots); BF / C0 / C1 / DD (the extra-animation file load is instant; DD has no effect); FE 59 / 67 / 72 menu preambles (their registers are logged as stubs; FE 61 opens the right menu without them); FE 64 (the lit draw).
+* **No-ops by design:** FE 05 (display rate), FE 15 (overlay slot), FE 63 (music load order), FE 44 (draw sync), 4B (debug print).
+* Not decoded as game behaviour: effects by name (`9B 9C B6 D3 D7 E7`: a type-10/0x10 object lookup by 4-letter name, e.g. "awa1" bubbles, `had1`), the unnamed sound / graphics calls (FE 1F, FE 20, A7, AB).
+
+## 12. Open questions
+
+* Unknown: the meaning of the global behind 65 and of the graphics / sound call ops A7 and AB, FE 1F / 20 / 24 / 26 / 27 / 28 (OpenCross has no source or sink for them).
+* Unknown: the role of `FE 66`'s 128x snapshot loop; whether FE 75's selection flag has a consumer (1 use).
+* Unknown: IF_JUMP conditions 7-10 never occur in the data (their semantics follow the engine's table).
+* Unknown: the full colour table of control code 0E (section 9; `text.md` lists the first entries). The JP glyph alphabet is in `text.md` section 3.
+* Table lengths vs engine advance: FE 3C and FE 82 are 4 bytes (each occurs once in the data). Ops with companion skipping advance more than their decode length when the entity operand is "none" (section 5).
+* Unknown: how the room change after a 5A is chosen beyond the request flag (consumed in the main loop outside the script phase).

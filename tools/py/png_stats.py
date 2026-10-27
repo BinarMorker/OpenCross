@@ -6,8 +6,8 @@
     python -I tools/py/png_stats.py hist   A.png [x y w h]            16-bin luma histogram
 
 diff / grid work on frames of different sizes: both are box-downsampled to the smaller size (integer ratios only), which is what
-a ccx 640x448 frame vs our 1280x960 letterboxed shot needs once the shot is cropped to the picture (the 8/960 crop bands).
-Supported PNGs: 8-bit grey / grey+alpha / RGB / RGBA, non-interlaced (what ccx and OpenCross write). Alpha is ignored.
+a ps1 640x448 frame vs our 1280x960 letterboxed shot needs once the shot is cropped to the picture (the 8/960 crop bands).
+Supported PNGs: 8-bit grey / grey+alpha / RGB / RGBA, non-interlaced (what ps1 and OpenCross write). Alpha is ignored.
 """
 import struct
 import sys

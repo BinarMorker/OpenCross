@@ -168,7 +168,7 @@ Archive* Vfs::archive(std::string_view name, bool base) const {
 }
 
 // RDE tries data\cdrom2\X before data\cdrom\X for every file in HD mode, and for a fixed list of files in original
-// mode (openfont.tim, cmptitle.tim, map/window/*, ending.ctd; doc.ome / doc.ltc go to cdrom2 + player_sd in original mode).
+// mode (openfont.tim, cmptitle.tim, map/window/*, ending.ctd).
 bool Vfs::cdrom2_first(const std::string& member) const {
   if (hd_mode_) return true;
   if (member == "map/etc/openfont.tim" || member == "menu/title/cmptitle.tim" || member == "map/mapbin/ending.ctd") return true;

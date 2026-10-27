@@ -44,7 +44,7 @@ void put32(Bytes& bytes, size_t offset, u32 value) {
 
 // title.ltd = cpt of VRAM uploads {u32 type 0x1101 CLUT / 0x1100 image, u16 x, u16 y, u16 dx, u16 dy, u16 w (halfwords), u16 h, data}:
 // one CLUT block (256 x 12 at (256, 228)) and four image blocks, all keyed to the page origin (192, 256) with the block's own
-// offset in dx / dy: the 512 x 256 main page and three smaller blocks at (704, 256), (320, 352) and (320, 384) that hold the
+// offset in dx / dy: the 512 x 256 main page and three smaller blocks at (704, 256), (704, 352) and (704, 384) that hold the
 // fish / manta / tree textures (tpage 704) and the small sprites. Re-wrapped as the sector .ctd the stage importer reads
 // (types 0x1201 / 0x1200, x = base + dx, y = base + dy) so the atlas spans every block.
 Bytes ltd_to_ctd(ByteSpan ltd) {

@@ -101,17 +101,17 @@ void FieldWorld::draw_sync() {}
 
 // ------------------------------------------------------------------------------------------------ host: flow
 // Cheats "No encounters": the decision is game::encounter_auto_won / game::model_swap_skipped.
-// The story bytes they read are script variables of the global array (ids = byte offsets), read raw through
-// game::story_byte_from_vars; -1 (outside the array) errs on the side of the fight.
+// The story bytes they read are global script variables (byte ids), read through game::story_byte_from_vars; -1 (outside the
+// global array) errs on the side of the fight.
 bool FieldWorld::skip_battle(int arg, bool c9, int ent) {
   if (!platform::cheats().no_encounters) return false;
-  if (!game::encounter_auto_won(map_id_, ent, arg & 0x7FF, c9, [this](unsigned offset) { return game::story_byte_from_vars(vm_.variables(), offset); })) return false;
+  if (!game::encounter_auto_won(map_id_, ent, arg & 0x7FF, c9, [this](unsigned var) { return game::story_byte_from_vars(vm_.variables(), var); })) return false;
   handoff_.last_battle_code = 2;
   log::info("field: cheat No encounters: {} {:#x} skipped in {} (entity {})", c9 ? "C9" : "A3", arg & 0x7FF, view_.room_name(), ent);
   return true;
 }
 bool FieldWorld::skip_model_swap(int ent) {
-  return platform::cheats().no_encounters && game::model_swap_skipped(map_id_, ent, [this](unsigned offset) { return game::story_byte_from_vars(vm_.variables(), offset); });
+  return platform::cheats().no_encounters && game::model_swap_skipped(map_id_, ent, [this](unsigned var) { return game::story_byte_from_vars(vm_.variables(), var); });
 }
 
 void FieldWorld::request_battle(int battle_id, int field, int flags) {

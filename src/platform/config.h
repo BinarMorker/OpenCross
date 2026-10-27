@@ -103,13 +103,13 @@ void bind_cheats(const Cheats* set);
 //   [Video]  Aspect: the aspect ratio the Resolution list is filtered by (kAspects; an ini without the key takes the shape of its stored size).
 //            Width / Height: window size (windowed) or the exclusive fullscreen mode. WindowMode (legacy Fullscreen=1 reads as borderless).
 //            Display: monitor index (0 = primary / first). VSync. Driver: the graphics backend (auto | vulkan | direct3d12; changes apply on restart). FrameCap: frames per second limit when VSync is off (0 = unlimited).
-//            Filter: nearest | bilinear for the 3D model textures, every art mode (old FilterHD / SD / Modded keys migrate: FilterHD wins);
+//            Filter: nearest | bilinear for the 3D model textures, every art mode (an old FilterHD key migrates; Filter wins);
 //            FilterRooms (room background tiles) and FilterEffects (field effect sprites) are the same choice for the other categories.
 //            WideEdgeFade: widescreen only, fade the room picture's cut edge into black over this many layer pixels (0 = off).
 //            FovDeg: horizontal field of view in degrees of the 4:3 picture (battle, title sea); 35 = the PS1's own (H 512:
 //            2 atan(160 / 512) = 34.7); 30..110, larger = wider.
-//            WideHud ("Wide Menus/HUD", widescreen only, default full): 0 = the battle HUD and the main menu on the 4:3 canvas, 1 = spread to a 16:9
-//            frame's width, 2 = spread to the window's edges (kWideHudNames; old `WideHudEdges=1` reads as 2).
+//            WideHud ("Wide Menus/HUD", widescreen only, default full): default = the battle HUD and the main menu on the 4:3 canvas, 16:9 = spread to a
+//            16:9 frame's width, full = spread to the window's edges (stored as the kWideHudNames word; old `WideHudEdges=1` reads as full).
 //            Widescreen (F7 toggles): the field, world map, battle and the title's 3D sea fill the window's own width (any shape wider
 //            than 4:3; render::wide_extra_for); menus, dialogue, the title logo / menu and movies stay 4:3. Off = 4:3 with black bars.
 //            ArtMode (see the enum). Ps1Res (Retro look, every art mode): everything is drawn at the PS1's resolution and scaled up with

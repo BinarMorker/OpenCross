@@ -1,29 +1,58 @@
-"""ccx (DuckStation) save-state reader: PS1 RAM and VRAM out of a .sav, plus a battle-state watch table.
+"""PS1 save-state reader for stock DuckStation (state version 92): RAM, VRAM and CPU registers out of a .sav, plus a battle-state watch table.
 
-    python tools/py/ccx_state.py info  <state.sav>                 offsets + the watch row of one state
-    python tools/py/ccx_state.py watch <dir-or-state> [...]        one row per state (sorted), the named addresses below
-    python tools/py/ccx_state.py extract <state.sav> <out-prefix>  writes <prefix>.ram (8 MiB) and <prefix>.vram (1 MiB, 2048 B/row)
-    python tools/py/ccx_state.py hex <state.sav> <addr> [len]      hex dump of guest RAM
-    python tools/py/ccx_state.py poke <in.sav> <out.sav> ADDR=VAL[:WIDTH] ...   patch guest RAM in an uncompressed state
+    python tools/py/ps1_state.py info  <state.sav>                 header, offsets + the watch row of one state
+    python tools/py/ps1_state.py watch <dir-or-state> [...]        one row per state (sorted), the named addresses below
+    python tools/py/ps1_state.py extract <state.sav> <out-prefix>  writes <prefix>.ram (RAM, size from the file) and <prefix>.vram (1 MiB, 2048 B/row)
+    python tools/py/ps1_state.py hex <state.sav> <addr> [len]      hex dump of guest RAM
+    python tools/py/ps1_state.py poke <in.sav> <out.sav> ADDR=VAL[:WIDTH] ...   patch guest RAM; the output is always an uncompressed state
+    python tools/py/ps1_state.py regs <state.sav|dir> [...]        r0..r31, hi, lo, pc, npc of each state
 
-Layout: header + two zstd frames; the second decompresses to the ~10 MB body. The body holds the 8 MiB
-guest RAM (ccx runs with Enable8MBRAM) and the 1 MiB VRAM. Both are found by signature, not by fixed offset: the main
-exe's first words at guest 0x80010000 (`0800e003 00000000 0780023c 803b4224`) locate RAM, the "GPU-VRAM" tag
-precedes VRAM. Verified on `rde-reimpl\\bin\\m0-battle.sav` and other state bodies.
-Needs the `zstandard` module (present in Python 3.13).
+File layout (little endian):
+  0x000 u32 magic 0x43435544 ("DUCC"), 0x004 u32 version (92), 0x008 char title[128], 0x088 char serial[32],
+  0x0A8 u32 media_path_length, offset_to_media_path, media_subimage_index, screenshot_compression_type, screenshot_width,
+  screenshot_height, screenshot_compressed_size, offset_to_screenshot, data_compression_type (0 none, 1 deflate, 2 zstd, 3 xz),
+  data_compressed_size, data_uncompressed_size, offset_to_data (header = 0xD8 bytes).
+Body (at offset_to_data, decompressed if needed): StateWrapper stream; a section marker is u32 length + the name (no NUL), e.g.
+"System", "CPU", "Bus", "DMA", "GPU", "GPU-VRAM". "Bus" is followed directly by u32 ram_size (0x200000, or 0x800000 with the
+8MB option), the RAM bytes sit some words later: RAM is located by the main exe signature at guest 0x80010000
+(`0800e003 00000000 0780023c 803b4224`). VRAM = the 1 MiB right after the "GPU-VRAM" marker. CPU: r0..r31 start 16 bytes after
+the end of the "CPU" marker, followed by hi, lo, pc, npc.
+Needs the `zstandard` module for zstd states.
 """
 import os
 import struct
 import sys
 
-import zstandard
-
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 EXE_SIG = bytes.fromhex("0800e003000000000780023c803b4224")  # guest 0x80010000
 EXE_ADDR = 0x10000
-RAM_SIZE = 0x800000
 VRAM_TAG = b"GPU-VRAM"
 VRAM_SIZE = 0x100000
+STATE_MAGIC = 0x43435544
+HEADER_SIZE = 0xD8
+HDR_FIELDS = ("media_path_length", "offset_to_media_path", "media_subimage_index", "screenshot_compression_type",
+              "screenshot_width", "screenshot_height", "screenshot_compressed_size", "offset_to_screenshot",
+              "data_compression_type", "data_compressed_size", "data_uncompressed_size", "offset_to_data")
+HDR_FIELDS_OFF = 0xA8
+REG_NAMES = ("r0 at v0 v1 a0 a1 a2 a3 t0 t1 t2 t3 t4 t5 t6 t7 s0 s1 s2 s3 s4 s5 s6 s7 t8 t9 k0 k1 gp sp fp ra "
+             "hi lo pc npc").split()
+CPU_REGS_AFTER_MARKER = 16
+
+
+def marker(name):
+    return struct.pack("<I", len(name)) + name.encode()
+
+
+def decompress_body(raw, hdr):
+    comp, off, csize = hdr["data_compression_type"], hdr["offset_to_data"], hdr["data_compressed_size"]
+    blob = raw[off:off + csize]
+    if comp == 0:
+        return blob
+    if comp == 2:
+        import zstandard
+        return zstandard.ZstdDecompressor().decompressobj().decompress(blob)
+    raise ValueError("unsupported data compression type %d" % comp)
+
 
 # Watch table: (name, guest address, width in bytes, signed). Notes: unit U(i) =
 # 0x800E06A0 + 0x410 i, current action e0666/e0667/e0668, effect load state 0x800720F8, overlay resident 0x800856F0,
@@ -91,32 +120,39 @@ WATCH = [
 class State:
     def __init__(self, path):
         self.path = path
-        raw = open(path, "rb").read()
-        if raw[:5] != b"DUCCG":
+        raw = self.raw = open(path, "rb").read()
+        if len(raw) < HEADER_SIZE or struct.unpack_from("<I", raw, 0)[0] != STATE_MAGIC:
             raise ValueError("%s: not a DuckStation state" % path)
-        p = raw.find(ZSTD_MAGIC)
-        frames = []
-        while p != -1 and len(frames) < 4:
-            frames.append(p)
-            p = raw.find(ZSTD_MAGIC, p + 1)
-        self.compressed = len(frames) >= 2
-        if self.compressed:
-            body = zstandard.ZstdDecompressor().decompressobj().decompress(raw[frames[1]:])
-            self.body_file_off = None
-        else:
-            body = raw  # Main/SaveStateCompression=Uncompressed: the body sits in the file as is (pokeable in place)
-            self.body_file_off = 0
+        self.version = struct.unpack_from("<I", raw, 4)[0]
+        self.title = raw[8:136].split(b"\0")[0].decode("utf-8", "replace")
+        self.serial = raw[136:168].split(b"\0")[0].decode("ascii", "replace")
+        self.hdr = dict(zip(HDR_FIELDS, struct.unpack_from("<12I", raw, HDR_FIELDS_OFF)))
+        self.compressed = self.hdr["data_compression_type"] != 0
+        body = self.body = decompress_body(raw, self.hdr)
+        self.body_file_off = None if self.compressed else self.hdr["offset_to_data"]
         sig = body.find(EXE_SIG)
         if sig < EXE_ADDR:
             raise ValueError("%s: main exe signature not found" % path)
-        self.ram_off = sig - EXE_ADDR
-        tag = body.find(VRAM_TAG)
+        self.ram_off = sig - EXE_ADDR   # offset in the body (file offset = body_file_off + ram_off when uncompressed)
+        bus = body.find(marker("Bus"))
+        if bus < 0:
+            raise ValueError("%s: Bus section not found" % path)
+        self.ram_size = struct.unpack_from("<I", body, bus + 7)[0]
+        tag = body.find(marker("GPU-VRAM"))
         if tag < 0:
             raise ValueError("%s: GPU-VRAM tag not found" % path)
-        self.vram_off = tag + len(VRAM_TAG)
-        self.ram = body[self.ram_off:self.ram_off + RAM_SIZE]
+        self.vram_off = tag + 4 + len(VRAM_TAG)
+        self.ram = body[self.ram_off:self.ram_off + self.ram_size]
         self.vram = body[self.vram_off:self.vram_off + VRAM_SIZE]
         self.body_len = len(body)
+
+    def regs(self):
+        """{name: value} of r0..r31, hi, lo, pc, npc."""
+        t = self.body.find(marker("CPU"))
+        if t < 0:
+            raise ValueError("%s: CPU section not found" % self.path)
+        w = struct.unpack_from("<36I", self.body, t + 7 + CPU_REGS_AFTER_MARKER)
+        return dict(zip(REG_NAMES, w))
 
     def _o(self, addr):
         return (addr & 0x1FFFFFFF) if addr >= 0x80000000 else addr
@@ -151,7 +187,7 @@ class State:
         # Field entities: table [0x800E8894], stride 0x278, the controlled entity's index is the
         # byte 0x800E9F7C (FE 4C); X / Z are 16.16 at +0x3C / +0x44.
         ents, lead = self.u32(0x800E8894), self.u8(0x800E9F7C)
-        if 0x80000000 <= ents < 0x80800000 and lead < 64:
+        if 0x80000000 <= ents < 0x80000000 + self.ram_size and lead < 64:
             e = self._o(ents) + lead * 0x278
             row["lead_x"] = struct.unpack_from("<i", self.ram, e + 0x3C)[0] >> 16
             row["lead_z"] = struct.unpack_from("<i", self.ram, e + 0x44)[0] >> 16
@@ -279,7 +315,9 @@ def main(argv):
     cmd = argv[0]
     if cmd == "info":
         st = State(argv[1])
-        print("%s: body %d B, RAM at %d, VRAM at %d" % (argv[1], st.body_len, st.ram_off, st.vram_off))
+        print("%s: %s v%d %s, body %d B (%s), RAM %d B at %d, VRAM at %d" % (
+            argv[1], st.serial, st.version, st.title.encode("ascii", "replace").decode(), st.body_len,
+            {0: "uncompressed", 1: "deflate", 2: "zstd", 3: "xz"}.get(st.hdr["data_compression_type"], "?"), st.ram_size, st.ram_off, st.vram_off))
         print(fmt_row(st.watch()))
     elif cmd == "watch":
         fields = None
@@ -303,11 +341,9 @@ def main(argv):
         open(argv[2] + ".vram", "wb").write(st.vram)
         print("wrote %s.ram (%d) and %s.vram (%d)" % (argv[2], len(st.ram), argv[2], len(st.vram)))
     elif cmd == "poke":
-        # poke <in.sav> <out.sav> ADDR=VALUE[:WIDTH] ... (uncompressed states only: ccx -set Main/SaveStateCompression=Uncompressed)
+        # poke <in.sav> <out.sav> ADDR=VALUE[:WIDTH] ...: the output is an uncompressed state (header patched, body patched)
         st = State(argv[1])
-        if st.compressed:
-            raise SystemExit("poke needs an uncompressed state (save it with -set Main/SaveStateCompression=Uncompressed)")
-        data = bytearray(open(argv[1], "rb").read())
+        body = bytearray(st.body)
         for spec in argv[3:]:
             a, v = spec.split("=")
             width = 1
@@ -316,11 +352,18 @@ def main(argv):
                 width = int(width)
             addr, val = int(a, 0), int(v, 0)
             off = st.ram_off + st._o(addr)
-            old = int.from_bytes(data[off:off + width], "little")
-            data[off:off + width] = val.to_bytes(width, "little")
+            old = int.from_bytes(body[off:off + width], "little")
+            body[off:off + width] = val.to_bytes(width, "little")
             print("poke %08X: %d -> %d (%d bytes)" % (addr, old, val, width))
-        open(argv[2], "wb").write(data)
+        hdr = bytearray(st.raw[:st.hdr["offset_to_data"]])
+        h = dict(st.hdr, data_compression_type=0, data_compressed_size=len(body), data_uncompressed_size=len(body))
+        struct.pack_into("<12I", hdr, HDR_FIELDS_OFF, *[h[k] for k in HDR_FIELDS])
+        open(argv[2], "wb").write(bytes(hdr) + bytes(body))
         print("wrote", argv[2])
+    elif cmd == "regs":
+        for p in list_states(argv[1:]):
+            r = State(p).regs()
+            print(os.path.basename(p), " ".join("%s=%08x" % (k, v) for k, v in r.items()))
     elif cmd == "window":
         # window <dir> [elem]: first / last state frame whose action is an element cast (act_kind 1, fx_load != 0, e05da == elem)
         print(window(list_states([argv[1]]), int(argv[2]) if len(argv) > 2 else None))

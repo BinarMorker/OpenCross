@@ -1,4 +1,4 @@
-# Start pauses over open message windows (RDE / ccx: the field's per-frame pause gate ignores windows, choices, cutscenes and the
+# Start pauses over open message windows (RDE / ps1: the field's per-frame pause gate ignores windows, choices, cutscenes and the
 # input lock). Each part opens the pause screen over a message, checks that no field tick ran and no typewriter moved while it was up,
 # closes it and finishes the conversation.
 # 1. An NPC's message: Termina, Skelly's grandmother (tel_b11i entity 4).

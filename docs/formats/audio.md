@@ -1,0 +1,287 @@
+# Audio formats (SEAD/HCA BGM, AKAO sequences, SPU instrument banks, SFX)
+
+The game has two audio paths. The remastered soundtrack is HCA-compressed music in SEAD `.sab` containers. The original music and every sound effect are AKAO sequences played by a software model of the PS1 sound chip (SPU) on ADPCM instrument banks. This document covers both containers, the AKAO bytecode, the voice model (pitch, volume, ADSR, reverb, noise, FM), the instrument-bank and sound-effect layouts, and the rules for which sound plays when. Data files: `sound/bgm/BGMnnn.sab`, `sound/music/musicNNN.dat`, `sound/wave/waveNNNN.dat`, `sound/exwave/wave0102.dat`, `battle/effects/syoukan/wave{0320,0372}.dat`, `sound/effect/common/effect00.dat`, and room subfiles 9 and 10. All offsets are little-endian unless stated. Importer/validator: `tools/py/cc_audio.py` (`python -I tools/py/cc_audio.py stats`).
+
+## 1. Files and the two audio paths
+
+- Remastered BGM: `sound/bgm/BGMnnn.sab` (73 files; 68 are referenced by the song table).
+- Original music: `sound/music/musicNNN.dat` (68 AKAO sequences).
+- Instrument banks: `sound/wave/waveNNNN.dat` (65), `sound/exwave/wave0102.dat`, and `battle/effects/syoukan/wave{0320,0372}.dat` = 68 banks.
+- Sound effects: `sound/effect/common/effect00.dat` (the SFX program blob) plus per-room blocks (room subfiles 9 and 10).
+- OpenCross re-implements the AKAO VM and the SPU voice model (section 6).
+
+## 2. Song selection
+
+### 2.1 Song id to file
+- The RDE exe holds a 68-entry table `song_id -> BGMnnn.sab`. It is not the identity from id 24 on (24 -> BGM067, 26 -> BGM068; the range 0x3B..0x43 is reordered). The table is also emitted with channel / rate / loop columns by the audio tools. Unreferenced files: BGM025/027/031/060/073.
+- Table entry (`src/audio/bgm_table.*`): `{song_id, file_no, total_samples, loop_start, loop_end (inclusive)}`; the sample counts equal the `.sab` material values. Besides the jingles (loop 0..0), songs 15 and 43 loop the whole track (`loop_start` 0, `loop_end` > 0). Every other song maps to file `song_id + 1`; the exceptions are 24 -> 67, 26 -> 68, 30 -> 72, 35 -> 39, 36 -> 40, 37 -> 36, 38 -> 37, 39 -> 38, 59 -> 63, 60 -> 64, 61 -> 65, 62 -> 66, 63 -> 61, 64 -> 62, 65 -> 69, 66 -> 70, 67 -> 71. Path: `cdrom/sound/bgm/BGM%03d.sab`.
+- `musicNNN.dat` numbering equals the `BGMnnn.sab` numbering: the 68 music numbers are exactly the 73 sab numbers minus {25, 27, 31, 60, 73}. The AKAO header id (u16 at 4) is always NNN+1.
+- PS1 song table: a song change loads the sequence file and the instrument bank file that follow it on disc. In the disc index the sound records are `2373 + 2*song` = `musicNNN.dat` and `2374 + 2*song` = its `waveNNNN.dat`. The permutation is the same as the sab table for all 68 songs, and every bank record equals the music header's bank id (u32 at 0x14).
+- Music to bank: header u32 at 0x14 = bank id = the `waveNNNN.dat` number. Every wave file's header id (u16 at 4) equals its file number, and every music file's bank id exists as a wave file (68/68).
+- Room music is script driven only (PLAY_SONG op 88 / 89 and FE 78; there is no room-header song). `occ room-songs [room]` prints room -> song -> BGM.
+- The RDE remaster plays song 2 as 0x14 (BGM021) while a battle is loading, so the remastered battle theme is 0x14. Suspend / start hooks resume the field song at its saved position after a battle.
+- RDE BGM command queue: play / stop / volume fade / pause / resume; the engine implements commands 0..5. Remastered gain = `v * 0.45 / 127 * cfg`.
+
+### 2.2 Original-music mode
+OpenCross: `[Audio] BgmSource=original` (Esc overlay "BGM source", live) routes song requests to AKAO `musicNNN` + `waveNNNN` instead of the `.sab`. Field (`FieldWorld::start_song`), battle (`BattleAudio`, whose song restarts on a switch) and jingles play `musicNNN` on the engine sequencer (`Mixer::play_akao_bgm`). All 68 tracks render non-silent; the six one-shot songs (music001/010/064/065/066/071, the sab jingles) end, the other 62 keep running (`ocaudio render-seq N out.wav 200 48000`). Level: the PS1 applies the song volume as the music master volume inside the sequencer and mixes music and effects on one SPU output, so the AKAO stream gets the SFX pool's level times v/127 (`akao_gain`), not RDE's 0.45 SEAD factor.
+
+### 2.3 Music across room changes
+- **PLAY_SONG 0xFF stops the music.** The start routine does a hard stop and clears "song registered": a later PLAY_SONG of the old song restarts it, FE 6E then reads -1, and the post-battle restore has nothing to replay. The world-map sub-map `wld_a05` (Divine Dragon Falls) has `PLAY_SONG #255` in its INIT and no other music op, so the world-map song stops there. Only exactly 0xFF stops; 0xFFFF (what FE 6E returns when nothing played) starts nothing. OpenCross: `FieldWorld::play_song_at` -> `Mixer::stop()`; `occ room-songs` prints `255(STOP)`. Route `worldmap_falls`.
+- A PLAY_SONG of the song that is already current changes nothing (RDE: "ignore if song == current"), so music plays through a room change. OpenCross only re-arms the volume.
+- RDE pause / resume (BGM commands 4 / 5) fire only on the suspend / restore of a channel type. Their PS1 callers: the field around movies, the song swap, the debug pause screen, and one battle-side screen. A room load never pauses music. OpenCross: `load_room` does not pause the BGM. The HCA decode runs on the audio thread (`HcaStream::read` from the SDL callback, never blocking: commands are taken with `try_lock`), so a long load on the main thread does not starve the mix. Check: `OC_AUDIO_DUMP=<wav>` captures the mix of a scripted run; route `door`.
+- **Song volume.** The start routine plays song N at the current song volume. PLAY_SONG (op 88) always sets it to 0x7F first; FE 78 sets its second operand. A song that is already current is not restarted, it only gets its master volume set to that value. OpenCross: `FieldWorld::play_song` = volume 127; only `play_song_ex` (FE 78) passes its own volume. (Example: `gal_b04f` runs `FE 78 #56, #0` then fades up; the next room's `PLAY_SONG #56` must restore 127.) Script note: `IF_JUMP a == b -> L` jumps when the test is FALSE.
+- **FE 1D FADE_MASTER_VOLUME operands are `(frames, volume)`.** The frame count is the divisor of the per-frame step (0 counts as 1); the target is the second operand `& 0x7F`. OpenCross: `FieldWorld::fade_master_volume(frames, volume)` (the same order in the host interface `src/script/field_host.h`). Route `music_guldove` (`tools/py/wav_rms.py` prints the 0.5 s rms).
+- **Sound effects at a room change.** Field teardown ends every sound except the C6 slots (mask bits 8..15) marked by **FE 29** (`mask |= 1 << ((U & 7) + 8)`), unless the slot's last start was a room (`yos1`) sound, whose bank goes away with the room. The room init clears both registers. OpenCross: `Sfx::leave_room(keep)` (`FieldWorld::load_room`); `FieldVM::load` clears the FE 29 register.
+
+### 2.4 Live source switch
+OpenCross:
+- `Mixer::switch_bgm_source(remastered, song)` restarts the playing song on the other source with the same PS1 song id (the battle theme is 0x14 remastered / 2 original; `BattleAudio::set_remastered` passes the id), at the same volume and fade state, with a 15 ms declick ramp. Field: `FieldWorld::set_bgm_remastered`; a battle that owns the music switches it itself.
+- Position = the unrolled clock (seconds since the song began, across loops: `Mixer::bgm_seconds()`; HCA = start offset + frames played, AKAO = `AkaoPlayer::seconds()`), scaled by the arrangements' loop-length ratio (`bgm_switch.h` `map_song_position`; ratio 1.00 for 60 of 63 songs, 0.98..1.01 for the rest). HCA target: `stream_position` wraps the clock into loop_start..loop_end. AKAO target: `AkaoPlayer::seek_music(t)` runs the 240 Hz clock silently (tempo changes, slides and loop ops execute) up to 1 s before the target, then renders the last second into a scratch buffer so sounding notes and the reverb tail are alive.
+- AKAO loop length: `AkaoPlayer::measure_timing()` runs the sequencer silently and hashes the whole channel state per tick (pc, rest counter, loop stack with counts of counted loops, ret pc, octave, transpose, tempo; CA loops excluded). The first repeated state gives the period = loop length. The intro (first recurring state) is not the musical loop start, so only the period is used. Songs BGM019 / 020 / 039 / 069 do not recur within 600 s (counted outer loops) and fall back to ratio 1. `opencross audio -g <game> timing` lists HCA vs AKAO intro / loop for all 68; `switch-test <song> <sec>` runs the headless switch both ways. Unit test: `test_audio` `test_bgm_switch`.
+
+## 3. SEAD `.sab` container and HCA header
+
+```
+0x00 "sabf"  0x04 u8 version (2)  0x05 u8 1  0x06 u16 0x10  0x08 u8 4, u8 3, u16 0x64  0x0C u32 file size
+0x10 char name[16] ("BGM")        0x20 section table: 4 x 16 bytes
+     { char tag[4] ("snd " "seq " "trk " "mtrl"); u16 0; u16 0x10; u32 offset; u32 0 }
+section @offset: u16 0, u16 0x10, u32 count, 8 pad, then u32 entry_off[count] (relative to the section start)
+```
+- `snd ` entry (0x60 bytes + name string): u8 type 0x11, u16 size at 2, f32 duration in seconds at +0x24 (inferred), name "002" (the number string) after the entry. `seq ` / `trk ` entries hold per-sound routing / volume (floats 1.0, 30.0) that plain playback does not need. A sound id (0x44 for BGM001, 0x45 for BGM002 ...) repeats in snd / seq / trk / mtrl (`mtrl+0x1C`).
+- `mtrl` entry at `e`: `+4 u8 channels (2); +5 u8 codec (7 = HCA); +8 u32 sample rate (48000); +0x0C u32 loop_start (sample); +0x10 u32 loop_end (sample, inclusive last sample); +0x14 u32 extradata size (0x170); +0x18 u32 stream size (ignore, 12 less than the data to EOF); +0x1C u32 sound id`. Extradata at `e+0x20`: a 16-byte prefix `{u8 1; u8 0x10; u16 hca header size; u16 block size; u16 loop start frame; u16 loop end frame; ...}` then the HCA header (at `e+0x30`), then frames directly to EOF: `frame_count = (filesize - (e+0x20+extradata)) / block_size` (integer part; up to ~20 trailing bytes).
+- HCA header (big-endian, chunk tags may have bit 7 set per byte): `"HCA\0" u16 version(0x0200) u16 header_size`, then `fmt\0 u8 ch, u24 rate, u32 frames, u16 mute_header, u16 mute_footer`; `comp u16 block_size(682=0x2AA), u8 min_res(1), u8 max_res(15), u8 track_count(2), u8 channel_config(1), u8 total_bands(128), u8 base_bands(128), u8 stereo_bands(0), u8 hfr_groups(0), u16`; `loop u32 start_frame, u32 end_frame, u16 0x0080, u16 0x01FE`; `ciph u16 type (0 = none)`; `pad`. Header CRC16 (poly 0x8005, init 0) over `header_size` bytes is 0. A frame is `block_size` bytes, starts with sync 0xFFFF, ends with CRC16.
+- `total_samples = frames*1024 - mute_header - mute_footer` (BGM002: 7226*1024 - 775 - 510 = 7398139). Sample-accurate loop = `mtrl loop_start..loop_end` (BGM002 3685753..7398138); the HCA `loop` chunk holds the frame granularity of the same points (3600..7225). 62 of 68 songs loop; jingles BGM001/010/064/065/066/071 have loop 0..0 (play once).
+- Loop playback: when the position passes `loop_end`, continue at `loop_start`. Sample s lives in frame `(s + mute_header) / 1024`.
+- **Frame scrambling.** Although the HCA header says `ciph` 0 (all 73 files), every payload is XOR-scrambled: material extradata byte 0x0D = 1 selects a 256-byte XOR table; the byte at offset `o` of the frame data (counted from the first frame, across frames, not restarted per frame) is XORed with `table[(sound_id + o) & 0xFF]` (table embedded in `src/audio/hca_stream.cpp`). After unscrambling, any HCA decoder works (OpenCross uses `src/audio/clhca_unit.c`).
+- **Reader rules** (`parse_sab` / `HcaStream::open`): only the first material is played, and it must be codec 7 with 2 channels and 1024 samples per block; the `mtrl` count is 1..256 and the extradata size at least 0x10. `total_samples` is derived from the block count and the HCA encoder delay / padding (`mute_header` / `mute_footer`); `loop_end` is clamped to `total_samples - 1`, and a loop with `loop_end <= loop_start` counts as no loop. Seeking primes the MDCT overlap by decoding the preceding block, so a seek is bit-identical to continuous decoding.
+
+## 4. AKAO music file (`sound/music/musicNNN.dat`)
+
+Header 0x40 bytes, then payload:
+```
++0x00 "AKAO"  +0x04 u16 id (= NNN+1)  +0x06 u16 total length (= file size, all 68)  +0x08 u16 reverb mode (4 in all 68; the SPU library reverb type set when the song starts, 6.5)
++0x10 u32 (3C..7F; per-song level or reverb type, unknown)   +0x14 u32 instrument bank id (wave file number)
++0x20 u32 channel_mask (bit i = channel i, up to 32 channels; 2..32 used)   +0x24 u32 keyed_mask, +0x28 u32 alloc_mask (0 except 3 files)
++0x30 s32 patch_rel (0 = none): patch table at 0x30+patch_rel   +0x34 s32 keymap_rel (0 = none): drum keymap at 0x34+keymap_rel
++0x40 u16 chan_off[popcount(mask)]  in ascending channel order; channel pc = (address of its entry) + chan_off
+```
+Channel code starts right after the table and runs to the next channel start / the patch region. All 68 files decode linearly (1341 channels) with no truncated or unimplemented opcode.
+- **Patch table** (`FE 14 n`): `u16 off[16]` (>= 0x8000 or 0xFFFF = none); the zone list is at `patch_table + off[n] + 0x20`: 8-byte zones `{u8 instrument; u8 low_key; u8 high_key; u8 AR (attack byte = bits 8-15 of ADSR1); u8 SR (7-bit sustain rate,
+  << 6); u8 sustain_mode (1/3/5/7 -> ADSR2 bits 15:14 = 00/01/10/11, any other value 01; 0 ends the list); u8 RR (release shift, 5 bits); u8 volume}` sorted by key.
+  A note picks the first zone whose key range contains it, else the last zone below it, else the first zone; `volume` is the instrument volume scale (`v * volume >> 7`).
+- **Drum keymap** (`FE 04` drum mode on): an 8-byte entry per note number (octave*12 + key) at `keymap + note*8`: `{u8 instrument; u8 key (pitch note used instead of the played one); u8 AR; u8 SR; u8 sustain_mode; u8 RR; u8 volume; u8 pan (bits 0-6, +0x40 = centre) | reverb (bit 7)}`. The entry's AR / SR / mode / RR replace the instrument's envelope only when at least one of the four is non-zero; the reverb bit is not applied (the voice follows the channel's C2 / C3 state).
+- The song bank file is looked up as `sound/wave/waveNNNN.dat`, then `sound/exwave/waveNNNN.dat`, then `battle/effects/syoukan/waveNNNN.dat`; it is overlaid on a copy of the shared `wave0000.dat` table.
+- Music instrument indices (`A1 n`) address the global instrument table (256 entries) filled by the loaded banks (section 5). Bank files carry their own `first_index`, so a song uses indices from its bank plus shared bank ranges loaded elsewhere (e.g. 0..31 of wave0000.dat).
+
+### 4.1 Channel VM: timing and notes
+- Clock: 240 Hz. Per update `acc += tempo16` (tempo16 = the operand of `FE 00`, scaled by the master tempo coefficient); each 0x10000 carried = one sequencer tick; a whole note is 192 ticks. `BPM = tempo * 240 * 60 / 65536 / 48 = tempo / 218.45`. music001 starts at 0x47AE = 84 BPM.
+- Each channel has a remaining-length counter; when it reaches 0 the next opcodes execute until a note / tie / rest sets a new length.
+- **Gate rule.** After a note the VM peeks at the next note / tie / rest opcode, skipping every ordinary opcode in between (A4, A9, B4, ... by the operand-length table; it follows C9 / CA to the loop start (C9 on its last pass falls through), FE 06 / 07 / 08 / 09 / 0E jumps and FE 0F returns; CB / CD / D1 / DB are skipped and clear the legato flags; A0 or an unknown opcode stops the peek as "rest-like"). The key-off point is `length - 2` ticks, but `length` (no key-off) when the peeked opcode is a tie (0x84..0x8E, 0xFC), or a note while the channel flags (CC legato = 1, D0 full length = 4) are set; a peeked rest (or a finishing opcode) clears those flags first, so it gets `length - 2`. A length-2 note keys off after 1 tick, a length-1 note has no key-off and runs into the next key-on (a gate of 0 never keys off). Tenuto (FE 1A) lengthens the gate only on music channels.
+- **Legato.** CC sets the flag word to 1; D0 sets it to 4 (assignments, not OR). Each note op copies bit 0 to bit 1 ("previous note was legato"); a note with bit 1 set does not key on (re-pitch only), and a rest clears bit 1. Because CC / D0 assign the whole word, the first note after a CC (e.g. at the top of a loop whose body starts with CC) keys on again.
+- Opcode byte: `0x00..0x83` note: `key = op / 11` (0..11), `length_index = op % 11`, absolute pitch `key + octave*12 (+ transpose)`. `0x84..0x8E` tie (extends the previous note, length index op-0x84); `0x8F..0x99` rest (length index op-0x8F). `0x9A..0x9F` invalid. Length table in ticks: `192 96 48 24 12 6 3 32 16 8 4`. `0xF0..0xFB` note, `0xFC` tie, `0xFD` rest, each followed by one byte = explicit length in ticks (0 = use the A2 value).
+- Operand lengths come from a per-opcode table (total length including the opcode; 0 = handled specially: A0, C9, CA, CB, CD, D1, DB, F0..FF); `FE` sub-opcodes have their own length table.
+- Loops: `C8` pushes (pc, count 0) on a 4-deep stack (index wraps mod 4); `C9 n` increments the count and jumps to the loop pc until count == n (n = 0 means 256), so the body runs n times; `CA` jumps back unconditionally (infinite loop, bumps count); `FE 08 n rel` jumps when count+1 == n; `FE 09` jumps and pops. `FE 06 rel` unconditional jump; `FE 07 thr rel` jumps if the game-set music threshold >= thr; `FE 0E rel` call (one level) / `FE 0F` return. Relative targets = address of the s16 operand
+  + value. `A0` / `FF` / unimplemented opcodes finish the channel; when all channels finish the song ends.
+
+### 4.2 Opcode table (`cc_audio.py ops`; "args" = operand bytes)
+| op | args | name / semantics |
+|---|---|---|
+| A0 | - | finish channel |
+| A1 | u8 | load instrument n (global table); resets drum/patch mode |
+| A2 | u8 | length of the next note only |
+| A3 | u8 | channel master volume (balance) = n << 8 |
+| A4 | u8 len, s8 semis | pitch bend slide over len ticks (0 = 256) |
+| A5/A6/A7 | u8 / - / - | set octave / octave +1 / -1 (mod 16) |
+| A8 | u8 | channel volume = n << 23 (>>16 = 0..0x7F00 range); cancels slide |
+| A9 | u8 len, u8 vol | channel volume slide |
+| AA | u8 | pan 0..127, 64 = centre; stored as `((n + 0x40) & 0xFF) << 8` (default 0x8000 = centre) |
+| AB | u8 len, u8 pan | pan slide |
+| AC | u8 | noise clock: bits 7-6 clear = assign, set = add `(n & 0x3F)` to the current clock (mod 64). SFX channels write the SFX clock, music the context's clock (6.6) |
+| AD / AE / AF | u8 | ADSR attack rate (7 bits: ADSR1 bits 8-14) / decay rate (bits 4-7) / sustain level (bits 0-3) |
+| B0 | u8 dr, u8 sl | decay rate + sustain level |
+| B1 / B2 | u8 | sustain rate (7 bits, ADSR2 bits 6-12) / release rate (bits 0-4) |
+| B3 | - | reset ADSR to the instrument's |
+| B4 | u8 delay, u8 rate, u8 type | vibrato on (phase step rate*1024, 0 = 256; type 0..15 selects an entry of the built-in LFO table). On SFX channels the first operand is the depth (`n << 8`, 0 keeps the current depth) and there is no delay |
+| B5 | u8 | vibrato depth (bit 7 = absolute-range flag) |
+| B6 | - | vibrato off |
+| B7 / BB / BF | u8 | attack mode (5 = exponential) / sustain mode (1/3/5/7 -> ADSR2 bits 15:14 = 00/01/10/11, other values 01) / release mode (7 = exponential) |
+| B8 / B9 / BA | u8,u8,u8 / u8 / - | tremolo on (delay, rate, type; on SFX channels the first operand is the 7-bit depth) / depth (7 bits) / off |
+| BC / BD / BE | u8 rate, u8 type / u8 / - | pan LFO on / depth / off |
+| C0 / C1 | s8 | transpose absolute / relative (semitones) |
+| C2/C3, C4/C5, C6/C7 | - | reverb on/off, noise on/off (6.6), FM (pitch modulation) on/off for this channel's voice |
+| C8 / C9 / CA | -, u8, - | loop point / loop n times / loop forever |
+| CB | - | clear LFOs, noise, FM, reverb, legato / full-length flags |
+| CC | - | legato on (flags = 1; see 4.1) |
+| CD, D1 | - | no-ops (debug stubs) |
+| CE / CF | u8 | CE = noise on, then toggle the noise state after N+1 ticks (0 = 257); CF = only (re)arm the toggle |
+| D0 | - | full-length notes (SFX channels only): flags = 4, the gate is the full length while the next op is a note / tie |
+| D2 / D3 | u8 | FM on, then toggle after delay (0 = 257 ticks) / toggle after delay |
+| D4 / D5, D6 / D7 | - | previous-voice playback-rate / pitch-volume sidechain on/off (not modelled) |
+| D8 / D9 | s8 | fine tune absolute / relative (scales pitch: 6.2) |
+| DA / DB | u8 / - | portamento on (steps, 0 = 256) / off |
+| DC | s8 | fixed note length (added to stored length, clamp 1..255; 0 clears) |
+| DD / DE / DF | u8 len, u8 depth | vibrato / tremolo / pan-LFO depth slide |
+| E0 | - | sets an update flag; on SFX channels marks the channel "protected" (it stops only at its loop end when evicted) |
+| E1 / E2 | u8 / - | random pitch depth / off (not modelled) |
+| E4 / E5 / E6 | u8 len, u8 rate | vibrato / tremolo / pan-LFO rate slide |
+| E3, E7..EF, FF | - | unimplemented: finish channel (FF = A0) |
+| F0..FB / FC / FD | u8 len | note / tie / rest with explicit length (ticks) |
+| FE 00 | u16 | tempo (see 4.1) |
+| FE 01 | u8 len, u16 tempo | tempo slide (0 = 256 ticks) |
+| FE 02 / FE 03 | u16 / u8 len,u16 | master reverb depth / slide (value is s16, depth = v << 12) |
+| FE 04 / FE 05 | - | drum mode on (needs header keymap) / off (mute voice) |
+| FE 06, 07, 08, 09 | s16 / u8,s16 / u8,s16 / u8,s16 | jump / conditional jump / jump on Nth pass / jump on Nth pass and pop |
+| FE 0A | u8 | load instrument without an attack sample (OpenCross loads it like A1 but keeps the zone scale) |
+| FE 0B | u8 | trigger SFX program n from the music channel (not modelled: skipped) |
+| FE 0E / 0F | s16 / - | call / return |
+| FE 10 / 11 | u8 / - | reserve voices / free reserved voices (not modelled: skipped) |
+| FE 12 | u8 len, u8 vol | channel master volume slide |
+| FE 13 | - | do not re-key this channel when music is resumed after a push/pop (not modelled: skipped) |
+| FE 14 | u8 | load patch n (key-split instrument zones, section 4 patch table) |
+| FE 15 / 16 | u8,u8 / u16 | time signature / measure number: bar timer only, no audio effect |
+| FE 19 | s8 vol0, u8 len, s8 vol1 | per-note-on volume slide (not modelled: skipped) |
+| FE 1A / 1B | - | tenuto flag on / off |
+| FE 1C | u8 | skip one byte |
+| FE 1D / 1E | - | mark voices keyed / clear (not modelled: skipped) |
+| FE 0C, 0D, 17, 18, 1F.. | - | unimplemented: finish channel |
+
+No opcodes beyond this table occur in the 68 songs plus effect00 (EB..EF appear only as misalignment warnings). Corpus histogram (from `stats`): notes 69k, explicit-length notes 39k, rests 39k, ties 48k, A8 56k, A3 24k, tempo 888, drum mode 236, patch 818, FE 06 jump 1255.
+
+## 5. Instrument bank (`waveNNNN.dat`, room `yos0` blocks)
+```
++0x00 "AKAO"  +0x04 u16 bank id (= file number)   +0x10 u32 SPU RAM load address (0x1100/0x11100/0x21100/0x71100..)
++0x14 u32 sample byte count    +0x18 u32 first global instrument index   +0x1C u32 instrument count (<= 256)
++0x40 instrument[count] x 16 bytes, then ADPCM sample data
+instrument: u32 start (offset in the sample data; add the SPU address after load), u32 loop (same basis),
+            s16 fine_tune, s16 base_note, u16 ADSR1, u16 ADSR2
+```
+Loading uploads `sample_bytes` (at `0x40 + count*16`) to SPU RAM and copies the table into the global instrument table at `first_index..`, adding the SPU address to start / loop. The first 16 bytes of sample data are a zero block (SPU silence). The file may be up to 32 bytes shorter than `0x40+count*16+sample_bytes` (clamp). Several instruments may share one start (the 16-instrument `wave0102` has 5 stubs at 0xC510).
+- `base_note` (e.g. 72, 60) is the note at which the sample plays at its native rate; `fine_tune` is added to the pitch. Note numbers are `key + octave*12`, so 72 = octave 6.
+- SPU RAM layout from load addresses: 0x1100 base bank, 0x11100 / 0x21100 song banks (~0x60000 / 0x50000 max).
+- `wave0000.dat` (SPU 0x71100, first index 0, 256 instruments, 35936 bytes) is the shared SFX / system bank; effect SFX programs use it.
+- Room `yos0` blocks use the same layout with room-local instrument ranges (e.g. bank 205: indices 208..223, SPU 0x1100).
+
+### 5.1 The global instrument table
+The 256-entry table is the only table; nothing but a bank load writes it and nothing restores it. In a battle: slots 0..31 and 80..175, 240..255 = wave0000; 32..79 = the last music bank loaded (the remastered battle theme loads no AKAO bank); 176..207 = battle.prd's bank (32 instruments, SPU 0x1100, bank id 1); 208..239 = whichever bank was loaded last at SPU 0x9100: the stage bank (bg_NN.prd, id 400) at battle start, then the acting unit's at0.prd bank when its action opens, then a spell pack's bank. A drp type 5 entry has the same header fields (SPU address +0x10, sample bytes +0x14, first index +0x18, count +0x1C) as a wave file. All 658 type 5 banks in battle/*.prd are `first 208 @ 0x9100` (count 16 / 28 / 32) except battle.prd (`first 176 @ 0x1100`, count 32). Consequence: a battle sound runs with the instruments of the most recently opened bank in a slot range, not of its own file's bank.
+
+OpenCross (`BattleAudio`): one live table per battle (the field's published table `Mixer::sfx_instruments()`, wave0000 without a field; `activate()` overlays each file's banks in open order and publishes the result); a program starts with a snapshot. The effect00 sounds the battle plays (menu chimes, `play_global`) read the same table (`SfxBank::set_table`).
+
+### 5.2 Bank overlay rules (field)
+- A room's `yos0` bank (first index 208, 16 instruments in 158 rooms; first index 128 in 6 rooms) overwrites 208..223 / 128..143 when the room loads, and a song bank (wave0010.., first index 32, 48 instruments) overwrites 32..79. Effect00 programs use instruments 0..15, 177..181 and 208..211, so a global effect that plays instrument 208+ (e.g. footstep effects 42 / 43, channel 1 `A1 D0`) plays the current room's own sample. OpenCross: `SfxBank::make_global` uses the room table. `ocaudio banks` / `room-sfx <room>` list the layouts.
+- **A room without a bank keeps the last room bank.** wave0000 is loaded once at boot (then effect00). The room load uploads one bank per `yos0` block only when the subfile holds blocks; an empty `yos0` (the 20-byte stub of the world-map rooms `wld_a01` / `wld_b01` and every bankless room) loads nothing, and nothing else rewrites 208..223. Together with the floor-type registers (also not reset by the room init) this decides what the world-map forests play after Opassa Beach: `opa_a04f` / `opa_b04f` set water type 2 (`FE 2B 12 02`), world-map scripts set only dry type 0, forest triangles carry walk flags 0x60000 -> footsteps 0x12C / 0x12D = effects 44 / 45, whose notes read instrument 209 = Opassa's bank 201 water sample. OpenCross: `SfxBank::set_room` overlays a room's banks on the current table and keeps it for a room without banks (`test_audio` `test_sfx_room_banks`).
+- **Field and battle share the one table; the field reloads its room after a battle.** Returning from a battle, the field runs the room load again, which uploads the room's `yos0` banks (only if it has any) and nothing else. Resulting table after a battle on Opassa: 176..207 battle.prd's entries (SPU RAM there holds the room bank's bytes), 208..223 the room bank, 224..239 the last pack bank. A bankless room keeps 176..239 from the battle. OpenCross: `AkaoSfx::set_room` uploads a room's banks over the table, `BattleAudio::begin_battle` starts from it, `activate` publishes every upload, and the field's first sound after a battle (`AkaoSfx::resume_shared`, before play / play_field / play_room) uploads the room's banks again (`SfxBank::reload_room`).
+- **Leaving a room right after a battle.** Because the retail resume is the room load itself, whatever room comes next inherits the leaving room's banks, not the battle's last pack bank. OpenCross applies the resume lazily, so `SfxBank::set_room` uploads the room being left again over a table another loader published before it installs the next room (`test_sfx_room_leave_after_battle`). World-map screens: only `wld_a00` loads a bank (293); `wld_a03` / `wld_a05` / `wld_b03` / `wld_b05` load 286; the rest are bankless.
+- **Sound RAM reuse.** A table entry keeps its SPU address after a later bank overwrote that RAM (a bank load writes the sample bytes at its address and only its own table slots), so the voice plays whatever the RAM holds. Load addresses in retail data: wave0000 0x71100 (never reached: the highest end of any other bank is 0x710C0); battle.prd 0x1100..0x8980; every other battle bank 0x9100 (count 32 x 566, 28 x 88 packs, 16 x 3 packs; ends up to 0x20640); room banks 208 @ 0x1100 (429, ends up to 0x10D00) and 128 @ 0x11100 (32 rooms, ends up to 0x20580); song banks 32.. @ 0x21100 (60) / 0x11100 (wave0010/11/28/29/52/81) / 0x1100 (wave0078, BGM063; no room plays it). Audible cases: after any battle, in a room with a 0x1100 bank, slots 176..207 play the room bank's bytes. In the field only effect 11 reads them (instrument 179; `C6 #267` in `hid_b06f`). Smaller-later battle banks leave 224..239 with overwritten RAM but no stage or at0 sound reads a slot above 214, so that is never heard. Room bank 128 @ 0x11100 never coexists with a 0x11100 song. Music banks are therefore not written into the SFX model (music keeps its own tables). OpenCross: `InstrumentTable` holds a 512 KiB RAM image (copy-on-write, shared by table copies); `overlay` writes the bank's bytes at its address and decodes again every other slot whose sample the write reaches (`Instrument::overwritten`, `*` in the log); `test_sfx_room_banks`.
+- **Voices read RAM live.** An upload reaching a sounding voice's sample changes what that voice plays from its current position on, and a later note of a running program reads the new bytes too. Retail: every battle action uploads its unit's at0 bank and every spell its pack bank at 0x9100 while earlier sounds on 208..239 may still ring. OpenCross: `Mixer::set_sfx_instruments` queues the new image (`SpuUpload`) when it changed; `AkaoPlayer::upload_ram` decodes again every sounding SFX voice whose sample bytes differ and keeps its position (block for block; the loop copy maps back to its blocks); `note_on` decodes from the last uploaded image when the channel's table copy is older and its bytes differ (`test_sfx_live_ram`). Music voices keep their own tables.
+
+### 5.3 SPU ADPCM block
+16 bytes: `byte0 = shift (low nibble, 0..12; 13..15 decode as 9) | filter (high nibble, 0..4) << 4; byte1 flags; 14 data bytes = 28 samples, low nibble first`. Flags: bit 0 = loop end/stop, bit 1 = repeat (loop to the loop address after bit 0), bit 2 = loop start. Decode: `s = (signed_nibble << 12) >> shift; s += (old*f0 + older*f1 + 32) >> 6; clamp to int16` with (f0,f1) = (0,0) (60,0) (115,-52) (98,-55) (122,-60) for filters 0..4. A sample = blocks from `start` through the first block with flag bit 0.
+- The SPU keeps the ADPCM filter history across the loop jump: the loop body is decoded a second time from the history at the end of the sample and appended; the voice loops over that copy (identical for filter-0 bodies).
+- A loop address on the last block (end + repeat block, used by the one-cycle synthetic waves such as wave0000 instrument 2, menu effects 1, 8, 24) loops from that block, not from sample 0; the last loop-start block wins.
+- 63 of 68 banks have every instrument start reaching an end flag; wave0034/0054/0070/0074 and syoukan/wave0320 have 1..3 starts without a reachable end flag. Unknown: whether those are real data or unused instruments.
+- `wave export` writes 16-bit mono WAVs at 44100 Hz (native rate at the base note) with an `smpl` loop chunk when the end block has the repeat bit.
+
+### 5.4 ADSR
+ADSR1: bits 0-3 sustain level (level = (n+1)*0x800), 4-7 decay shift (always exponential decrease), 8-9 attack step (+7..+4), 10-14 attack shift, 15 attack mode (0 linear, 1 exponential). ADSR2: bits 0-4 release shift, 5 release mode (1 = exponential), 6-7 sustain step, 8-12 sustain shift, 14 sustain direction (1 = decrease), 15 sustain mode (1 = exponential). The AKAO opcodes write these fields individually (AD/AE/AF/B1/B2/B7/BB/BF). Envelope model per 44.1 kHz tick: `wait = 1 << max(0, shift-11)`, `step << max(0, 11-shift)` (exponential increase above 0x6000 waits 4x; exponential decrease multiplies by level/0x8000). `cc_audio.py` prints attack / decay / release times from this model (typical: attack 0 s, release 6..55 ms).
+- **ADSR opcodes act live.** The ADSR ops (AD AE AF B0 B1 B2 B3 B7 BB BF) mark the channel dirty, and the next voice update writes the new ADSR to the voice that is playing: a note already sounding changes its envelope, and the SPU re-reads the rate at the write (the wait of the old rate resets). Example: effects 0x41 / 0x47 (results screen exit / open) play a note and then `A4 ..., B1 36, tie`; the instrument's sustain rate is 0x7F (no decay) and `B1 36` makes it decay within ~0.2 s. OpenCross: `AkaoPlayer::sync_voice_adsr` plus `env.counter = 1`.
+
+## 6. Voice model
+
+### 6.1 Per-channel state
+A channel holds: program counter, 4-entry loop stack (pc + count + step snapshot), return pc, octave, transpose, fine tune, portamento, pitch bend, volume (balance u16 + volume s32) with slide steps, pan (u16, centre 0x8000) with slide, vibrato / tremolo / autopan (phase step, type = LFO table index, delay, depth, depth / rate slides), noise / FM / reverb flags, instrument index, a copy of the instrument's ADSR, and keymap / patch pointers. Defaults on song load: volume balance 0x7F00, volume 0x3FFF0000, pan 0x8000, instrument 0. Global state: tempo, tempo slide, reverb depth, noise clock, jump threshold. There are 24 hardware voices (music notes take the first free voice, else steal the quietest), one music context plus one secondary (pushed) music context, and **12** SFX channels (mask bits 0x1000..0x800000; SFX channel k always owns hardware voice 12 + k, section 7.6) with their own volume / pan / pitch modifiers.
+
+### 6.2 Pitch
+`semitone[12] = 1000 10F3 11F5 1306 1428 155B 16A0 17F9 1966 1AE8 1C82 1E34` (hex, 4.12 fixed, 2^(i/12)). For note n and instrument (base b, fine tune ft): `d = n - b; idx = d mod 12; p = semitone[idx] << 8`. Fine tune: `ft == 0` none; `ft > 0`: `p = (semitone[idx]*ft >> 7) + semitone[idx]*256`; `ft < 0`: `p = semitone[idx]*(ft as u16) >> 8`. The channel fine tune (D8 / D9, byte `c`) multiplies the same way (`c < 0x80`: `p*c >> 7`, else `(p*c >> 8) - p` added to the pitch). Then shift left / right by `floor(d/12)` octaves. The SPU pitch register = `p >> 8` (0x1000 = native 44100 Hz; sample rate = reg * 44100 / 4096). Vibrato adds an LFO scaled by `PitchBase*0xF >> 8` (relative) or `PitchBase` (absolute flag); portamento interpolates over steps.
+- The returned pitch is `(p >> 8) & 0xFFFF` with 32-bit wrapping shifts, and the register written is `(pitch + fine delta + vibrato + bend) & 0x3FFF`: a mask, not a clamp, so a note 4+ octaves above the root wraps to a low value (global effects 23, 38-40, 119, 148, 151 have such notes).
+- The A4 pitch bend stores a length and a signed semitone delta; the next note-on computes the pitch of `note + delta` and each tick adds `(target - current) / length` to the 16.16 pitch. It is a linear ramp of the register, not of the semitone.
+- `ocaudio sfx-pitch` prints every global effect's notes with the engine's register and a literal transcription of the retail formula (0 mismatches).
+
+### 6.3 Volume and pan
+Voice L/R volume = pan-law gain table (0x200 bytes, Q15) x channel volume x balance x instrument volume scale (`v * scale >> 7`); mono mode bypasses the table.
+- Music voices: `v = (vol * (bal >> 8)) >> 7`, plus tremolo, then `v * (master & 0x7F) >> 7`. Pan index = `((pan >> 8) + autopan + master pan - 0x40) & 0xFF`; `L = v * table[i] >> 15`, `R = v * table[i ^ 0xFF] >> 15`. Pitch register = `(fine delta + pitch + vibrato + bend) & 0x3FFF`, scaled by the master pitch when set.
+- SFX voices: the same volume base, then `v * (volume modifier >> 8) >> 7` (no master volume). Pan index = `(((pan + pan modifier) >> 8) + autopan + 0x80) & 0xFF` (0x80 = centre when both are centred), forced to 0x80 with channel flag 0x2000000. Pitch the same plus the SFX pitch modifier (`& 0xFF00`).
+- Vibrato value (both): `w = wave sample * (u16)depth_scale >> 16`, with positive values doubled. `depth_scale = depth7 * (abs flag 0x8000 ? pitch : pitch * 15 >> 8) >> 7`, recomputed at every note-on.
+
+### 6.4 Interpolation and output rate
+The SPU plays every voice at 44100 Hz: per output sample a 4-tap Gaussian filter (512-entry hardware table) reads the four newest decoded samples at index `(counter >> 4) & 0xFF`, the envelope scales it, then `counter += min(pitch, 0x4000)`; each carry out of bit 11 shifts the next sample in (key-on: history zero, the first sample current). RDE feeds its emulated SPU to XAudio2 as 44100 Hz stereo s16, so its pitch is the hardware's. OpenCross: `AkaoPlayer` runs the voices at 44100 Hz and resamples to the 48 kHz mixer (Catmull-Rom); `test_pitch_rate` checks a 14-sample square one octave up = 6300 Hz at both rates. OpenCross differences from the hardware: no start delay beyond section 7.6, no reverb on effects (6.5), SFX channel defaults as in 7.6.
+
+### 6.5 Reverb
+One reverb unit; voices with the channel's reverb bit (C2 on / C3 off / CB off) feed it. Mode = the SPU library reverb type from the music header u16 at +8 (4 = studio large in all 68 files) and 4 at boot. The preset table has 10 modes (0 off, 1 room, 2..4 studio small / medium / large, 5 hall, 6 space echo, 7 echo, 8 delay, 9 pipe), each the work-area start (mBASE, 8-byte units) and the 32 reverb registers in hardware order; an out-of-range mode is ignored and a mode change clears the work area. Mode 4: mBASE 0xF204 (work area 0x6FE0 bytes); registers `00E3 00A9 6F60 4FA8 BCE0 4510 BEF0 A680 5680 52C0 0DFB 0B58 0D09 0A3C 0BD9 0973 0B59 08DA 08D9 05E9 07EC 04B0 06EF 03D2 05EA 031D 031C 0238 0154 00AA 8000 8000`. Depth (vLOUT = vROUT): the music context holds 0x3FFF000 at boot (depth 0x3FFF); FE 02 sets `(s8 hi << 20) | (lo << 12)`, i.e. depth = the s16 operand; FE 03 slides it per tick. Effects share the unit: since RDE never loads an AKAO song, effects with C2 (e.g. effect 8, the confirm sound) get mode 4 at depth 0x3FFF; the PS1 recordings contain no AKAO music, so "no song loaded" = mode 4, depth 0x3FFF, which is what `Mixer` sets when no AKAO song plays. The reverb depth persists across songs on the PS1 (one music context); OpenCross starts every song at 0x3FFF until its FE 02. Algorithm: the documented SPU reverb formula at 22050 Hz with the 39-tap half-band FIR (`src/audio/spu_reverb.cpp`).
+
+### 6.6 Noise generator, SFX volume fade, channel start instrument
+- **Noise.** A noise-flagged voice outputs the SPU noise generator instead of its ADPCM sample (the envelope and volumes still apply, the sample cursor still runs). Generator: a timer decremented by `4 + (clock & 3)` per 44.1 kHz sample; on underflow it reloads with `0x20000 >> (clock >> 2)` and the 16-bit LFSR shifts in `((x>>15) ^ (x>>12) ^ (x>>11) ^ (x>>10) ^ 1) & 1`; the voice outputs the LFSR as s16. Clock 0x27 = 1.2 kHz steps (low rumble), 0x36 = 16 kHz (hiss). There is one generator and one clock for all voices: while any SFX channel runs the clock is the SFX one (AC from an SFX channel), else the music context's. An SFX channel's mask bit is set by C4, toggled by CE / CF after the delay (XOR), cleared by C5 and CB. Battle packs use it (fireball / ice / heal / thunder / earthquake families, 30+ packs). Approximation: the hardware timer only re-arms at its next underflow (a clock written while the timer sits in a long period at clock 0 would delay the first step by up to 0.74 s); an AC clamps the timer to the new period instead. `OC_SFX_UNIMPL=1` lists the opcodes SFX programs execute that have no model (CD debug no-op; D4..D7 sidechains; E1 random pitch).
+- **SFX volume fade.** The volume modifier (u16, `(v & 0x7F) << 8`) of every running SFX channel whose mask overlaps slides by `(target*0x100 - cur) / frames` (s16 division) per frame, ticked at **60 Hz** (every 4th 240 Hz update). The battle effect pack open calls it with (file 0, mask 0x100, 60 frames, volume 0): the spell chant (mask 0x100) fades linearly to volume 0 over 60 frames (1 s), starting about 1.85 s after it began (a fixed delay of the cast animation, independent of the pack's own sounds; measured: plateau to +1.85 s, near silence by +3 s). The channels keep running silent until stolen / evicted. OpenCross: `AkaoPlayer::fade_sfx_volume`, `Mixer::fade_sfx_volume(mask, frames, vol)`; the call at the pack start is the battle's (`BattleAudio` / `fx_begin`). A set-modifier command clears the slide.
+- **Results screen sounds.** Effects 0x47 (open), 8 (confirm) and 0x41 (exit) all play with mask 1, pan 0x80, volume 0x7F. They read only instrument slots 0, 2, 7, 8, 9, 0xB, 0xE (wave0000), so the battle or room table does not matter for them. The results screen plays through the field's `AkaoSfx` (menu mask 0x40, a new sound cuts the last), not through `BattleAudio`. On exit, state 5 plays 8 and moves to state 6; the next call plays 0x41, one tick later (OpenCross: `BattleResults` delays 0x41 by one tick). The sound (about 0.9 s) ends before the exit finishes and nothing evicts it at the field restore.
+- **Channel start instrument.** A channel is reset to instrument 0 (with its ADSR): a program that plays a note before its first A1 uses instrument 0. Battle heal / thunder programs do this (`92 a8 00 ... ac 36 ... 06` with noise on and no A1).
+
+## 7. SFX programs
+
+### 7.1 effect00.dat
+`sound/effect/common/effect00.dat` (12064 bytes): `AKAO`, header 0x10 bytes (id 0), `u16 pc[256][2]` at 0x10 (offsets relative to the program area, 0xFFFF = none), `u16 meta_a[256]` at 0x410 (0/1 flag; priority or "protected", unknown), `u16 chain_count[256]` at 0x610 (extra consecutive SFX ids started with this one), program bytes at 0x810. SFX id = index; each id has up to two channel programs. 183 of 256 ids are defined. Opcodes are the music ones (4.2) with D0 full-length notes and the SFX-side behaviours; there is no tempo opcode. SFX channels tick at a global SFX rate: each 240 Hz update adds 0x66A8 to an accumulator and one channel tick runs per carry of 0x10000, i.e. 0x66A8/0x10000 = 0.401 ticks per update = **96.2 ticks/s**. A tempo multiplier can scale this by 1/4, 1/2, 2 or 4 (unused by the menu). Global SFX instruments come from wave0000.dat (0..255).
+
+### 7.2 Room sound blocks
+Room `yos1` (subfile 9) / `yos0` (subfile 10): both `tag4 u32 size_minus_8 (16-bit wrapped in big rooms) u32 count u32 off[count+1]` with offsets relative to byte 8; a slot with offset 0 / zero length is empty (rooms with no sound have count 1 and an empty slot). The reader accepts `count` up to 64 and a slot only if it is at least 4 bytes and starts with `AKAO`; empty yos1 slots keep their index (the frame number), empty yos0 slots are dropped. 566/566 rooms parse (2219 yos1 frames, 461 yos0 banks).
+- `yos0` blocks: instrument banks (section 5); usually 1, up to 2.
+- `yos1` blocks: SFX frames: `AKAO u16 id (=1) @4, u16 0 @6, u16 bank id @8` (bank = the `yos0` block's id), `+0x14 u16 pc[2]` relative to +0x18 (0xFFFF = none), code from +0x18. This is the pointer-file layout of 7.7 with one entry (`n = 1` at +4, offset 0 at +0x10); the engine parses it that way, so a frame with more entries starts them all. The frame number is the room-local SFX id used by script triggers (index into this list). Programs use instrument indices of the room's `yos0` bank (e.g. 208..223). Trailing partial instructions at the block end are normal; 55 non-fatal decode warnings exist (programs whose second pc lands mid-instruction, from 2 pcs overlapping a shared tail).
+
+### 7.3 Field `C6 PLAY_SFX`
+- Long form `C6 mode id PAN VOLUME slot`: operand 4 (`& 0xFF`, default 0x80) is the channel pan (`v << 8`, centre 0x8000); operand 6 (`& 0x7F`, default 0x7F) is the volume balance (`v << 8`); the last operand is the channel-mask slot (`1 << (slot + 8)`), stored with the parameters in an 8-entry table that the field replays after an interruption. The short form `C6 0 id slot` uses the defaults (centre, full volume).
+- Ids >= 256 are effect00 programs (id - 256); ids < 256 are the room `yos1` frames. Both go through the eviction with the same mask first: a non-zero mask ends only the channels that were started with an overlapping mask (E0-protected ones at their loop end), so a PLAY_SFX cuts the previous sound of its own slot, not every sound (footsteps use masks 0x40 / 0x80). OpenCross: `Sfx::play_field`, channel tag `SfxProgram::mask`.
+- **Slides.** `FE 22 slot, frames, volume` and `FE 23 slot, frames, pan` slide the volume / pan modifier of every sound started with the slot's mask linearly from the value `C6` set (one step per field tick; `frames` 0 jumps at once); a new `C6` on the slot ends the slides. OpenCross: `FieldWorld::sfx_volume` / `sfx_pan` / `step_sfx_slides`.
+- Operand 4 is the pan, not the volume: reading it as volume played every scripted ambient at full volume (Hydra Marshes `hid_a01f`: `C6 1 326 0x80 24 7` = effect 70 at 24/127).
+
+### 7.4 FM (pitch modulation)
+`C6` / `D2` take effect only on the second program of an SFX pair (a channel flag set on it; the FM mask gets the channel only then). The hardware modulates voice n by voice n-1's envelope-applied output: `step = (pitch * (prev_out + 0x8000)) >> 15`. 77 of the 183 effects use it (menu effects 23, 24 ...). D2 / D3 N toggle FM after N+1 ticks (0 = 257). OpenCross: `Channel::fm_carrier` (set by `start_sfx` on the second program); the carrier takes the voice after its partner's (`alloc_voice_after`); `render_spu` applies the PMON step from `vout_`.
+
+### 7.5 SFX channel start, masks, live modifiers, positional sounds
+- **Channel start.** The 12 SFX channels are mask bits 0x1000..0x800000; a pair is taken from the top. The channel mask = the caller's mask, channel pan 0x8000, pan modifier = pan << 8, volume modifier = (vol & 0x7F) << 8, balance 0x6E00, volume 0x32000000 (not the music defaults 0x7F00 / 0x3FFF0000), SFX flag set, and the length counter 2: the first instructions run on the **second SFX tick** after the start (10-21 ms), not at once. Before the first program the running sounds of an overlapping mask are ended, so a sound replaces the last one of its own mask.
+- **Masks by caller** (`Sound_PlaySfx(id, mask, pan 0x80, vol 0x7F)` wrappers): menu screens (test menu, shop, name entry) = 0x40; field UI and the battle results screen = 1; battle = 0x800000. OpenCross: menu / title / shop / name sounds go through `AkaoSfx::play_menu(id)` (mask 0x40).
+- **Live modifiers.** A set-volume-modifier command (`(v & 0x7F) << 8`) and a set-pan-modifier command (`(pan & 0xFF) << 8`) write the modifier of every running SFX channel whose mask overlaps (slides cleared, voice marked dirty); an "is active" query reports a running SFX channel with exactly that mask. OpenCross: `Sfx::set_field_mods`, `Sfx::field_active` (`Mixer::set_sfx_mods` / `sfx_active`: queued starts count as active).
+- **Positional sounds (C5 / C8 / FE 43 records).** Every field tick: records sorted by distance to the leader; for the nearest four (voice mask `1 << (0x10 + slot)`): volume = (0x7F within 0x100, `(0x900 - d) >> 4` out to 0x900, else 0) x record volume
+  >> 7; pan (8-bit, 0x80 = centre) = `clamp((screen x * 0x6666 >> 16) + 0x40, 0, 0xFF)` (screen x = the position, entity or C8 point, projected + the current scroll). If the voice's sound runs: set the pan and volume modifiers; if idle: not started -> evict + play, started and not one-shot -> evict + play again (looping restart), one-shot -> the record is freed (id 0xFF, distance 0x7FFF, volume 0). Afterwards `0xFF0000 ^ the four voices' bits` are evicted, keying off records beyond the nearest four. OpenCross: `FieldWorld::step_sound_emitters`.
+
+### 7.6 Channel allocation and stealing
+Each SFX channel records its request mask (24 bits; 0 = untagged), flags (0x10000 FM carrier, 0x100000 E0 protected, 0x200000 stop at loop end), the request's first word (a file pointer for pointer-played files, the SFX id otherwise), an age (set to -2 at the start, incremented once per SFX tick; the same loop decrements the length counter, starting at 2, and runs the VM at 0) and its hardware voice (12 + k). "Busy" = running, suspended by a command, or reserved; OpenCross has only "running".
+
+| Step | PS1 rule | OpenCross |
+|-|-|-|
+| Request | one request = one effect00 id / one entry of a pointer file with up to 2 programs; the play-SFX command starts the id then `chain_count` further ids; the pointer command starts every entry (entry 0 with the evict flag) | `AkaoPlayer::start_sfx(SfxProgram)` = one request; callers loop over `extra` |
+| Evict first | only when the evict flag is set and the mask is non-zero: every busy channel whose mask overlaps ends (E0-protected -> flag 0x200000 only). Mask 0 (battle sounds) evicts nothing | callers (`play_menu`, `play_field`) call `evict_sfx(mask)` before the first entry; battle does not evict |
+| One program | highest free channel (11 down to 0) | `alloc_sfx_slots(1)` |
+| Two programs | highest free adjacent pair (10+11 down to 0+1), program A on the lower channel, B (FM carrier) on the upper | `alloc_sfx_slots(2)` |
+| None free | steal, then the whole search repeats | `steal_sfx_channel()` |
+| Steal | candidates = busy channels with mask 0 (a channel with any mask is never stolen); `max` starts at 0 and is the maximum age over candidates (signed compare, so a channel that has run fewer than 2 ticks, age -2/-1, never wins); every candidate with age == max ends (several on a tie); E0-protected ones are only flagged 0x200000 (they stay busy) | same; `Channel::age` |
+| Drop | after the steal, if the busy set did not change the request returns without playing (no retry, no queue) | `dropped_requests()`, trace `DROP` |
+| Pair vs fragmentation | a pair needs two adjacent free channels: the steal frees the oldest channels one search at a time until a pair appears or nothing more can be freed | same loop |
+| Voice | channel k keys hardware voice 12 + k; stealing takes that voice from a music channel; there is no SFX voice search. A new note on the channel re-keys its own voice (the previous note's release tail is cut). The FM modulator of a pair is voice (12 + k) - 1 | `note_on`: `vi = 12 + slot`, `fm_src = vi - 1` for a carrier |
+| Start timing | first instructions on the second SFX tick (10.4-20.8 ms; the tick phase is free-running, not aligned to the request) | `len_left = 2`; the tick accumulator `tempo_acc_` runs continuously |
+| Eviction by key | by file: busy channels whose first word equals the file (file -1: every pointer-played channel); by `0x80000000` OR n: channel n and the channels playing the same file as n+1 | `evict_sfx(mask)`: channels whose mask overlaps; battle uses the high bit `0x80000000` as the file key (`BattleAudio::kBattleMask`) |
+
+OpenCross mask convention: the PS1 mask is 24 bits. OpenCross keeps higher bits as non-PS1 keys: bit 31 = the battle file key (a battle sound is a mask-0 channel on the PS1, so it is stealable: the steal tests `mask & 0xFFFFFF`). `AkaoPlayer::kPs1MaskBits`.
+
+Consequences. (1) At most 12 programs sound at once; a battle that fires more steals the oldest unmasked sounds (looping ambient and long tails first) and drops the request when all 12 are masked / protected / younger than 2 ticks. Masked sounds (menu 0x40, field slots, battle-menu 0x800000) are never taken, so a battle menu sound can starve battle effects and vice versa. (2) The pair search is strict. (3) Only voices 12..23 exist for SFX when no AKAO music runs (always the case with the remastered soundtrack); with AKAO music the PS1 shares the 24 voices (music notes search free voices from index 0 and steal the quietest). Unknown: how the envelope-state update marks voices against the busy-channel mask (channel masks and voice numbers appear to be mixed); not modelled (OpenCross keeps separate music and SFX players). `test_sfx_channels` covers order, pair, steal, age, mask, protected, high bit and voice count.
+
+### 7.7 Pointer-played files and battle sound lifetime
+A pointer-played file (battle sounds): header +4 = n entries, u32 offsets at +0x10 relative to `+0x10 + 4n`, each entry = u16 a, u16 b, programs at `entry + 4 + a` / `+ b` (0xFFFF = none). Every entry is started (`make_pointer_programs`), entry 0 with the evict flag. Battle sounds carry mask 0x80000000 and are cut when the battle ends. `OC_SFX_TRACE=1` logs `sfxtrace` REQ / START / VON / VOFF / CEND lines (2 = full code dump); `Mixer::trace_report`.
+
+### 7.8 Battle sound handlers and menu sounds
+- Battle sequence op **0x7B**: centre pan 0x80, volume = operand 3 & 0x7F. Op **0x33** is positional: the unit's anchor is projected, `pan = (clamp(sx - 160, +-160) * 0x30) / 0xA0 + 0x80`, `volume = (((0x1FFF - min(SZ3 >> 2, 0x1FFF)) * 0x60) >> 13)
+  + 0x20`. Both play a pointer file with mask 0.
+- SFX level: AkaoPlayer's float output equals the raw SPU s16 / 32768, and RDE passes the PS1 stream on scaled by MasterVolume x SfxVolume only, while the HCA music carries the 0.45. OpenCross: `kSfxLevel` = 1.0.
+- Battle menu sounds (all `Sound_PlaySfx(id, 0x800000, 0x80, 0x7F)`, a new one cuts the last): cursor tick 1 (command, HIT% box, element grid, target), command confirm 8, target / element cell confirm 0x28, HIT% row 0x27 - row, element row of the HIT% box 8, cancel 6, refused 0x18, camera toggle 0x16. 0x16 is also the command-menu chime: while the menu is disabled (nobody can act) the chime is armed and plays once when the menu is enabled again (~1.4 s into a battle and after a stamina wait; not between the hits of an engaged chain or after a kill) and for the L1 / R1 character switch. OpenCross: `BattleAudio::play_menu`. Not implemented in OpenCross: the L1 / R1 character-switch sound (there is no switch input).
+- Hardware vs engine residuals: the first 24-30 samples of a sound match to 0.1 %; the hardware's 240 Hz update grid is not aligned with the program start (the engine's starts at the program), which moves LFO steps by up to one update (<= 4 ms) and decorrelates FM / vibrato voices. Noise-based waveforms cannot correlate sample-exactly (the generator phase depends on history). Unmodelled: E1 / E2 random pitch (a few stage sounds), D4..D7 sidechains, CD / D1 (debug).
+- Tools: `ocaudio inst-dump <n>` (instrument + block flags), `OC_SFX_ONLY=0|1 ocaudio render-sfx` (one program of the pair), `ocbattleseq sfxfind <hex>`, `sfxbanks <prd>`, `OC_SFX_WAV / OC_SFX_VOL / OC_SFX_PAN ocbattleseq sfx`.
+
+## 8. Validation and unknowns
+
+`python -I tools/py/cc_audio.py stats` (all pass): 73 `.sab` (HCA CRC ok, ciph 0, frame count = file, loop / total match bgm_map.csv); 68 music files (header, bank id, channel table, 1341 channels decode with no truncated or unimplemented opcode); 68 banks (3405 instruments); the effect00 blob (183 ids decode); 566 rooms (yos1 2219 frames, yos0 461 banks).
+
+Unknown:
+1. Exact voice-allocation details for music beyond "first free, else quietest".
+2. Meaning of music header u32 at +0x10.
+3. `meta_a` flag of the SFX blob; E0 and FE 0B trigger-side semantics; reserved voices (FE 10 / 1D).
+4. Master / secondary music push-pop, tempo / pitch scale commands and the CD-audio mix.
+5. Whether the five instrument starts without end flags are real data.
+
+## 9. Voice bus
+OpenCross: `Mixer` has a sixth bus, `Bus::Voice`: one channel that plays one fully decoded line at a time (`voice_play(shared_ptr<const vector<float>>)`, 48 kHz interleaved stereo float; `voice_stop()`; `voice_active()`). The audio thread mixes it after the SFX with the gain `Master x Voice` (`[Audio] VoiceVolume` / 100); the mono option folds it with the rest. A new `voice_play` replaces the running line; commands go through the normal queue (applied at the next callback). `audio::VoicePlayer` (`src/audio/voice.*`) owns the MP3 decode: a worker thread decodes the requested file (Windows Media Foundation `IMFSourceReader`: float PCM at the file's rate, channels folded to stereo, own linear resample to 48 kHz when the rate differs) and a generation counter drops a stale decode when a newer line was requested. The mod search, the field / battle path scheme and the settings are in `mods.md` "Voices". librempeg is not used for voices.

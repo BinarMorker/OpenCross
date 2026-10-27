@@ -1,8 +1,23 @@
 #include "script/field_host.h"
 
+#include <array>
+
 #include "core/log.h"
 
 namespace oc::script {
+
+const char* global_name(Global which) {
+  static constexpr std::array<const char*, static_cast<size_t>(Global::Count)> kNames = {
+      "WindowFrames", "ControlYaw", "CameraYOffset", "SubmergedOtPush", "RegisterInvA6", "PushStrength",
+      "ExitTransition", "FrameVsyncs", "OverlayGridA0", "OverlayGridA1", "OverlayGridA2", "OverlayGridB0",
+      "OverlayGridB1", "OverlayGridB2", "OverlayOt", "KeepSfxSlots", "FootstepVolume", "FootstepDryType",
+      "FootstepWaterType", "FootstepListenerX", "FootstepListenerY", "FootstepListenerZ", "FootstepNear", "FootstepFar",
+      "Byte4D", "MenuPreamble3", "MusicSwapArmed", "TradingPostRow", "TradingPostCue", "Reg6A",
+      "BattleIntroAnchor", "SavePointPreamble", "Selection", "SelectionFlag", "PadMask",
+  };
+  const auto index = static_cast<size_t>(which);
+  return index < kNames.size() ? kNames[index] : "?";
+}
 
 void NullHost::note(const char* method) {
   ++calls_;
@@ -122,7 +137,7 @@ u16 NullHost::key_latch() { NOTE("key_latch"); return 0; }
 void NullHost::clear_key_latch() { NOTE("clear_key_latch"); }
 bool NullHost::predicate(Predicate, int) { NOTE("predicate"); return false; }
 s32 NullHost::query(Query) { NOTE("query"); return 0; }
-void NullHost::set_register(u32, s32) { NOTE("set_register"); }
+void NullHost::set_global(Global, s32) { NOTE("set_global"); }
 void NullHost::opaque_op(u16, std::span<const u8>) { NOTE("opaque_op"); }
 
 #undef NOTE

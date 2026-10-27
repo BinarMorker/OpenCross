@@ -5,7 +5,7 @@ One tool so that nobody captures or reads frames that are not part of the transi
     python tools/py/trans_window.py segment DIR
         Finds the window in a frame directory and prints one line per phase (frame name, time, game frame relative to the
         white clear, mean luma L, sharpness g, blue mask fraction b).  Frames outside the window are ignored.
-    python tools/py/trans_window.py table RDE_DIR CCX_DIR OURS_DIR [--step N]
+    python tools/py/trans_window.py table RDE_DIR PS1_DIR OURS_DIR [--step N]
         Aligns the three sources on the first white frame (the swirl's white clear), prints a per-phase table (duration in game
         frames of 1/60 s, L and sharpness at phase start/end, smear slope) and a luma table every N game frames (default 10)
         with the deltas.  A source may be '-' to leave it out.
@@ -15,7 +15,7 @@ One tool so that nobody captures or reads frames that are not part of the transi
         blue coverage on the ring (small = smooth ring, large = shattered wedges).
 
 Sources are detected from the file names:  f_<ms>_*.png = RDE Steam capture (tools/rde_capture.py, real time stamps, ~15-30 fps),
-frame_NNNNNN.png = ccx (60 fps, run frame; ccx tick = run + 9), <prefix>_NNN.png = our route autoshots (every tick, 60 fps).
+frame_NNNNNN.png = ps1 (60 fps, run frame; ps1 tick = run + 9), <prefix>_NNN.png = our route autoshots (every tick, 60 fps).
 Letterboxes are cropped by image height (1024 -> 32..992 RDE, 960 -> 8..952 ours).  Missing frames are interpolated by time
 stamp, so a ~30 fps RDE capture lines up with the 60 fps sources.  Per-frame stats are cached in DIR/trans_stats.json
 (delete it to force a re-read).  A shots directory with several prefixes (es_, ek_, ...) uses the biggest group, or name one:
@@ -73,9 +73,9 @@ def frame_stats(path):
 
 def kind_of(names):
     rde = [n for n in names if re.match(r'f_\d+_', n)]
-    ccx = [n for n in names if re.match(r'frame_\d+\.png$', n)]
-    ours = [n for n in names if re.match(r'[A-Za-z0-9]+_\d+\.png$', n) and n not in rde and n not in ccx]
-    best = max((rde, 'rde'), (ccx, 'ccx'), (ours, 'ours'), key=lambda x: len(x[0]))
+    ps1 = [n for n in names if re.match(r'frame_\d+\.png$', n)]
+    ours = [n for n in names if re.match(r'[A-Za-z0-9]+_\d+\.png$', n) and n not in rde and n not in ps1]
+    best = max((rde, 'rde'), (ps1, 'ps1'), (ours, 'ours'), key=lambda x: len(x[0]))
     return best[1], best[0]
 
 
@@ -287,7 +287,7 @@ def slope(S, key, i0, i1):
 
 def cmd_table(dirs, step):
     srcs = []
-    for lab, d in zip(('RDE', 'ccx', 'ours'), dirs):
+    for lab, d in zip(('RDE', 'ps1', 'ours'), dirs):
         if d == '-':
             continue
         S = collect(d)
@@ -378,7 +378,7 @@ def main(argv):
             step = int(a[i + 1])
             del a[i:i + 2]
         if len(a) != 3:
-            print('table needs RDE_DIR CCX_DIR OURS_DIR')
+            print('table needs RDE_DIR PS1_DIR OURS_DIR')
             return 1
         cmd_table(a, step)
     return 0

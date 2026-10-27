@@ -1,0 +1,220 @@
+# Room file format (`map/mapbin/<room>.bin|.ctd|.prd`)
+
+A room is three members of `data/cdrom.dat` (a plain ZIP): `.bin` (camera, palettes, trigger zones, field script, walk mesh, background layers, dialogue, sound, room models), `.ctd` (TIM textures) and `.prd` (a "drp" pack of animated-background parts; present in 344 of 566 rooms). This document gives the byte layouts of all three, the VRAM model that turns tiles into pixels, the rules that decide how layers, actors and effects are ordered and blended, the walk-mesh movement rules, room lighting, and the OpenCross presentation options for the field picture (render scale, widescreen). Everything was validated against all 566 rooms (1,476 files). All integers are little-endian. Per-room effect data (`.prd` emitters, sprite sheets, sequences) is in `room_effects.md`; the field script is in `fieldscript.md`; room-model geometry is in `model.md`.
+
+## 1. Containers
+
+### 1.1 cpt (`.bin`, `.ctd`)
+`u32 count; u32 off[count]; u32 eof`. Offsets are absolute and monotonic, `off[0] = 8 + 4*count`. Subfile i is bytes `off[i]..off[i+1]`. `.bin` has 12..24 subfiles (12 in 98 rooms); `.ctd` has 2..20 (one room has 60).
+
+### 1.2 sszl (LZSS)
+`"sszl"`, `u32 decoded_len`, `u32 unknown` (not needed), then a bit stream read MSB-first from each byte: bit `1` + 8-bit literal; bit `0` + 12-bit ring position + 4-bit count, copy `count+2` bytes from the ring. The ring is 4096 zero bytes, positions are absolute ring indices, and the write pointer starts at **1** (with start 1 every layer table decodes monotonic; 0 or 4078 do not). Writes wrap at 4096. There are no flag bytes. Every sszl subfile of every room decodes to exactly `decoded_len`.
+
+### 1.3 drp (`.prd`)
+`"drp\0"`, 4 zero bytes, `u16 num*64`, `u16 0`, then `u32 off[num]` (absolute). Each entry is a 12-byte header `00 00 00 00 | char name[4] | u8 type | u24 value`, followed by its payload up to the next offset or EOF. `payload length = value / 16`; 8,771 of 8,782 entries match the span exactly and the other 11 are type 0x0A entries whose value/16 is 2 bytes larger than the span. Equivalent view of the word at +8: `type = w & 0x3F`, `(w>>6)&0xFF` children, `(w>>14)&0x1FFFF` payload words. Payload = entry + 12. See section 7.
+
+### 1.4 TIM (`.ctd` payloads)
+Classic PS1 TIM: `u32 0x10`, `u32 flags` (bit 3 = CLUT block), image block `u32 len, u16 x, u16 y, u16 w (halfwords), u16 h, w*h u16`. Only two flag values occur: `1` = 8bpp image without CLUT (background texture pages) and `9` = 8bpp + CLUT block (`u32 len=0x20C, x, y, w=256, h=1`, 256 BGR555 entries). A `.ctd` subfile is a raw TIM or an sszl-wrapped TIM (176 of 2,317 TIMs with CLUT are wrapped; backgrounds never are). "8bpp" matters only for how tile commands index texels; blitting is by raw halfword. The importer also reads 4bpp, 16bpp and 24bpp TIMs (flags bits 0-1) for other assets.
+
+### 1.5 chip2 (`hd/map/mapbin/<room>.chip2`, RDE's HD backgrounds)
+`u16 key[65536]`, then 64x64 BGR555 tiles (0x2000 bytes each, row-major: 4x per axis of one 16x16 source tile). The table fills the first 16 tile slots, so the file size is a multiple of 0x2000 and tile indices run 16..size/0x2000-1. The key of a source tile is `((clut/8) * 16 + (v >> 4)) * 128 + (u >> 3)` (tile fields of section 3.3); the entry is the tile index, 0 = no HD tile. Composition: one 4x image per (layer, group, blend kind) over the same bounding box as the 1x image; per tile the HD texels are copied (0 = transparent). The non-zero texels of an ordinary tile (0x8000 included) are opaque; a semi-transparent tile (flags bit 7) puts its texels with bit 15 into the image of its ABR and the others into the opaque image, exactly like the 1x split of section 5.1. A tile with no table entry is filled by a nearest-neighbour 4x upscale of the composed 1x tile. A room without a chip2 file stays 1x in HD mode. The HD file set (`cdrom2.dat`) differs from `cdrom.dat` per room only in `.bin` subfiles 11+ (room-model meshes and UVs) and the `.ctd` texture pages: script, walk mesh, camera, zones, CLUTs and every `.prd` are byte-identical (`occ chip2`, `occ chip2-validate`).
+
+## 2. VRAM model (how layers become pixels)
+1. VRAM is 1024x512 halfwords, zeroed.
+2. Blit every `.ctd` TIM at its (x, y). Background pages are 64x256 halfwords (= 128x256 texels at 8bpp) at x = 0, 64, ... 448 (plus a short page such as `(512,256, 64x32)`), **y = 256**. The background texture space is therefore 8bpp, rows 256..511. Model/NPC TIMs go to x >= 512 with their own CLUT (x=256, y=224+k). `.ctd` order: all background pages first (flags 1, up to 11 pages), then the CLUT TIMs (models and extras).
+3. Copy `.bin` subfile 1 (CLUT block) as a 256-halfword-wide rectangle at VRAM (0, 224): palette k = file bytes `512k..512k+511` lands at **row 224+k, x = 0**. Palettes are 512 bytes apart in the file but one VRAM row (2048 bytes) apart in VRAM. The subfile size is a multiple of 512 (1..13 palettes). `.ctd` CLUTs sit at x=256, so they never collide. (Copying the file contiguously would put palette k > 0 at x = 256*(k%4) and leave rows 224+k empty; 392 of 566 rooms use palette 1+, so their sea, doors and banners would be transparent.)
+
+Pixel for tile texel (i, j), 0..15: `index` = byte i of the halfword row `256 + v + j` starting at halfword column `u` (low byte first; two 8bpp texels per halfword; a 16-texel row = 8 halfwords); `colour = CLUT[clut>>3][index]`. Colour `0x0000` is transparent. BGR555: r = c&31, g = (c>>5)&31, b = (c>>10)&31, bit 15 = STP. In all 732,412 tiles `u%8 == 0`, `v%16 == 0`, `clut%8 == 0`, `clut/8` is below the number of CLUT rows, and the 8x16 source halfwords lie inside blitted `.ctd` pages.
+
+## 3. `.bin` subfiles
+| # | Content | Form |
+|---|---|---|
+| 0 | camera + parallax groups (3.1) | raw, 40+4n bytes |
+| 1 | CLUT rows (section 2) | raw, 512*k |
+| 2 | trigger zones (3.7) | sszl; length 0 in 478 rooms, else 0x18 per zone |
+| 3 | field script | sszl (`fieldscript.md`) |
+| 4 | walk-mesh triangles (3.4) | raw |
+| 5 | walk-mesh vertices (3.4) | raw |
+| 6 | attr -> flags table (3.5) | raw, 332 or 324 bytes |
+| 7 | background assembly (3.3) | sszl |
+| 8 | dialogue | sszl (`text.md`) |
+| 9 | sound bank header `yos1` | raw (all rooms) |
+| 10 | sound data `yos0` | raw (all rooms) |
+| 11+ | room models, one per model texture (3.6) | raw |
+
+### 3.1 Subfile 0: camera, scroll, parallax
+```
++0   s16 m[9]          GTE rotation matrix RT, 4.12 fixed (4096 = 1.0), row-major (e.g. 4024,0,760 / 39,4090,-211 / -760,214,4019)
++18  s16 t[3]          GTE translation TR (z large, e.g. 436,329,1952)
++24  u16 H             GTE projection distance (571 for Arni; 506..2141 seen)
++26  s16 x_max  +28 x_min     scroll/pan limits (max >= 0 >= min)
++30  s16 y_max  +32 y_min
++34  s16 (not read by the engine; 7..27 seen, probably the actor slot count)
++36  u16 n_groups (+38 pad)   == max(tile.group)+1 in all rooms; size == 40 + 4*n_groups
++40+4i  u16 scale[i]          4-byte stride, high half unused; 4096 in 1561/1650 entries; also 0, 3000, 4000, 4500, 5000, 6000
+```
+- **Projection.** RT, TR and H are the camera for actors and room models. The projection offset is fixed at (160, 120) in layer space. The background itself is pure 2D and ignores them. For an actor position `P = (x, y + yoff, z)`: `Pc = ((RT * P) >> 12) + TR`, `sx = 160 + H * Pc.x / Pc.z`, `sy = 120 + H * Pc.y / Pc.z` (Y down). The ordering-table slot is `Pc.z >> 4` (3.3).
+- **Scroll.** The loader subtracts 24 from the stored y_min. Each frame the target `T = (160 - sx, 120 - sy)` of the camera-follow actor (projected at its position raised by the script's camera y offset, op 64) is clamped to `[x_min..x_max] x [y_min-24..y_max]` (unless a script flag disables the clamp). The stored scroll `S` eases `S += (T - S) / 12` per frame (C division, truncating), or snaps when script flag FE 11 is set; FE 04 skips every pan-limit clamp. At room entry S starts at (0, 0) and runs the ease 64 times toward the leader's target. Scripted camera moves (5D / 5E / 61) tween S linearly over their frame count and then leave the camera fixed (5D) or following (5E: the leader, 61: the named entity). A shake offset is added at draw time. A script op overwrites the limits at run time. Scripted camera targets (5D SET_CAMERA_POSITION, 5E, 61) are clamped to the same `[y_min-24 .. y_max]`, or to the limits written by the 4-s16 limit op (which writes them unbiased).
+- **Pan limits and picture extent.** For all 566 rooms the bounding box of all tiles equals `(-x_max, -y_max) .. (320 - x_min, 240 - y_min)` on the stored values: tile coordinates are screen pixels for a 320x240 viewport whose top-left is (0,0) when centred. Exception: rooms whose camera block says 0 / 0 (no panning) can still carry tiles far outside the 320 columns (`man_b01f` paints columns -356..668); the pan limits bound the scroll only, and the picture extent is the tiles' own bounding box (`RoomView::art_x0_ / art_x1_`).
+- **Parallax.** Each frame, per group and per axis, `off[g] = extra[g] + (s16)((S << 12) / scale[g])`, where `extra[g]` is a script-set s16 pair (a script op taking x, y, group). Scale 4096 = 1:1; a larger scale scrolls slower (farther), a smaller scale faster. A tile's screen position is `tile.xy + off[group]`. A scale of 0 is replaced by 1 at load; the `S << 12` product then wraps in s16 to a multiple of 4096, which the GPU's 11-bit signed vertex coordinates drop, so such a group is fixed to the screen (inferred). Rooms with a scale-0 group: the world maps `wld_a00/a01/a02/a04`, `wld_b00/b01/b02/b04` (the "Home / Another World" name, shown by an entity that does BG_LAYER_ON/OFF on that group from var 0x52 = the World Names option), `opening`, `ending`, `fin_02`, `zel_a13f`, `zel_a17i`. OpenCross: `RoomView::draw` uses parallax 0 for them. The PS1 art is the ring plus "Another" / "Home" only; RDE's HD art replaces it with `hd/map/HomeAnother/{home,another}_<lang>.png`.
+
+### 3.2 Subfile 1: CLUT
+`256 * 2 * k` bytes of BGR555 = k palettes (section 2).
+
+### 3.3 Subfile 7: background assembly (decoded)
+```
++0      u32 N                    layer count (1..45; 17 rooms have 1; the importer accepts 1..64)
++4      u32 start[N+1]           start[i] = index of layer i's first tile; start[N] = index of the LAST tile
++4+4(N+1)  Tile[start[N]+1]      12 bytes each
+```
+The final table entry is the last tile index, not a count: the decoded length is always exactly `4+4(N+1)+12*(start[N]+1)`. Layer i = tiles `[start[i], start[i+1])`; the last layer runs to the end. Layer 0 is usually the full-screen base (Arni: 850 tiles = 50x17, z = 2000); the others are overlays (foreground, animated parts).
+
+Tile (12 bytes):
+```
++0  s16 x        screen position of the tile's top-left (16x16 tiles), see 3.1
++2  s16 y
++4  u16 u        VRAM halfword column of the 8bpp source (u = texel_x/2); multiple of 8
++6  u8  v        source row: VRAM row = 256 + v; multiple of 16
++7  u8  clut     8 * palette-row index (CLUT row = clut>>3)
++8  u8  group    scroll/animation group, 0..31 -> subfile 0 scale[group]
++9  u8  flags    bits 5-6 = mode ((flags & 0x60) == 0x20 in all tiles); bit 7 semi-transparent; bits 3-4 = ABR
++10 u16 z        ordering depth, 0..4000, larger = farther; constant within each of the 6,142 layers
+```
+Flags values seen: `0x20` (632,691: opaque), `0x28` (601: bit 3 without bit 7), `0xA0` (6,882: semi, ABR 0), `0xA8` (88,264: semi, ABR 1), `0xB0` (3,974: semi, ABR 2). The PS1 tile primitive is a 16x16 sprite with its own draw-mode: texture page x = `u & 0x7C0`, y = 256; mode = flags bits 5-6; sprite u = `(u & 0x3F)*2` texels, v = the v byte; CLUT x = `(u >> 11)*16`, y = `224 + clut/8`; modulation 0x80 (neutral); semi-transparency on iff flags bit 7.
+
+**Blend (ABR).** 0 = (B+F)/2, 1 = B+F, 2 = B-F, 3 = B+F/4. It applies only to texels with STP (bit 15) set; the other texels of a semi tile are opaque. **0x28 is equivalent to 0x20**: ABR only matters when bit 7 is set.
+
+**Depth and ordering rules.**
+- Every layer has one `group` and one `z` (checked on all 6,142 layers); the draw depth is `max(8, z)` (6 layers have z below 8). OpenCross composes one image per (layer, group, blend kind) and takes z from the group's first tile in the layer; images with the same group, blend and z are merged into one texture and the textures are drawn in z-descending order.
+- `z` is the ordering-table (OT) index in the same space as an actor's `Pc.z >> 4` (3.1) plus the actor's own bias. The OT is walked from high to low, so **larger z = farther, drawn first**. An actor is in front of a layer iff `(Pc.z>>4) + bias < z`.
+- Each layer links a group draw-offset at slot z (before its tiles) and the global scroll offset at slot z-2, so nearer actors use the global scroll. Equal-z layers: the later layer draws first (behind). There is no per-tile sort.
+- Effect particles file into the same OT (`room_effects.md` 4.4), so one depth space orders layers, actors and effects.
+- **Per-group visibility mask**: a 32-bit mask, one bit per tile group, all groups visible at room load; a hidden group's tile chain is not linked. Script ops 80 / 81 (BG_GROUP_ON / OFF, `fieldscript.md`) show / hide the group they name (they address groups, not layer indexes). OpenCross applies the mask when drawing and never recomposes (items hold one group each); a `[Debug]` line `room <name>: layer mask A -> B` is logged on every change.
+- **Per-group tint**: script op C2 SET_LAYER_OPACITY (9 bytes: group, r, g, b) rewrites every tile of the group's layers with the group's colour (0x80 = neutral; fades). It is a colour modulate, not alpha; OpenCross clamps each channel to 0..1 (values above 0x80 draw neutral), and a group tinted to black is skipped.
+- Script op 92 BG_GROUP_SEMITRANS toggles the semi-transparent bit of a group's primitives; RDE never draws those primitives (the blend comes from the tile flags read at load), so it has no visible effect in either art mode and OpenCross keeps only the state.
+
+### 3.4 Subfiles 4 and 5: walk mesh
+Subfile 4: `u32 nTri`, then `nTri` x 14 bytes: `u16 v0,v1,v2; s16 adj0,adj1,adj2; s16 attr`. The section is `4+14*nTri` bytes (+2 pad to a multiple of 4 in 253 rooms). Subfile 5: `u32 byteLen` (= 8*nVert, section = 4+byteLen), then `s16 x,y,z,w` per vertex; `w` is 0 in all 49,767 vertices. Coordinates are world units, Y down (Arni floor y = 83).
+- `adj[k]` = index of the triangle across edge `(v[k], v[(k+1)%3])`, or -1 for a boundary. Of 283,972 non-negative links, every neighbour exists and contains both edge vertices, and 283,969 are reciprocal (the exceptions: `crn_b10i` triangle 51 has three non-reciprocal links; `you_b07i` triangle 19 is degenerate `(115,115,115)` with self-adjacency). Triangles are not necessarily counter-clockwise.
+- `attr` indexes subfile 6 (3.5). 41 distinct values; families 0/1, 11-23, 25-30, 41-45, 57-61, 72-82; most common 1 (43,941), 25 (24,127), 26 (8,635), 11 (8,451).
+
+**Movement and height rules.**
+- Position is 16.16. The mover tests the XZ point `pos+delta` against the current triangle with three 2D edge sign tests (edge k = v[k] -> v[k+1]); the 3-bit outside mask selects the neighbour `adj` to cross. Each entered triangle's flags are checked and the move is blocked if `flags & (class & 0x600000)` or `flags & 0x800000` (3.5). At most 0x40 steps per move.
+- If blocked, the mover probes headings +-0x200 and 0 at distance 0x80, then wall-slides: the move is projected onto the edge. Only X and Z decide containment; Y follows the plane. OpenCross (`WalkMesh::move_actor`): three feelers 8 units beyond the end of the move (at -45 deg, +45 deg and straight on) must reach through the mesh without meeting a boundary or a blocked triangle; otherwise the move is projected onto the blocking edge at full length and tried again (up to three chained slides round obtuse corners; no slide when the move is within 11.25 deg of the edge normal, or when a chained slide runs back against the push). A slide turns the actor to the slide direction. On sloped ground the xz move is shortened so the 3D step keeps the walking length (a ladder climbs at walking speed).
+- Height: `N = (v1-v0) x (v2-v0)`; `y = v0.y + (-(Nz*(z-v0.z)) - Nx*(x-v0.x)) / Ny` (0 if Ny = 0). Vertical velocity is `(y<<16) - actor.y`, so the actor snaps to the plane.
+- **Start triangle for a point**: collect up to 8 triangles containing (x, z) in triangle-index order, sort by plane Y **descending** (largest Y = lowest floor first; stable), and take element `index`; `index >= count` falls back to 0. A "fall" mode instead takes the first element with `Y <= given y` (else the last). Entrance placement passes the 4th s16 of the 8-byte pre-script record (`x, z, facing, level`) as `index`; the formation ops pass their own field. A nearest-to-y=0 rule is wrong: 242 of 1,994 entrance records have several floors under them and 82 of those would pick another floor (e.g. `cao_a03f` entrances 4-7, `crn_b04i`, `gal_a02f/a03f`, `dry_a02f`), putting the party under a bridge instead of on it.
+
+### 3.5 Subfile 6: attr -> flags table
+Indexed by the walk-mesh `attr`; the engine copies 0x400 bytes (256 u32). The shipped data has two constant blobs, identical across rooms: 332 bytes (519 rooms; 83 entries, attr 0..82) and 324 bytes (47 rooms; the 332-byte blob minus its last 8 bytes `00 00 01 00 00 80 20 00`). When an actor's triangle changes, its flag word is loaded from `table[attr]`. Decoded values:
+```
+0, 72-75        = 0x800000
+1, 6, 76-79     = 0
+2, 12, 56-71    = 0x40000 | (n-56 for 57-71)
+3               = 0x200000
+4               = 0x400000
+5               = 0xE00000
+7-10, 13        = bit 19-20 mixes (0x80000, 0x100000, 0x180000, 0x100000, 0x60000)
+11 = 0x20000    14 = 0x2000    15 = 0x1000
+16-23           = 0x800 | (dir<<8)
+24-39           = nibble 0..15
+40-55           = 0x20000 | nibble
+80 = 0x204000   81 = 0x10000   82 = 0x208000
+```
+Flag word bits:
+- **0-3** lighting zone: index into the per-room RGB table (section 6).
+- **0x800** forced slide: the actor is pushed along angle `(f & 0x700) << 1` (4096 = 360 degrees, 8 directions) at a fixed script-set speed times 12.
+- **0x1000** velocity halved.
+- **0x4000 / 0x8000** stair up / down: heading from the plane normal; the animation switches to the stair clips. Ladders are attr 80 / 82 stair tiles.
+- **0x2000, 0x4000, 0x8000, 0x20000, 0x40000** (mask 0x6E000) force the actor's shadow strength to 0 (the shadow, not the body colour).
+- **0x20000 / 0x40000** are the **water** surfaces (section 6). Both together skip per-frame effect updates; walking on 0x800 surfaces sets climb-state bits (purpose inferred).
+- **0x10000** damage floor: walking on it adds 2 (running 5) per tick to a counter; each 0x80 costs every party member 2 HP (4 with burn) and starts the screen jolt. No room ships attr 81; the Hydra Marshes `hid_b*` rooms add it to the water with script op 75.
+- **0x200000 / 0x400000** block actors whose class bits (`actor flags & 0x600000`) match; **0x800000** blocks everyone. Class setters: SETUP_PC sets 0x400000 ("player class") on every party member; SETUP_NPC and D1 set 0x200000 ("NPC class", also solid). So attr 3 is an NPC-only wall (keeps NPCs on their paths: 151 rooms), attr 4 a player-only wall (42 rooms, e.g. `alu_a03i`'s rocking chair and bed, triangles 38..47 plus 33/34), attr 5 blocks all, attr 0/72-75 blocks all (207 rooms). The class bits' names are inferred.
+- No encounter bit exists in this table. The table bytes are also script get/set targets.
+
+### 3.6 Subfiles 9, 10, 11+
+**Sound:** `yos1` (488 bytes in Arni) and `yos0` (40,948) are the sound bank header and data; only the magic is validated. `yos1` has `+4 unknown, +8 entry count, pointer table`; `yos0` embeds AKAO frames.
+
+**Room models.** Header (12 bytes): `u32 eof_rel (= section size - 12); u16 img_x, img_y; u16 clut_x, clut_y`. The four values name the `.ctd` CLUT-carrying TIM that is the model's texture; in all 2,203 model subfiles image (x,y) and CLUT (x,y) match a TIM. Typical: model k texture at `(832|768|704|896, 256|384)`, CLUT `(256, 224+k)`. 56 rooms have extra CLUT TIMs in `.ctd` that no model header references (purpose unknown). After the header the pack is a plain Mdl (`model.md`) with all offsets relative to its own start (`u32 6`, S1..S4, S5 = 0, S6 = 0, EOF = eof_rel). Face UVs are relative to the header's image origin (the 811 models at `img_y` 384 use v from 0). 57 room models (24,303 faces) carry the CLUT / page bits of the model format (next CLUT row, next 128-texel page to the right): their texture is the VRAM window of the model's page and the page to its right from the room's composed VRAM, coloured with CLUT rows `clut_y` and `clut_y + 1` (`RoomModelHeader::page_textures`); the neighbouring page is another `.ctd` TIM at `(img_x + 64, img_y)` (e.g. the Hydra Marshes hydra, `hid_a10f` / `dem_06` model 1: (768,256)/225 + (832,256)/226). OpenCross imports all 2,203 with `import::load_room_model` (`occ room-models`). SETUP_NPC n uses model n.
+
+**Room-model shading (S3 entry k applies to construct k of a room model)**: low nybble `2` transparent (ABR 0), `6` bright (ABR 1, additive), `A` inverted (ABR 2, subtractive), `E` faint (ABR 3), odd = invisible (`model.md`). OpenCross draws such meshes in a second pass, additive (ABR 0 at x0.5, 3 at x0.25) or reverse-subtract, depth-tested and not depth-written (`assets::Mesh::trans`).
+
+**Examples.** The lift of the New Game opening is room `opn_a01i`: its doors are room models, not tile groups (BG_LAYER ops never appear; C2 only tints groups 1-3, the dragon statues, 100/80/60 -> 128 while the doors are open). Ents 5/6 (models 0/1) are the two door leaves, ents 7/8 (models 3/4, entry-0 shading `0x0A`) a subtractive floor shadow of the doors, ent 12 (model 2) the lift floor. In `alu_a03i`, models 3 / 4 (ents 5 / 6) are the two roll-up blinds of Chronos' room: 17 joints, one flat 90-triangle strip hanging down from its origin, clips 0 closed, 2 rolled up, 1 / 3 roll up / down (13 frames), 4 idle flutter. The room script lifts the entity with op B0 (`fieldscript.md`): the model is drawn `+0x110` units higher than the entity's floor y so the blind hangs from the beam (layer 2, group 2). The toggle (ent 7's ON_ACTION) is animation plus a screen tint; no layer, tile or CLUT op is involved.
+
+### 3.7 Subfile 2: trigger zones
+Decoded length is `0x18` per zone. Each zone is four corners `(x,y,z)` as s16 each (an XZ quad: x at s16 index 0, 3, 6, 9; y at 1, 4, 7, 10; z at 2, 5, 8, 11). Script ops 55 / 56 use the zone index as operand: they test the controlled entity (not the running one) against the quad, a convex XZ quad (the four edge functions have one sign, so either corner order works); 56 additionally requires the height gate `actor.y - actor.height < zone.y(corner 0) < actor.y` (y is down). OpenCross imports them as `RoomScene::zones`; a zone index past the table reads as outside. None of the `alu_*` scripts uses them (their exits are box entities).
+
+## 4. Display window, framing and OpenCross presentation options
+
+### 4.1 PS1 and RDE framing
+- **PS1 display window.** The field draws into a **320x224** buffer (double-buffered; the draw offset is the scroll) and **displays 216 rows** (display environment `screen = (0, 10, 256, 216)`; one path can set height 208). That is why the loader biases y_min by 24: at the lowest scroll `S.y = y_min - 24` the bottom of the bounding box (`240 - y_min`) lands on row 216, the end of the display; at `S.y = y_max` its top is row 0. So the PS1 never shows rows past the picture (x is exact too: 320 columns). The projection centre (160,120) sits 12 rows below the middle of the 216 displayed rows.
+- **RDE framing.** RDE turns the 216-line display range into 224 (`y2 += 8`), so the present shows buffer rows **0..223**, stretched over the 4:3 fit inset by 8/960 of its height at the top and the bottom. Rows 216..223 lie under the picture only within 8 px of the lowest scroll: RDE shows an **8-row black band** there (557 rooms), never more. OpenCross uses this framing (`render::Letterbox::field`, `kFieldRows` = 224), zoomed so the 236 rows between the two black bands fill the window height (`kPresentRows`): scale = min(window width / 320, window height / 236); rows 0..224 span [2, 238] in the 240-row units of that 4:3 fit, and a window narrower than 320:236 is width-limited and keeps the bands. `occ rooms-frame` lists per room the empty rows under the picture for 216 / 224 / 240 displayed rows over every reachable scroll (216: only the 32 rooms whose own art is empty at the bottom, e.g. `blk_00`, `alu_a05i`; 224: 8 rows).
+
+### 4.2 OpenCross: PS1-resolution field and render scale
+- **`[Video] Ps1Res3D=1`** (Esc options, default on): original (classic) art draws the whole field picture (layers, shadows, models, effects: one depth space) into a 320x224 target and scales it up with nearest sampling into the field frame. HD art draws at window resolution, clipped to the field picture like the 320x224 draw area.
+- **`[Video] RenderScale`** (Graphics tab: 0.5x, 0.75x, 1x, 1.5x, 2x, 3x, 4x) draws the 3D pictures into an off-screen target at that multiple of the output resolution and composites them under the 2D drawn at output resolution (HUD, menus, dialogue, status icons, fog / dim / fade veils, the FE 02 captured-frame tiles). Window-resolution paths (HD / Modded art, or SD with Ps1Res3D off): the title sea, the field picture and the battle 3D go into a `scale x window` target with the same letterbox mapping; the field's layers go in with the actors because both sort in one depth space, so they cannot be composited separately. Above 1x the target is filtered down with an area filter (4 x 4 point taps over each window pixel's footprint), below 1x bilinear up. The 8F ripple runs inside it unchanged. SD with Ps1Res3D: the scale multiplies the PS1 buffer instead, `(320 + 2e) x 224` times s (2x = 640 x 448), mapped by `Letterbox::identity(w, h, s)` (`RoomView::set_target_pass(true, s)`) and shown nearest up, or area-filtered when the target is denser than the window. Widescreen columns scale with it.
+
+### 4.3 OpenCross: widescreen
+`[Video] Widescreen=1` (Graphics tab, or F7 live; saved) shows the field (and the world map, which is field rooms) as wide as the window. This is an OpenCross option, not an RDE feature. There is no aspect setting for it: the window's own shape decides. Off = 4:3 with black bars in a wider window; every quantity below is then 0 / 320.
+- **Extent**: `e = floor((236 * window_w / window_h - 320) / 2)` extra layer columns per side, 0 for a window of 4:3 or narrower (`render::wide_extra_for(vw, vh)`; 236 = `kPresentRows`): 16:9 -> 49 (418 columns), 16:10 -> 28 (376), 21:9 -> 115 (550). The picture keeps its 224 rows and the 4:3 fit's height (scale = window height / 236, so the HUD canvas sits on the same picture pixels); columns 0..320 stay centred, the extra columns lie left / right (`Letterbox::field`: `x0 = -e`, `w = 320 + 2e`).
+- **Layer space is unchanged**: scripts, scroll targets (5D / 5E / 61, the follow target `160 - sx`), the GTE offset (160, 120) and dialogue / status-icon positions keep their 320-wide meaning. The 3D projection simply covers more columns: the same H and offset over a wider viewport is a wider horizontal field of view.
+- **Scroll clamp**: every clamp of the scroll (follow camera, shake, 5D / 5E / 61, and the script limits) uses limits narrowed by `e` (`RoomView::widen`): `x_max' = x_max - e`, `x_min' = x_min + e`; when they cross (a picture narrower than the view) both are the midpoint, so the picture is centred. This keeps screen columns `-e .. 320 + e` inside the picture whenever it is wide enough. y is untouched.
+- **Black where the picture ends**: every field pass (layers, shadows, actors, effects, the 8F ripple, op-68 fog, effect screen colours) is clipped to the visible columns cut to the picture's own columns `scroll + art_x0 .. scroll + art_x1` (`RoomView::picture_columns` / `clip_rect`); beyond them the frame stays black. With the clamp this happens only in rooms whose picture is narrower than the view, or while a script scrolls with the clamp off. `[Video] WideEdgeFade` (default 4 layer px, 0..96, `RoomView::edge_fade`) fades that cut edge into the black.
+- **Art**: both art modes draw the PS1 tiles and the chip2 HD layers over the whole width. Classic `Ps1Res3D` draws into a `320 + 2e` x 224 target (16:9: 426 x 224) and scales it up nearest.
+- **Effects / overlays**: the 8F / 90 ripple grid continues over the extra columns in 16-px columns with the same wave (edges pinned at `-e` / `321 + e`; `build_screen_warp(.., e)`); the FE 02 captured-frame transitions cover the visible width (the kind-5 slide crosses it in the same ticks, its distance scaled by `(320 + 2e) / 320`); flat screen primitives that span all 320 columns (flashes, washes: `Letterbox::widen_full_width`) and the effect-sequence screen colour (2B / 2C, the encounter's dim) span the visible width.
+- **Screen veils**: every screen-covering veil covers `Letterbox::veil_rect` = the 240-row 4:3 fit widened by `e` columns per side (`e` = `render::screen_extra()`): the field fades (FE 02 kinds 0 / 2 subtractive / additive, the 0x10 menu-close fade-in, the re-entry fade-in, script A8), the GameFlow title / load / menu-open fades (`GameFlow::draw_veil`), the held last movie frame's fade and the battle's start white-out.
+- **Title**: the title room's 3D sea (`TitleBackdrop`, projection centre (160, 112)) is widened like the battle 3D (`Letterbox::wide`, same H and centre over a wider viewport, scissored to the widened frame, nothing clamped). The title room's layers (PS1 logo / glow) and the title menu stay 4:3 and centred over it.
+- **4:3 screens**: menus, shops, the party screen, dialogue windows, the title logo / menu and movies stay on the 4:3 canvas (`Letterbox::fit`), centred; full-screen menus / shop / party screen black out the columns beside the 4:3 area. Dialogue windows keep the PS1 clamp to x `0x20 .. 0x120` (a speaker in the extra columns gets its window at the nearest 4:3 position).
+- Known limit: scripted camera pans keep their 4:3 distances.
+
+## 5. Layer rendering rules
+
+### 5.1 Semi-transparent tiles
+- OpenCross: `RoomGroupImage::blend` is -1 for opaque (non-semi tiles and non-STP texels of semi tiles) and 0..3 for the STP texels of semi tiles with that ABR (the HD chip2 art uses the same texture A/B split). Items are drawn per group: ABR 1 additive, **ABR 0 an alpha blend `(B+F)/2`** (alpha 0.5, `BlendMode::Average`, not an add of half the colour, which would brighten every covered pixel), ABR 3 add at 0.25, ABR 2 reverse-subtract; all depth-tested without depth write.
+- **The field is composed over a black framebuffer.** Many rooms' base layer is itself additive: `dem_01` layer 0 (960 tiles, flags 0xA8, 245,341 STP texels, 0 non-STP), `hid_a01f` layer 0 (960 tiles) and `hid_a02f` layer 0 (910 tiles) are 100% STP in 1x and in the chip2 4x art alike. The PS1 adds them to whatever the frame holds at their slot (z 2000 / 3000, the farthest of the room), i.e. to the cleared frame, so they only look right over black. OpenCross clears to black while a field room is shown and draws the M0 test image `ui/background.png` only when neither a field nor a battle is shown.
+- **1x and chip2 STP splits agree** for every semi tile in every room, except 2-3 tiles each in `crn_b11i`, `crn_b18i`, `crn_b19i` (HD STP texels where the 1x tile has none; in HD they are only drawn if the group also has an image of that ABR). So building the item list from the 1x groups loses nothing in HD.
+- Debug: environment `OC_ROOM_LAYERS=0,3` draws only the listed background layers (`RoomView::draw`).
+
+### 5.2 Semi-transparent layers nearer than the models
+The PS1 files actors by their own slot (camera z >> 4 + bias) and layers by their z. A **semi-transparent layer whose z is below every actor's slot** (`hid_b09f` layer 5: z 9, flags 0xA0 = ABR 0, a whole-screen water surface; actors sit at slot ~200) is drawn AFTER the models and effects, so it blends over them (legs, wake rings, the dry body in the water's screen area). OpenCross: `RoomView::set_late(z, pass)`; `FieldWorld::draw_background` skips the semi items with z < `late_layer_z()` (nearest actor slot - 16) and `FieldWorld::draw_background_late` draws them after `draw_actors` + `draw_effects`, in the normal frame and in the 8F / classic passes. Layers farther than an actor and all opaque layers keep the normal order (the depth test sorts opaque ones). Approximation: a semi layer between two actors' slots goes by the nearest actor.
+
+### 5.3 Camera and scroll in HD art
+Layers and actors use one sub-pixel scroll (the follow ease in floats, `FieldWorld::Camera::sx/sy`, interpolated by the render alpha, no rounding). Original-art mode keeps the retail integer scroll and floors tile positions. The integer ease (C division) stays the logic state.
+
+### 5.4 Actor pitch / roll (script op AD)
+Actor flag bit 5 (set by op AD) selects the rotation: set (the world-map party: `AD 1` + `OP27 #3584`) = one RotMatrix `Rx*Ry*Rz`, the pitch acts in the WORLD frame after the yaw and tilts the model toward the 58 degree camera whatever it faces. Clear (the Termina sword, `OP27 #1100`) = `Ry(yaw)` with pitch / roll as the model's own rotation inside it (model frame, stands up for any yaw). OpenCross: `Actor::tilt_world`.
+
+### 5.5 Screen ripple (script ops 8F / 90)
+The frame drawn so far (everything filed deeper than the grid's own slot p8) is copied inside VRAM (rows 32..223 -> 0..191, the 64x16 blocks of rows 176..223 -> x 0x340) and redrawn as a 20 x 17 grid of opaque 16 x 16 quads whose grid lines move with `16c + rcos(phase_x + c * step_x) * amp_x >> 12` (columns) and `16r + 32 + rcos(phase_y + r * step_y) * amp_y >> 12` (rows; rows 14..16 come from the block copies, bottom pinned at 224). Rows 0..31 keep the shifted copy. Layers / models / effects nearer than p8 and the UI are drawn over the warped picture. Full rule: `fieldscript.md` 8F. Uses: `bak_a10f` / `bak_a11f`, `hid_a04f`, `wld_a00` / `wld_b00` (amplitude 10 x 10, OT 9), `cao_a02f` / `cao_a04f` (OT 60), `kji_b*` (2 x 1, OT 1 / 8 / 200), `jac_b35e` (4 x 4, OT 1500; only the backdrop at z 2500 is warped), `you_b01f` (8 x 0, OT 2500), `ryu_b29i`, `gat_a01f`, `opa_a04f`, `dem_09`; the `$room[153..160]` forms in ~40 rooms sit behind a digit-entry menu that edits the eight values (a test feature, inferred). OpenCross: `render::build_screen_warp`, drawn by the app with `FieldWorld::set_draw_slab` / `RoomView::set_slab` (both art modes; classic art at 320 x 224).
+
+## 6. Lighting and water (field actors and room models)
+There are no directional lights in the field: models draw with vertex colour x one flat RGB multiplier per actor / room model (128 = 1.0, above 128 brightens, clamped at white).
+- **Table**: script op `0x67 SET_SHADOW_COLOR w` copies 16 entries of 4 bytes `{r, g, b, pad}` from script-buffer offset `w` (`opn_a01i`: `w = 0x4C`, entries 128, 100, 90, 160, 110, ...). It runs in each room's init; before it runs the table is neutral.
+- **Selection**: target colour = `table[flags & 15]` where `flags` is the walk-mesh flag word of the triangle the actor stands on (3.5). Brightness therefore changes as an actor crosses triangles. Actors whose class flag word is negative (bit 31, set by script op FE 5A) always use 128.
+- **Smoothing**: once per 30 Hz frame, for all actors including room-model NPCs and boats, the current colour moves toward the target by at most **16 per frame** per channel. Room entry copies the target directly (no ramp). Models: colour byte = `current * ENTITY_RGB >> 7`, i.e. final factor = `current/128 * entity_rgb/128`, a flat modulate of the texture.
+- **Shadow strength** eases toward `(R+G+B of entity rgb)/6` by 4 per frame (0 on flags `0x6E000`). The shadow itself is a subtractive quad from `map/etc/systim.bin` TIM 0.
+- **Water**: an actor on a triangle with flags `0x20000` / `0x40000` / both gets its water level from the s16 table filled by op `0x66` (entry 0 / 1 / 2; default 10), a water depth bias, and water colour from op `0x87` (default 0x20,0x20,0xB4). In the primitive path, any triangle with a vertex whose **world** Y (+y down; the model vertex buffer is world space) is **greater than the level** is drawn with the water RGB **instead of** the light colour **and filed deeper in the OT by the water depth bias**. The bias defaults to the z of layer 0's first tile (max 8) at room load; op A4 overrides it. The submerged legs thus go behind the background and the (semi-transparent) water layer is drawn over them. The whole actor is never tinted blue. Using model-space Y instead of world Y would keep every wading actor dry.
+- OpenCross: `game::RoomLighting` (`room_lighting.h`), `render::MeshPipeline::DrawParams::{tint, water_level, water_tint}`.
+
+## 7. `.prd` (drp) contents
+8,782 entries in 344 rooms. Rooms containing each type: 0x03 timinfo 292 and 0x04 tim 292 (names pair up, e.g. `nm08` timinfo + `nm08` tim: animated-background parts; the TIMs are classic TIMs, 576..4640 bytes), 0x0A 317 (264, 216, 204 bytes; named `1`, `2`, `hos1`...), 0x02 mesh 61 (232 entries, e.g. `fish`), 0x10 126 (325 entries, e.g. `loop`, `zou1`), 0x0C 3 (67 entries, `st10`..: battle positions), rarely 0x07 (3 rooms), 0x00 (1), 0x18 (4), 0x24 (11; 8 bytes each). No 0x0B models or 0x01 nested drps occur in room `.prd` files.
+
+Type semantics (details in `room_effects.md`):
+- **0x04 TIM upload**: the CLUT (TIM flag bit 3) and the image are uploaded to VRAM at the TIM's own coordinates.
+- **0x03 UV fix-up** (sprite sheet, paired with a 0x04 TIM): `u16@+2` = table count (bit 15 = not yet relocated, cleared after one pass); `u16 off[]` at +0xC -> `{u16 n; ...; n x 12-byte sprite entries from +8}`. Each entry: `u8@0 += (info.b4 & 0x3F) << 2` (`<<1` if entry bits 7-8 != 0) and `u8@1 += info.b6`, rebasing UVs to where the paired TIM landed.
+- **0x0A effect emitter**: header `{u32 link; s16 length@4; s16 window@6; s16 frame@8; u16 period@0xA; s16 count@0xC; s16 repeat@0xE; u32 flags@0x10; u32 ptr@0x14; code@0x18}` (field names inferred). On activation `ptr@0x14 = payload+0x18` (once), frame@8 = 0, countdown@0xC = u16@0xA, and the entry is linked into the active list. Each frame frame@8 advances, countdown@0xC runs, and at -1 the bytecode interpreter runs `s16@0xE + 1` times and spawns children (flags u32@0x10: bit0 active, bit2 linked, bit10 restart).
+- **0x10 sequence**: the pointer fix-up sets only `ptr@0x10 = payload+0x14` (data stream pointer; used by name, e.g. `loop`, `zou1`).
+- 0x02 meshes, 0x10 sequences, 0x18 path curves and 0x24 (three bytes r, g, b: the initial ambient colour) are decoded in `room_effects.md`; the payloads of 0x0C, 0x07 and 0x00 are not decoded.
+
+### 7.1 Which `.prd` a room loads
+Not `<room>.prd`. A room is the disc index triple `368 + 3 * id + {0, 1, 2}` = `.bin`, `.prd`, `.ctd` (`cdrom.fnd` / `cdrom2.fnd`, `game::DiscIndex`). Every one of the 548 room triples has a `.prd` record in slot 1 (`test.prd` = the empty one), and in **195 rooms that record names another room's file**: all `dem_*` attract-demo rooms (`dem_01` -> `man_a01f`, `dem_05` -> `hid_a02f`, `dem_06` -> `hid_a10f`, ...), most `_b` variants (`alu_b01f` -> `alu_a01f`, `hid_b05f..b08f` -> `hid_a05f..a08f`, `ryu_a01i..a23i` -> `ryu_b..`), `opn_a01i..a05i` -> `ryu_a24i..a28i`, the `fin_*` ending rooms, and `opening` -> the root `title.prd` (the title overlay's scene, run by `TitleBackdrop`). The `.ctd` slot is always the room's own. Since the zip members are named, a lookup by room name finds no effects for those rooms (no `dem_05.prd` member exists). `FieldWorld::load_room` passes the record to `RoomView::set_prd_path`; tools that read `<room>.prd` by name (`tools/py/cc_prd.py`, `occ`) see only the 344 own-name files.
+
+## 8. Importer, tools, validation
+1. cpt-split `.bin`/`.ctd`; unwrap sszl; parse TIMs; build the VRAM (section 2; `import::write_room_cluts` places palettes per row).
+2. Decode subfile 7; per tile fetch 16x16 8bpp texels + CLUT row -> RGBA (index 0 / colour 0 = transparent) into one image per (layer, group, blend kind) (`RoomGroupImage`); keep `group`, `flags`, `z`, `layer` with the placement. HD (chip2, section 1.5): read + parse of `hd/map/mapbin/<room>.chip2` starts on a worker when the room load begins; each merged (group, blend, z) texture is composed independently at 4x (tile lookup `Chip2::lookup`, BGR555 LUT) on worker threads, then uploaded in order on the main thread. BG_GROUP_ON/OFF never recomposes: items hold one group, so the layer mask is applied when drawing. Switching between the classic and HD file set re-reads the room and replaces only its art (layers, room-model meshes, effect sprite pixels), keeping walk mesh, camera, scroll, mask and tints.
+3. Subfile 4/5 -> float triangles + adjacency + attr; subfile 0 -> camera/pan/parallax; subfile 2 -> trigger zones; scripts/dialogue stay opaque.
+
+Tools: `python -I tools/py/cc_room.py --game <dir> validate` checks, per room: cpt monotonic; all sszl subfiles (2, 3, 7, 8, and sszl `.ctd` TIMs) decode to the declared length; subfile 0 size = 40+4*groups, groups = max tile group + 1; pan-limit bbox relation; layer table monotonic with exact tile-data size; per tile flags/clut/alignment/source-coverage; walk-mesh sizes, index range, adjacency and reciprocity; each model header resolves to a `.ctd` CLUT TIM; drp parse. Result: 564 rooms clean, 2 with walk-mesh anomalies (`you_b07i`, `crn_b10i`, section 3.4). `occ rooms-check` software-composites all group images (everything visible; BG_LAYER ops not run; the 24-row y_min overscan ignored) into the 320x240 viewport at scroll 0 and the nine pan-limit positions and lists rooms whose worst coverage is < 90% (33 of 566: mostly interiors smaller than the viewport, plus `blk_00`, `dummy`); it is a review aid, not a gate. `OCC_WALK=1 occ room <name> <dir>` prints every walk-mesh triangle with attr and flag word.
+
+## 9. Open questions
+- Unknown: purpose of the 56 rooms' unreferenced CLUT TIMs (extra texture pages).
+- Unknown: contents of `.prd` types 0x0C, 0x07 and 0x00 as room data.

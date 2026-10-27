@@ -1,7 +1,7 @@
-"""Per-frame transition measurements for ccx / OpenCross frame dirs (numpy + PIL; run with python -I).
+"""Per-frame transition measurements for ps1 / OpenCross frame dirs (numpy + PIL; run with python).
 
-    python -I tools/py/trans_measure.py DIR [step] [cx cy]     one line per frame: n  mean-luma  p5 p50 p95  zoom  white%  dark%
-Frames are cropped to the picture if letterboxed (ccx 640x448 as is; ours 1280x960 with 8px bands is cropped by the caller's
+    python tools/py/trans_measure.py DIR [step] [cx cy]     one line per frame: n  mean-luma  p5 p50 p95  zoom  white%  dark%
+Frames are cropped to the picture if letterboxed (ps1 640x448 as is; ours 1280x960 with 8px bands is cropped by the caller's
 --crop W H x y). zoom = the scale s (about cx,cy given in 0..1 of the picture, default .5 .625) that best maps frame n-1 onto n
 (least squares on a 160x112 luma copy; 1.000 = none)."""
 import sys, os, glob

@@ -412,7 +412,8 @@ class App {
   // A field room is shown this frame (the Debug tab's field sections).
   bool debug_field = false;
   platform::FrameLimiter limiter;
-  // OC_FRAMETIME=1 logs the wall time of every main-loop iteration while a field -> battle hand-over is running.
+  // OC_FRAMETIME logs the wall time of main-loop iterations over 20 ms while a field -> battle hand-over is running; a value starting
+  // with 2 logs every iteration.
   bool frametime_log = false;
   std::chrono::steady_clock::time_point ft_prev;
   u64 ft_frame = 0;
