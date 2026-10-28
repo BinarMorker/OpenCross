@@ -1,8 +1,10 @@
 # Model viewer
 
-The native model viewer inspects field characters, battle players and battle
-monsters without loading a save or starting a game session. It uses the same
-model importers, pose evaluator and GPU mesh renderer as OpenCross.
+The native model viewer helps modders test character model and texture changes
+more easily. It lets you inspect field characters, battle players and battle
+monsters and compare modified assets with the originals without loading a save
+or navigating to a specific scene. It uses the same model importers, pose
+evaluator and GPU mesh renderer as OpenCross.
 
 ## Start
 
