@@ -19,6 +19,7 @@ int ocbattleseq_main(int, char**);
 int ocflow_main(int, char**);
 int ocmenudemo_main(int, char**);
 int ocshopdemo_main(int, char**);
+int ocmodelview_main(int, char**);
 
 namespace {
 
@@ -29,6 +30,7 @@ struct Tool {
   const char* what;
 };
 constexpr Tool kTools[] = {
+    {"ocmodelview", ocmodelview_main, "isolated character model / animation viewer with original/modded A/B"},
     {"occ", occ_main, "rooms / models / scripts / effects / saves: list, extract, decode, validate"},
     {"octext", octext_main, "message viewer (lang.dat / PS1 dialogue)"},
     {"ocaudio", ocaudio_main, "decode / play BGM"},

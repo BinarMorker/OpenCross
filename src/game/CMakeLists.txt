@@ -1,5 +1,7 @@
 # Game modes: the field (room backdrop, actors, walk mesh, FieldWorld = script host + player + triggers + dialogue).
 add_library(oc_game STATIC
+  model_viewer.h
+  model_viewer.cpp
   room_lighting.h
   room_lighting.cpp
   room_view.h
