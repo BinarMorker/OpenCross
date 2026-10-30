@@ -102,13 +102,11 @@ void App::handle_script_menu(const game::FieldWorld::MenuRequest& rq) {
       }
       break;
     case MenuKind::Save:
-      // Using debug tools only warns; the save point still opens.
+      // FE 85, the ending's save prompt: using debug tools only warns; the save list still opens.
       if (debug_tools.saving_disabled()) ui.toast("Debug tools were used this session");
       if (menu_ok) {
         world.capture_state();
-        menu.open(flow.game_state(), true);
-        // A save point goes straight to the save list.
-        menu.debug_show(ui::MenuScreen::Save, 1);
+        menu.open_save_list(flow.game_state());
         menu_from_script = true;
         return;
       }
@@ -143,6 +141,15 @@ void App::handle_script_menu(const game::FieldWorld::MenuRequest& rq) {
         // RDE shows the user guide first when MAP_ID (variable 6) is 0 or 8 (New Game+).
         const int map_var = world.vm().var(script::var::kMapId);
         flow.begin_rename(rq.arg < 0 ? 0 : rq.arg, map_var == 0 || map_var == 8);
+        return;
+      }
+      break;
+    case MenuKind::MonsterPicker:  // the Grand Slam round rq.arg over the Dopplegang pool; the room shows its picker frames meanwhile
+      if (monster_picker_ok) {
+        monster_picker.set_hd(platform::art_is_hd(config.art_mode));
+        monster_picker.set_language(lang);
+        world.set_picker_backdrop(true);
+        monster_picker.open(world.dopple_mask(), rq.arg, world.grand_slam_table());
         return;
       }
       break;
@@ -302,6 +309,8 @@ void App::advance(const platform::Input& in, double dt, int ticks) {
   }
   if (movie_open) {
     movie_player.update(dt);
+    if (world_ok)
+      for (int tick = 0; tick < ticks; ++tick) world.movie_tick();
     if (movie_skippable && confirm_edge(in)) movie_player.skip();
     if (movie_player.finished()) {
       end_movie();
@@ -412,6 +421,16 @@ void App::advance(const platform::Input& in, double dt, int ticks) {
         // The party changed: rebind the party entities and models.
         world.state_edited();
       }
+      world.menu_closed();
+    }
+    return;
+  }
+  // The Grand Slam picker owns the input until the picks are written; they are the party of the monster-party battle that follows.
+  if (monster_picker_ok && monster_picker.active()) {
+    if (const int sfx = monster_picker.update(in, static_cast<float>(dt))) ui_sfx(sfx);
+    if (monster_picker.take_finished()) {
+      world.set_monster_party(monster_picker.result());
+      world.set_picker_backdrop(false);
       world.menu_closed();
     }
     return;

@@ -111,6 +111,15 @@ void FieldWorld::open_dialogue(int speaker, int message, int flag_byte) {
         for (int slot = 0; slot < 3 && slot < static_cast<int>(party_chars_.size()); ++slot)
           if (party_ent_[static_cast<size_t>(slot)] == target) face = party_chars_[static_cast<size_t>(slot)];
     }
+    // Faces that follow the story: Pip's is his current form (his record's model byte 0x2B..0x30), Kid's is her alternate face while
+    // global bit 18 (FE 71) is set, Serge's is Lynx's (0x31) while his model byte is Lynx's body unless global bit 17 (FE 6C) is set.
+    if (gs_) {
+      const u32 global_flags = vm_.global_flags();
+      const int pip_form = gs_->slot.chars[43].model_id & 0xFF;
+      if (face == 43 && pip_form >= 0x2B && pip_form <= 0x30) face = pip_form;
+      if (face == 1 && (global_flags >> 18 & 1u)) face = 0x5B;
+      if (face == 0 && !(global_flags >> 17 & 1u) && (gs_->slot.chars[0].model_id & 0xFF) == 0x31) face = 0x31;
+    }
     dialogue_face_ = face;
     portrait_left_ = false;
     if (face >= 0) {
@@ -298,38 +307,22 @@ int FieldWorld::dialogue_result() {
 }
 
 // ------------------------------------------------------------------------------------------------ host: screen
-// A8: mode 1 = to black, mode 0 = back to the picture; arg = ticks (0 = at once). Drawn as alpha black.
+// A8: mode 1 = to black, mode 0 = back to the picture; arg = ticks (0 = at once). Drawn as the room change's subtractive fade.
 
 void FieldWorld::request_menu(script::MenuKind kind, int arg) {
   if (menu_state_ != MenuState::None) return;
-  // Shops: FE 5E / FE 68 only select the shop (the menu entry point reads that mode); the FE 61 OPEN_MENU that follows
-  // in the scripts opens it. A FE 61 with nothing selected is the main menu.
-  if (kind == script::MenuKind::ElementShop || kind == script::MenuKind::WeaponShop || kind == script::MenuKind::TradingPost ||
-      kind == script::MenuKind::Save || kind == script::MenuKind::NewGamePlus || kind == script::MenuKind::NameEntry) {
-    // FE 4A too only selects (character, name-entry launcher mode): every FE 4A in the data is
-    // followed by the FE 61 that opens the name entry.
-    if (kind == script::MenuKind::NameEntry) last_rename_char_ = arg;
-    shop_selected_ = true;
-    shop_req_ = {kind, arg};
-    if (kind == script::MenuKind::Save && gs_) {
-      // FE 85: the roster's grids and gear go back to the stock and variable 0x7E = 3, so the
-      // save written by the list that follows is a cleared save (summary flags 3).
-      ngplus::strip_for_cleared_save(*gs_);
-      vm_.set_var(ngplus::kFlagVar, ngplus::kFlagCleared);
-      log::info("field: tick {} FE 85 cleared-save prompt: roster stripped, variable 0x7E = 3", tick_count_);
-    }
-    return;
-  }
   // FE 65: arg = disc - 1; PC mode swaps the index at once (the "Disc N" screen only fades).
   if (kind == script::MenuKind::ChangeDisc) {
     vm_.set_var(0x42, arg);
     set_disc(arg + 1);
     return;
   }
-  if (kind == script::MenuKind::MainMenu && shop_selected_) {
-    shop_selected_ = false;
-    kind = shop_req_.kind;
-    arg = shop_req_.arg;
+  if (kind == script::MenuKind::Save && gs_) {
+    // FE 85: the roster's grids and gear go back to the stock and variable 0x7E = 3, so the
+    // save written by the list that follows is a cleared save (summary flags 3).
+    ngplus::strip_for_cleared_save(*gs_);
+    vm_.set_var(ngplus::kFlagVar, ngplus::kFlagCleared);
+    log::info("field: tick {} FE 85 cleared-save prompt: roster stripped, variable 0x7E = 3", tick_count_);
   }
   menu_req_ = {kind, arg};
   menu_state_ = MenuState::Requested;

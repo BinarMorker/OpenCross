@@ -552,18 +552,23 @@ void FieldWorld::step_push() {
 // Per frame, for attached entities: the parent model's attach point gives the offset J and its joint's world matrix (R, T); the
 // entity matrix becomes R x RotMatrix(attach_rot) (Rx * Ry * Rz) with the translation R (J + attach_off) + T, the model rotation is
 // zeroed and the model scale is the entity scale << 3 (the parent joint matrix already carries the parent's model scale). The
-// entity's own position is not changed.
+// entity's own position is not changed. The original builds it from the parent's joint matrix of the same frame, so the model never
+// trails its parent: the joint-space part is kept here and the actor applies the parent's joint of each drawn frame to it.
 void FieldWorld::step_attached() {
-  for (int i = 0; i < static_cast<int>(ents_.size()); ++i) {
+  const int count = static_cast<int>(ents_.size());
+  for (int i = 0; i < count; ++i) {
     Ent& ent_state = ents_[static_cast<size_t>(i)];
     const script::Entity& script_ent = vm_.entity(i);
-    if (ent_state.attach_to < 0 || ent_state.attach_to >= static_cast<int>(ents_.size()) || !(script_ent.flags38 & 0x800000u) || (script_ent.flags38 & 0x1C020u)) {
+    if (ent_state.attach_to < 0 || ent_state.attach_to >= count || !(script_ent.flags38 & 0x800000u) || (script_ent.flags38 & 0x1C020u)) {
       ent_state.actor.clear_attached();
       continue;
     }
+    // A chain of attachments that leads back to this entity has no frame to draw from.
+    int ancestor = ent_state.attach_to;
+    for (int depth = 0; depth < count && ancestor >= 0 && ancestor != i; ++depth) ancestor = ents_[static_cast<size_t>(ancestor)].attach_to;
     render::Mat4 jw;
     float joint_offset[3];
-    if (!ents_[static_cast<size_t>(ent_state.attach_to)].actor.attach_joint(ent_state.attach_point, jw, joint_offset)) {
+    if (ancestor == i || !ents_[static_cast<size_t>(ent_state.attach_to)].actor.attach_joint(ent_state.attach_point, 1.0f, jw, joint_offset)) {
       ent_state.actor.clear_attached();
       continue;
     }
@@ -584,17 +589,40 @@ void FieldWorld::step_attached() {
     rz.at(0, 1) = -std::sin(az);
     rz.at(1, 0) = std::sin(az);
     rz.at(1, 1) = std::cos(az);
-    // Rotation part of the joint matrix (scale included), no translation.
-    render::Mat4 rotation = jw;
-    for (int row = 0; row < 3; ++row) rotation.at(row, 3) = 0.0f;
-    render::Mat4 model = rotation * rx * ry * rz;
-    const float point[3] = {joint_offset[0] + static_cast<float>(ent_state.attach_off[0]), joint_offset[1] + static_cast<float>(ent_state.attach_off[1]),
-                            joint_offset[2] + static_cast<float>(ent_state.attach_off[2])};
-    for (int row = 0; row < 3; ++row) model.at(row, 3) = jw.at(row, 0) * point[0] + jw.at(row, 1) * point[1] + jw.at(row, 2) * point[2] + jw.at(row, 3);
-    // Model scale = entity scale << 3 (0x200 -> 0x1000 = 1.0).
+    // Joint space: translation J + attach_off, then the rotation and the model scale (entity scale << 3: 0x200 -> 0x1000 = 1.0).
+    render::Mat4 local = rx * ry * rz;
+    for (int row = 0; row < 3; ++row) local.at(row, 3) = joint_offset[row] + static_cast<float>(ent_state.attach_off[static_cast<size_t>(row)]);
     render::Mat4 scale;
     for (int axis = 0; axis < 3; ++axis) scale.at(axis, axis) = static_cast<float>(static_cast<s16>(script_ent.scale[static_cast<size_t>(axis)])) * 8.0f / 4096.0f;
-    ent_state.actor.set_attached(model * scale);
+    ent_state.actor.set_attached(&ents_[static_cast<size_t>(ent_state.attach_to)].actor, ent_state.attach_point, local * scale);
+  }
+}
+
+// OC_ATTACH_DRIFT: after every tick, each attached model is drawn at render fractions 0 and 0.5 and its origin compared with the
+// parent's attach point (+ the FE 46 offset) at the same fraction. The original draws the two from the same frame's joint matrix,
+// so any distance is the attached model sliding on its parent; ticks above half a unit are logged.
+void FieldWorld::check_attach_drift() const {
+  for (int i = 0; i < static_cast<int>(ents_.size()); ++i) {
+    const Ent& ent_state = ents_[static_cast<size_t>(i)];
+    if (!ent_state.actor.attached() || ent_state.attach_to < 0 || ent_state.attach_to >= static_cast<int>(ents_.size())) continue;
+    float worst = 0.0f;
+    for (const float alpha : {0.0f, 0.5f}) {
+      render::Mat4 jw;
+      float joint_offset[3];
+      if (!ents_[static_cast<size_t>(ent_state.attach_to)].actor.attach_joint(ent_state.attach_point, alpha, jw, joint_offset)) continue;
+      const float point[3] = {joint_offset[0] + static_cast<float>(ent_state.attach_off[0]), joint_offset[1] + static_cast<float>(ent_state.attach_off[1]),
+                              joint_offset[2] + static_cast<float>(ent_state.attach_off[2])};
+      const render::Mat4 drawn = ent_state.actor.model_matrix(alpha);
+      float dist2 = 0.0f;
+      for (int row = 0; row < 3; ++row) {
+        const float expected = jw.at(row, 0) * point[0] + jw.at(row, 1) * point[1] + jw.at(row, 2) * point[2] + jw.at(row, 3);
+        dist2 += (drawn.at(row, 3) - expected) * (drawn.at(row, 3) - expected);
+      }
+      worst = std::max(worst, std::sqrt(dist2));
+    }
+    if (worst > 0.5f)
+      log::info("field: tick {} attach drift: room {} ent {} on ent {} point {}: drawn {:.1f} units off the parent's attach point", tick_count_,
+                view_.room_name(), i, ent_state.attach_to, ent_state.attach_point, static_cast<double>(worst));
   }
 }
 

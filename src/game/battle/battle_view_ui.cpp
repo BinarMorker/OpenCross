@@ -6,6 +6,7 @@
 // line). Battle text goes through btext(), which picks the font slot, multiplier and shrink rule of a PS1 text style.
 #include "game/battle/battle_view.h"
 #include "game/battle/battle_view_util.h"
+#include "game/battle/status_plates.h"
 
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_scancode.h>
@@ -510,6 +511,22 @@ void BattleView::build_party_panels() {
   }
 }
 
+// Status plates (status_plates.h), the same art in both modes: the colour triangle is a 3 x 6 PS1 px cell of battle_34.png's bottom row
+// (12 x 24 texels from texel row 40), the name the status's cmnmes text in style 2 (the JP font in Japanese), colour 0x757575.
+void BattleView::build_status_plates(int unit_index, bool right) {
+  if (unit_index < 0 || unit_index >= battle::kUnits) return;
+  const bool jp = lang_ == import::Lang::Jp;
+  const size_t first = op_count();
+  for (const bstat::Placed& placed : bstat::place(battle_->unit(unit_index).lo, right)) {
+    const bstat::Plate& plate = bstat::kPlates[static_cast<size_t>(placed.plate)];
+    const float u0 = (12.0f * static_cast<float>(plate.colour) + 0.5f) / 80.0f, u1 = u0 + 11.0f / 80.0f;
+    add_img(hud_[kHStatus], static_cast<float>(placed.x) * kPs1Px, static_cast<float>(placed.y + 1) * kRowScale, 3 * kPs1Px, 6 * kRowScale, u0,
+            40.5f / 64.0f, u1, 63.5f / 64.0f);
+    btext(jp ? 0x10002 : 2, xlat(plate.jp, plate.en), static_cast<float>(placed.x + 4), static_cast<float>(placed.y), 0x757575);
+  }
+  if (right) set_group(first, 1);
+}
+
 // One tick of the element list's slide machine. Opening starts "in from the right";
 // a level change (Right: dir 1) first slides the shown plates out (left for Right, right for Left), then loads the new level's plates and slides them in from
 // the opposite side. Every input of the menu waits for state 0. Returns whether the menu takes input this tick.
@@ -543,8 +560,7 @@ bool BattleView::elem_slide_step(int level) {
 // 0x04 = the caster only, 0x01 = knocked-out units only.
 // Tgt::Ally means a party-only ring, Tgt::Enemy anything else; target_candidates reads the element itself.
 BattleView::Tgt BattleView::target_mode(int cell) const {
-  const battle::Unit& unit = battle_->unit(active_pc_);
-  const int id = unit.cells[static_cast<size_t>(cell)] & 0x3FFF;
+  const int id = battle_->cell_element(active_pc_, cell);
   if (id <= 0 || static_cast<size_t>(id) >= tables_->elements.size()) return Tgt::Enemy;
   const data::ElemRec& elem = tables_->elements[static_cast<size_t>(id)];
   const battle::TargetSpec ts = battle::target_spec(elem);
@@ -559,7 +575,7 @@ std::vector<int> BattleView::target_candidates() const {
   // cursor to the caster. Walked left to right on screen (the retail ring is sorted by view angle).
   battle::TargetSpec ts;
   if (pending_cmd_.kind == battle::Command::Kind::Element && pending_cmd_.cell >= 0) {
-    const int id = battle_->unit(pending_cmd_.actor).cells[static_cast<size_t>(pending_cmd_.cell)] & 0x3FFF;
+    const int id = battle_->cell_element(pending_cmd_.actor, pending_cmd_.cell);
     if (id > 0 && static_cast<size_t>(id) < tables_->elements.size()) ts = battle::target_spec(tables_->elements[static_cast<size_t>(id)]);
   }
   for (int i = ts.party ? 0 : battle::kPcSlots; i < (ts.enemies ? battle::kUnits : battle::kPcSlots); ++i) {
@@ -598,7 +614,7 @@ void BattleView::enter_target(Tgt mode) {
     battle::TargetSpec ts;
     u8 raw4 = 0x80;
     if (pending_cmd_.kind == battle::Command::Kind::Element && pending_cmd_.cell >= 0) {
-      const int id = battle_->unit(active_pc_).cells[static_cast<size_t>(pending_cmd_.cell)] & 0x3FFF;
+      const int id = battle_->cell_element(active_pc_, pending_cmd_.cell);
       if (id > 0 && static_cast<size_t>(id) < tables_->elements.size()) {
         ts = battle::target_spec(tables_->elements[static_cast<size_t>(id)]);
         raw4 = tables_->elements[static_cast<size_t>(id)].b(4);
@@ -1187,14 +1203,14 @@ void BattleView::build_command_ui() {
     // Cast header float: from the confirm in the list the chosen plate floats to (8, 22) and stays through the
     // target ring; in state 0 the other plates of the level fold away.
     const battle::Unit& cu = battle_state.unit(active_pc_);
-    const int id = cu.cells[static_cast<size_t>(hdr_cell_)] & 0x3FFF;
+    const int id = battle_state.cell_element(active_pc_, hdr_cell_);
     if (id > 0 && static_cast<size_t>(id) < tables_->elements.size()) {
       const int row_y = 60 + 15 * (hdr_cell_ % data::kGridCols);
       const float y = static_cast<float>(hdr_.plate_y(row_y));
       if (hdr_.state == 0 && hdr_.fold_frame() > 0) {
         for (const int idx : level_slots(hdr_cell_ / data::kGridCols)) {
           if (idx == hdr_cell_) continue;
-          const data::ElemRec& oe = tables_->elements[static_cast<size_t>(cu.cells[static_cast<size_t>(idx)] & 0x3FFF)];
+          const data::ElemRec& oe = tables_->elements[static_cast<size_t>(battle_state.cell_element(active_pc_, idx))];
           const int oci = data::colour_index_of_bit(oe.colour_bit());
           const int opc = oci >= 0 && oci < 6 ? oci : (oe.colour_bit() & 0xFC) == 0xFC ? 6 : -1;
           const bool used = cu.used[static_cast<size_t>(idx)] || battle_state.element_sealed(active_pc_, idx);
@@ -1275,6 +1291,7 @@ void BattleView::build_command_ui() {
     const size_t caption0 = op_count();
     btext(0xA, jp ? kCommandCaptionJp[top_cursor_ & 3] : kCommand[li][top_cursor_ & 3], 300, 22, 0);
     set_group(caption0, 1);
+    build_status_plates(active_pc_, true);
   }
   if (ui_ == Ui::Element) build_element_ui();
   if (ui_ == Ui::Target) build_target_ui();
@@ -1301,7 +1318,7 @@ void BattleView::build_target_ui(bool cam_hint) {
   const bool all = (tgt_mode_ == Tgt::EnemyAll || tgt_mode_ == Tgt::AllyAll) && targets_.size() > 1;
   bool both_sides = false;
   if (pending_cmd_.kind == battle::Command::Kind::Element && pending_cmd_.cell >= 0 && pending_cmd_.actor >= 0) {
-    const int eid = battle_state.unit(pending_cmd_.actor).cells[static_cast<size_t>(pending_cmd_.cell)] & 0x3FFF;
+    const int eid = battle_state.cell_element(pending_cmd_.actor, pending_cmd_.cell);
     if (eid > 0 && static_cast<size_t>(eid) < tables_->elements.size()) {
       const battle::TargetSpec sp = battle::target_spec(tables_->elements[static_cast<size_t>(eid)]);
       both_sides = sp.party && sp.enemies;
@@ -1309,9 +1326,12 @@ void BattleView::build_target_ui(bool cam_hint) {
   }
   const int li = std::clamp(static_cast<int>(lang_), 0, 5);
   const bool jp = li == 5;
+  // The DYNAMIC target camera draws no target cursor unless the element takes the whole range (record byte 4 bit 0x10); element targeting
+  // then shows no status plates either (Attack targeting keeps them).
+  const bool dynamic_bare = cam_dynamic_ && tgt_mode_ != Tgt::EnemyAll && tgt_mode_ != Tgt::AllyAll;
   static const int kStrip[4] = {0, 2, 1, 3};
   const int strip = kStrip[(tick_count_ >> 2) & 3];
-  for (size_t k = 0; k < targets_.size(); ++k) {
+  for (size_t k = 0; k < targets_.size() && !dynamic_bare; ++k) {
     if (!all && static_cast<int>(k) != target_cursor_) continue;
     const int target = targets_[k];
     const Visual& visual = vis_[static_cast<size_t>(target)];
@@ -1394,8 +1414,10 @@ void BattleView::build_target_ui(bool cam_hint) {
     // The colour shield's dot uses the same +7 / +2 nudge.
     if (cs >= 0 && cs < 6) btext(0xB, U"●", 0x50 + 7, 0xC5 + 2, kInnateDot[cs]);
   }
-  // Camera mode hint: not shown under the Dopplegang list.
+  // Camera mode hint and the cursor unit's status plates: not shown under the Dopplegang list. An element's ring shows the plates only while
+  // it holds one unit and the cursor is drawn (not under the DYNAMIC camera, above).
   if (!cam_hint) return;
+  if (pending_cmd_.kind != battle::Command::Kind::Element || (!all && !dynamic_bare)) build_status_plates(tu_i, false);
   const size_t hint0 = op_count();
   {
     const float hx = 0xF6, hy = 0xE;
@@ -1455,7 +1477,7 @@ void BattleView::build_element_ui() {
       const int idx = level * data::kGridCols + slot;
       const int id = unit.cells[static_cast<size_t>(idx)] & 0x3FFF;
       if (id == 0 || static_cast<size_t>(id) >= tables_->elements.size() || !unit.usable[static_cast<size_t>(idx)]) continue;
-      const data::ElemRec& elem = tables_->elements[static_cast<size_t>(id)];
+      const data::ElemRec& elem = tables_->elements[static_cast<size_t>(battle_state.cell_element(active_pc_, idx))];
       const int ci = blink && level == sel_lvl ? 4 : data::colour_index_of_bit(elem.colour_bit());
       const u8 a = level > unit.gauge ? 128 : 255;
       const float x = (160 + 15.0f * static_cast<float>(level)) * kPs1Px, y = ref_y(118 + 7.5f * static_cast<float>(slot));
@@ -1466,7 +1488,8 @@ void BattleView::build_element_ui() {
   // bright one; names are the tech-title entries with the level offset suffix; greyed (0x404040) when the cell is used.
   for (const int idx : slots) {
     const int slot = idx % data::kGridCols;
-    const int id = unit.cells[static_cast<size_t>(idx)] & 0x3FFF;
+    // A tech that a party member's tech completes shows (and casts) the double / triple tech instead.
+    const int id = battle_state.cell_element(active_pc_, idx);
     const data::ElemRec& elem = tables_->elements[static_cast<size_t>(id)];
     const int ci = data::colour_index_of_bit(elem.colour_bit());
     // Used or colour-sealed = the greyed plate set + 0x404040 text.
@@ -1497,7 +1520,7 @@ void BattleView::build_element_ui() {
   // description window
   const size_t desc0 = op_count();
   if (!slots.empty()) {
-    const int id = unit.cells[static_cast<size_t>(cell_)] & 0x3FFF;
+    const int id = battle_state.cell_element(active_pc_, cell_);
     {
       // Window at (0x136, 10): X = x - 0x98 + 4 (JP: 16 px further right, the sprite keeps its 152 x 56 size), Y = y - 4 -> subtractive
       // base + frame; the JP rows sit at x 0xBB, 16 right of the others.

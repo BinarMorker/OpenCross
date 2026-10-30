@@ -126,6 +126,9 @@ class GameState {
   int item_count(int id) const;
   bool add_item(int id);
   bool take_item(int id);
+  // An add would land: the id already has a stack (at 99 the add is accepted without raising the count) or a slot is free.
+  bool element_fits(int id) const;
+  bool item_fits(int id) const;
 
   // ---- element grid: 8 rows (star level) x 10 columns; cells are stored compactly over the set bits of the shape mask
   static constexpr int kRows = data::kGridRows, kCols = data::kGridCols;
@@ -152,6 +155,9 @@ class GameState {
   Why swap(int character, int row_a, int col_a, int row_b, int col_b);
   // Returns the number of cells emptied.
   int clear_all(int character);
+  // Story tech learning: `tech` goes into the cell that closes grid row `rows - 1` (the last cell of its first 8 columns, counted
+  // over the level masks); an element the cell held goes back to the stock, the cell keeps its flag bits. Returns the cell, -1 none.
+  int learn_tech(int character, int rows, int tech);
   // reset = recommended layout (the grid is cleared first), else fill the empty cells; returns cells placed. The party version clears
   // every member first and fills row by row across the members, so they share the stock in that order.
   int auto_fill(int character, bool reset);
@@ -183,6 +189,7 @@ class GameState {
  private:
   bool add_to(save::ItemStack* stacks, size_t count, int id);
   bool take_from(save::ItemStack* stacks, size_t count, int id);
+  static bool fits(const save::ItemStack* stacks, size_t count, int id);
   // Auto-fill candidates: per element level (bucket level - 1), the stock slots holding an element of that level, in stock order.
   using LevelBuckets = std::array<std::vector<int>, kRows>;
   LevelBuckets level_buckets() const;

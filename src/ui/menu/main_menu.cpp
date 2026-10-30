@@ -162,6 +162,7 @@ void MainMenu::Impl::open(GameState& state, bool allow_save) {
   gs = &state;
   saved = false;
   can_save = allow_save;
+  save_only = false;
   closed = false;
   screen = MenuScreen::Main;
   sub = 0;
@@ -301,6 +302,14 @@ void MainMenu::set_wide_columns(float canvas_columns, float layout_columns) {
 }
 bool MainMenu::save_locked() const { return impl_->save_locked; }
 void MainMenu::open(GameState& state, bool can_save) { impl_->open(state, can_save); }
+void MainMenu::open_save_list(GameState& state) {
+  Impl& impl = *impl_;
+  impl.open(state, true);
+  impl.enter(MenuScreen::Save);
+  impl.save_only = true;
+  impl.save_phase = 2;
+  impl.save_card = impl.page && !impl.page->empty() ? 0 : 1;
+}
 void MainMenu::close() { impl_->closed = true; }
 bool MainMenu::closed() const { return impl_->closed; }
 bool MainMenu::saved() const { return impl_->saved; }
@@ -349,6 +358,7 @@ void MainMenu::debug_show(MenuScreen screen, int variant) {
   impl.roster = Impl::Roster::Off;
   impl.roster_ask = false;
   impl.stand_in = -1;
+  impl.save_only = false;
   impl.msg.clear();
   impl.enter(screen);
   impl.frames = 10;

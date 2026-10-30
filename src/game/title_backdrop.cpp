@@ -402,6 +402,7 @@ void TitleBackdrop::draw(const render::Frame& frame, float view_w, float view_h,
       if (mi.sprite_type == 20) continue;
       const auto pit = parts_.find(*mi.name);
       if (pit == parts_.end()) continue;
+      if (mi.off_screen(meshes_->parts[static_cast<size_t>(pit->second)].cull_points, vp)) continue;
       if (only_dbg && std::string_view(only_dbg).find(*mi.name) == std::string_view::npos) continue;
       // Debug: comma list of mesh names not to draw.
       static const char* skip_dbg = std::getenv("OC_STAGE_SKIP");
@@ -481,7 +482,7 @@ void TitleBackdrop::draw(const render::Frame& frame, float view_w, float view_h,
     bool open = false;
     u32 drawn = 0;
     for (const auto& mi : live) {
-      if (mi.sprite_type != 20) continue;
+      if (mi.sprite_type != 20 || mi.off_screen(vp)) continue;
       const auto it = models_.find(*mi.name);
       if (it == models_.end()) continue;
       ModelRes& res = *it->second;

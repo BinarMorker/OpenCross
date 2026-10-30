@@ -522,6 +522,7 @@ void StageScene::draw(render::StagePipeline& pipe, const render::Frame& frame, r
     int part = pit != table.end() ? pit->second : -1;
     if (part < 0 && mi.sprite_type == 19 && mi.name->empty()) part = ground_part_;
     if (part < 0) continue;
+    if (mi.off_screen(asset_->parts[static_cast<size_t>(part)].cull_points, view)) continue;
     // The ground takes the object's colour.
     if (mi.sprite_type == 19) {
       ground_rgb_ = {mi.rgb[0], mi.rgb[1], mi.rgb[2]};

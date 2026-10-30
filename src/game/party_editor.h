@@ -99,7 +99,8 @@ class PartyEditor : public PartyGrid {
 
   // `roster`: the grid characters (any order; sorted ascending). `party`: character id per slot, -1 / 0xFF = empty; packed (empty
   // slots and duplicates dropped); members stay even when they are not in the grid (an excluded member keeps its slot, as on the
-  // PS1). `locked`: 64-bit bitmap, bit c = character c cannot be moved out of its slot.
+  // PS1). `locked`: 64-bit bitmap, bit c = character c's slot cannot be opened for a
+  // replacement (a swap from another slot may still move the member, it never leaves the party).
   void begin(std::vector<int> roster, const std::array<int, 3>& party, std::array<u32, 2> locked = {0, 0}) {
     reset(std::move(roster));
     locked_ = locked;

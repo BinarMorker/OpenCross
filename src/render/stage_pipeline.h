@@ -134,6 +134,21 @@ struct StageInstance {
   // and is drawn through `warp_view`. Null / empty = none.
   const std::function<void(std::array<float, 3>&)>* warp = nullptr;
   std::array<float, 12> warp_view{1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+  // Screen copy (needs the asset passed to draw()): a copy of the picture placed in VRAM at `screen_origin` (x halfwords | y rows << 16),
+  // `screen_size` PS1 pixels. The sub-meshes whose direct-colour page (StageSubMesh::direct_page) lies inside it sample `screen` instead of
+  // their own texels: packet texel (u, v) of a page at offset (dx, dy) is copy pixel (dx + u, dy + v), sampled at
+  // ((dx + u) * screen_uv[0] + screen_uv[2], (dy + v) * screen_uv[1] + screen_uv[3]) (normalised). Null = none.
+  TexRef screen;
+  int screen_origin = -1;
+  std::array<int, 2> screen_size{320, 224};
+  std::array<float, 4> screen_uv{0, 0, 0, 0};
+  // The offset of a direct-colour page inside the screen copy; false when there is no copy or the page lies outside it.
+  bool screen_offset(int direct_page, int& dx, int& dy) const {
+    if (!screen || screen_origin < 0 || direct_page < 0) return false;
+    dx = (direct_page & 0xFFFF) - (screen_origin & 0xFFFF);
+    dy = (direct_page >> 16) - (screen_origin >> 16);
+    return dx >= 0 && dy >= 0 && dx < screen_size[0] && dy < screen_size[1];
+  }
 };
 
 // One polygon of an effect overlay drawn with the stage's textures (effects::FxGroundPrim): PS1 world positions
@@ -231,7 +246,7 @@ class StagePipeline {
   size_t rejected_packets() const { return rejected_; }
   // Draws every instance: opaque faces first (depth written), then semi-transparent ones back to front (depth tested).
   // `linear`: bilinear texture sampling (HD art mode).
-  // `asset` (optional) is needed for instances with a morph_part: their geometry is rebuilt per frame through the dynamic ring buffer.
+  // `asset` (optional) is needed for instances with a morph_part or a screen copy: their geometry is rebuilt per frame through the dynamic ring buffer.
   void draw(const StageMesh& mesh, const Mat4& proj, std::span<const StageInstance> instances, bool linear = false,
             const assets::StageAsset* asset = nullptr);
   // Draws per-frame geometry (untextured: the vertex colours are the raw PS1 colour / 255) with the given transform,

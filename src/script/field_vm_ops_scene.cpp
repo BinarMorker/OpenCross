@@ -28,7 +28,7 @@ bool FieldVM::exec_scene(u8 op) {
       write_var(word_at(1), host_.query(Query::ScriptGlobal));
       advance(3);
       break;
-    case 0x66:  // SET_SLOT_WATER_LEVEL: water level of slot b
+    case 0x66:  // SET_WATER_LEVEL: water level of slot b
       table_9fdc_[byte_at(1)] = static_cast<s16>(operand_s(2, 4, 0x80));
       advance(5);
       break;
@@ -40,7 +40,7 @@ bool FieldVM::exec_scene(u8 op) {
       advance(3);
       break;
     }
-    case 0x68:  // SET_SCREEN_RGB
+    case 0x68:  // SET_SCREEN_FOG
       host_.set_screen_rgb(operand_u(1), operand_u(3), operand_u(5), operand_u(7), operand_u(9));
       advance(11);
       break;
@@ -102,16 +102,16 @@ bool FieldVM::exec_scene(u8 op) {
     case 0x73:  // JUMP_IF_BIT_CLEAR
       jump_or_advance(!var_bit(static_cast<u32>(operand_s(1, 3, 0x80))), 4, 6);
       break;
-    case 0x74: {  // SET_TARGET_10E_FROM_VALUE
+    case 0x74: {  // SET_TARGET_10E
       const int target = entity_operand(4);
       if (target >= 0) ents_[static_cast<size_t>(target)].v10e = static_cast<u16>(operand_s(1, 3, 0x80));
       advance(5);
       break;
     }
     case 0x75:  // SETUP_FLAG: byte lane b2 of flag-table word b1 = U
-    case 0x76:  // SET_FLAG_BYTE_OR
-    case 0x77:  // GET_FLAG_BYTE_TO_VAR
-    case 0x78: {  // SET_FLAG_BYTE_AND
+    case 0x76:  // FLAG_BYTE_OR
+    case 0x77:  // FLAG_BYTE_GET
+    case 0x78: {  // FLAG_BYTE_AND
       const u32 word = byte_at(1), lane = byte_at(2);
       if (lane <= 3) {
         u32& entry = flag_table_[word];
@@ -130,7 +130,7 @@ bool FieldVM::exec_scene(u8 op) {
       break;
     }
     case 0x79:  // JUMP_UNLESS_NEAR: jumps unless entity c is within U of this entity
-    case 0x7A: {  // JUMP_IF_ENTITY_STATE_NE
+    case 0x7A: {  // JUMP_IF_TILE_ATTR_NE
       const int target = entity_operand(1);
       if (target < 0) {
         pc = word_at(4);
@@ -148,7 +148,7 @@ bool FieldVM::exec_scene(u8 op) {
     case 0x7B:  // ADD_TO_PARTY: a refused add also skips the 7C that follows
       advance(host_.party_add(operand_u(1)) ? 3 : 4);
       break;
-    case 0x7C:  // EXECUTE_CHARACTER_SCRIPT: refreshes the party models once no model swap is pending
+    case 0x7C:  // COMMIT_PARTY_MODEL: refreshes the party models once no model swap is pending
       if (host_.model_swap_busy()) {
         yield_ = true;
       } else {
@@ -168,11 +168,11 @@ bool FieldVM::exec_scene(u8 op) {
     case 0x7F:  // WAIT_MOVIE
       wait_or_advance(host_.movie_playing(), 1);
       break;
-    case 0x80:  // BG_LAYER_ON
+    case 0x80:  // BG_GROUP_ON
       host_.bg_layer(operand_u(1), true);
       advance(3);
       break;
-    case 0x81:  // BG_LAYER_OFF
+    case 0x81:  // BG_GROUP_OFF
       host_.bg_layer(operand_u(1), false);
       advance(3);
       break;
@@ -186,7 +186,7 @@ bool FieldVM::exec_scene(u8 op) {
       advance(5);
       break;
     }
-    case 0x83:  // SET_S4_GLOBALS: camera limits
+    case 0x83:  // SET_CAMERA_LIMITS: camera limits
       host_.camera_limits(operand_s(1, 9, 0x80), operand_s(3, 9, 0x40), operand_s(5, 9, 0x20), operand_s(7, 9, 0x10));
       advance(10);
       break;
@@ -242,7 +242,7 @@ bool FieldVM::exec_scene(u8 op) {
       budget_ += 1;
       advance(3);
       break;
-    case 0x89:  // WAIT_POLL_U1: plays the song like 88
+    case 0x89:  // PLAY_SONG_POLL: plays the song like 88
       if (!system_gate() || !host_.play_song(operand_u(1))) {
         yield_ = true;
         break;
@@ -252,7 +252,7 @@ bool FieldVM::exec_scene(u8 op) {
     case 0x8A:  // WAIT_SONG
       wait_or_advance(host_.song_changing(), 1);
       break;
-    case 0x8B:  // SET_ENT_U16_100_102: trigger radius and height
+    case 0x8B:  // SET_RADIUS_HEIGHT: trigger radius and height
       self.trigger_radius = static_cast<u16>(operand_u(1));
       self.trigger_height = static_cast<u16>(operand_u(3));
       advance(5);
@@ -262,7 +262,7 @@ bool FieldVM::exec_scene(u8 op) {
       self.rect_h = static_cast<u16>(operand_u(3));
       advance(5);
       break;
-    case 0x8D:  // ENT_FLAG_200_MODE
+    case 0x8D:  // SET_BOX_FLAGS
       switch (byte_at(1)) {
         case 0: self.flags38 |= 0x200; break;
         case 1: self.flags38 &= ~0x200u; break;
@@ -272,7 +272,7 @@ bool FieldVM::exec_scene(u8 op) {
       }
       advance(2);
       break;
-    case 0x8E:  // TOGGLE_RECT_COLLISION
+    case 0x8E:  // SET_SOLID
       set_flag(self.flags38, 8, byte_at(1) == 0);
       advance(2);
       break;
@@ -288,26 +288,26 @@ bool FieldVM::exec_scene(u8 op) {
       yield_ = true;
       break;
     }
-    case 0x91:  // SET_FIELD_FLAG_BIT5
+    case 0x91:  // SET_GF5
       set_global_bit(5, byte_at(1) & 1);
       advance(2);
       break;
-    case 0x92: {  // APPLY_MODE_TO_GROUP
+    case 0x92: {  // BG_GROUP_SEMITRANS
       const std::array<s32, 2> args = {byte_at(1), operand_u(2)};
       host_.entity_effect(0x92, ent_, args);
       advance(4);
       break;
     }
-    case 0x93:  // SET_ENT_FLAG_400
+    case 0x93:  // SET_NO_SHADOW
       set_flag(self.flags38, 10, byte_at(1) != 0);
       advance(2);
       break;
     case 0x94:  // JUMP_IF_NOT_IN_PARTY
       jump_or_advance(!host_.in_party(operand_u(1)), 3, 5);
       break;
-    case 0x95:  // JUMP_UNLESS_RECRUITED
-    case 0xE5:  // JUMP_IF_NOT_IN_SAVED_ROSTER
-    case 0xE6:  // JUMP_IF_NOT_RECRUITED
+    case 0x95:  // JUMP_IF_NOT_RECRUITED
+    case 0xE5:  // JUMP_IF_NOT_IN_CARRYOVER
+    case 0xE6:  // JUMP_IF_NOT_RECRUITED_OR_CARRYOVER
     case 0xE8: {  // TEST_CLEAR_CARRYOVER_JUMP
       const Predicate pred = op == 0x95 ? Predicate::Op95 : op == 0xE5 ? Predicate::OpE5 : op == 0xE6 ? Predicate::OpE6 : Predicate::OpE8;
       jump_or_advance(host_.predicate(pred, operand_u(1)), 3, 5);
@@ -337,7 +337,7 @@ bool FieldVM::exec_scene(u8 op) {
       advance(5);
       break;
     }
-    case 0x9A: {  // JMP_IF_KEYED_EQ: jumps when this entity's party slot holds character U
+    case 0x9A: {  // JUMP_IF_LEADER_IS: jumps when this entity's party slot holds character U
       const int slot = host_.party_slot_of_entity(ent_);
       jump_or_advance(slot >= 0 && party_table(slot) == operand_u(1), 3, 5);
       break;

@@ -204,8 +204,12 @@ class BattleFxRun {
     std::function<void(int stage)> stage;
     // An overlay clears the depth-cue flag.
     std::function<void()> fog_off;
+    // An overlay's lit draw: the light matrices at a world point and the back colour (effects::FxHooks::lights).
+    std::function<bool(const effects::Vec3& pos, effects::LightMatrices& matrices, std::array<float, 3>& back)> lights;
     // hensin ops 0x182 / 0x183: phase 1 = the form change starts (the old model goes), 2 = the unit takes its new form.
     std::function<void(int phase)> form;
+    // An overlay changes the music (effects::FxHooks::play_song).
+    std::function<void(int song)> song;
   };
   BattleFxRun(std::shared_ptr<const FxPack> pack, const assets::RoomEffects& particle_lib, u32 seed);
   ~BattleFxRun();
@@ -268,7 +272,9 @@ class BattleFxRun {
   enum class OpClass { Presented, Missing, NonVisual, Private };
   static OpClass op_class(int op, int len);
   static bool presented(int op, int len) { return op_class(op, len) == OpClass::Presented; }
-  static constexpr int kTickCap = 1800;
+  // A safety net only: above the longest shipped chain of sequences (lasdes2: 'main' 3995 ticks, its child 'lost' from 3230, that one's 'kid!'
+  // from 4089 to 5605; lasdes3 'main' 2240).
+  static constexpr int kTickCap = 6144;
   size_t sequences_active() const { return seq_->active(); }
   int shake_x() const;
   int shake_y() const;

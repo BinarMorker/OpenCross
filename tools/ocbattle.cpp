@@ -1059,7 +1059,7 @@ int cmd_pac_soak(const data::GameTables& tables, const vfs::Vfs& vfs, const std:
     for (int value : values) std::printf(fmt, value);
     std::printf("\n");
   };
-  list("unimplemented ('?') ops executed", unimpl, " %02X");
+  list("unused ('U') ops executed", unimpl, " %02X");
   std::printf("  executions of ops resolved from battle.prg:");
   for (const int op : {0x39, 0x5C, 0x7B, 0x7D, 0x81, 0x85, 0x91, 0xAB, 0xAE, 0xAF, 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xE3})
     std::printf(" %02X=%llu", op, static_cast<unsigned long long>(opc[static_cast<size_t>(op)]));

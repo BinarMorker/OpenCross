@@ -128,15 +128,22 @@ int cmd_info(const vfs::Vfs& game_fs, const std::string& arg) {
         std::printf("   v %.0f %.0f %.0f  col %.2f %.2f %.2f\n", vert.pos[0], vert.pos[1], vert.pos[2], vert.color[0], vert.color[1], vert.color[2]);
     if (std::getenv("OCSTAGE_UV"))
       for (const auto& submesh : part.submeshes) {
-        float u_lo = 9, u_hi = -9, v_lo = 9, v_hi = -9;
+        float u_lo = 9, u_hi = -9, v_lo = 9, v_hi = -9, raw_u_lo = 1e9f, raw_u_hi = -1e9f, raw_v_lo = 1e9f, raw_v_hi = -1e9f;
         for (u32 i = submesh.first_index; i < submesh.first_index + submesh.index_count; ++i) {
           const auto& vert = part.vertices[part.indices[i]];
           u_lo = std::min(u_lo, vert.uv[0]);
           u_hi = std::max(u_hi, vert.uv[0]);
           v_lo = std::min(v_lo, vert.uv[1]);
           v_hi = std::max(v_hi, vert.uv[1]);
+          raw_u_lo = std::min(raw_u_lo, vert.uv_raw[0]);
+          raw_u_hi = std::max(raw_u_hi, vert.uv_raw[0]);
+          raw_v_lo = std::min(raw_v_lo, vert.uv_raw[1]);
+          raw_v_hi = std::max(raw_v_hi, vert.uv_raw[1]);
         }
-        std::printf("   sub tex %d tris %u u[%.3f,%.3f] v[%.3f,%.3f]\n", submesh.texture, submesh.index_count / 3, u_lo, u_hi, v_lo, v_hi);
+        std::printf("   sub tex %d tris %u u[%.3f,%.3f] v[%.3f,%.3f] packet u[%.0f,%.0f] v[%.0f,%.0f]", submesh.texture, submesh.index_count / 3, u_lo, u_hi,
+                    v_lo, v_hi, raw_u_lo, raw_u_hi, raw_v_lo, raw_v_hi);
+        if (submesh.direct_page >= 0) std::printf(" direct page (%d, %d)", submesh.direct_page & 0xFFFF, submesh.direct_page >> 16);
+        std::printf("\n");
       }
     std::printf("  [%3u] %-5s %s src verts %5u faces %5u -> verts %5zu tris %5zu (untex %zu semi %u)  bbox x[%.0f,%.0f] y[%.0f,%.0f] z[%.0f,%.0f] emitters %zu\n",
                 part.entry, part.name.c_str(), part.ground ? "ground" : "scenery", part.source_vertices, part.source_faces, part.vertices.size(),

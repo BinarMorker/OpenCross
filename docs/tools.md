@@ -182,17 +182,19 @@ Source: `src/game/battle/demo_main.cpp`. First non-flag argument = scene (scened
 | `--size` | `<w> <h>` | `1280 960` | Window size. |
 | `--sliced` | none | off | Load in 3 ms slices per frame (the field encounter's way); logs the longest slice. |
 | `--cam` | none | off | Camera overlay on (F3 / F9 toggle). |
-| `--party` | `a[,b[,c]]` | `0,1,22` | Character ids; slot 0 = the acting PC. |
+| `--party` | `a[,b[,c]]` | `0,1,22` | Character ids; slot 0 = the acting PC (it makes `--cast` / `--weapon`). The battle seats the party in this order, so `--caster`, `--casttgt`, `--cast2tgt` and `--ko` values 0..2 are slots of this list and units alike. |
+| `--ring` | `c,c,c` | the stage's ring | Field ring at the start: colour names (`green white black red yellow blue`), indices 0..5, `all` or `none` per slot. Matches a PS1 capture's ring for enemy-cast damage comparisons. |
 | `--stats` | `hp=..,atk=..,def=..,hit=..,evd=..,mag=..,mdef=..` | unchanged | Base stats of every party member. |
 | `--enemyhp` | `u3,u4,u5` | unchanged | HP (and max HP) of enemy units 3 / 4 / 5; empty or -1 keeps. |
 | `--ko` | `<unit>` | none | That party unit starts KO'd. |
+| `--status` | `<unit>:<lo>[,...]` | none | OR these status bits into the units' merged `lo` words at the start (e.g. `0:0x19,3:0x100020`); for checking the status plates and icons. |
 | `--equip` | `<item id>` | character table | Party slot 0 holds that weapon (e.g. `0x26`). |
 | `--cast` | `<element id>` | none | First PC casts that element on the first enemy once the view ticks. |
 | `--caster`, `--casttgt` | `<unit>` | PC 0 / first enemy | With `--cast`: that unit casts on that unit (PCs 0-2, enemies 3+). |
 | `--castat` | `<frame>` | immediately | Issue the cast at that frame. |
 | `--cast2`, `--cast2at`, `--cast2tgt` | `<element>`, `<frame>`, `<unit>` | none | A second cast (consecutive casts). |
 | `--ecast` | `<element id>` | none | First enemy casts it on the first PC. |
-| `--weapon` | `<0\|1\|2>` | none | PC 0 attacks the first enemy (weak / medium / heavy). |
+| `--weapon` | `<0\|1\|2>` | none | The acting PC attacks the first enemy (weak / medium / heavy). |
 | `--nofx` | none | off | Element casts take the generic path (no effect pack). |
 | `--auto` | none | off | Feeds a confirm every 12 frames (smoke test). |
 | `--autoframes` | `<n>` | unlimited | `--auto` stops pressing after n frames. |
@@ -256,9 +258,9 @@ Battle changes must not regress these two runs.
 | Gate | What it checks |
 |---|---|
 | `ocbattle fx-audit` | Plays every effect pack headless (a fixed scene, caster PC 0, targets enemies 3 and 4) until it ends or hits the tick cap, plus the six cast-charge packs. Per pack: emitters started, objects spawned, quads / mesh triangles / bespoke primitives per tick, sequence ops not presented, sprites and faces with all-transparent texels, non-finite or runaway coordinates, effects that end at once or never. Prints `fx-audit: N packs (C clean, G clean on the generic path)` and the issue-class counts. |
-| `ocbattle pac-soak` | Starts every scene's battle with the default party and runs its enemy scripts: a direct pass over every slot 2..4 of every unit (twice), then up to N PC commands. Prints scenes, battles started, commands, exceptions, outcome counts (victory / wiped / fled / other), ops executed, scripted-turn statistics, unimplemented and invalid opcodes, unmodelled unit fields. |
+| `ocbattle pac-soak` | Starts every scene's battle with the default party and runs its enemy scripts: a direct pass over every slot 2..4 of every unit (twice), then up to N PC commands. Prints scenes, battles started, commands, exceptions, outcome counts (victory / wiped / fled / other), ops executed, scripted-turn statistics, executed opcodes that no shipped script contains (confidence `U`, should stay empty) and invalid opcodes, unmodelled unit fields. |
 
-"No regression" means: `pac-soak` reports zero exceptions (`0 exceptions`, exit 0) and every number on its output lines (outcome counts, ops, scripted turns, unimplemented / invalid lists) is unchanged against the baseline run, and `fx-audit` keeps the same clean counts and issue-class counts, unless the change is meant to alter battle scripts or effect handling. To diff two builds scene by scene, set `OC_SOAK_LIST=1` (one `scene N outcome K` line per scene) and compare the output files.
+"No regression" means: `pac-soak` reports zero exceptions (`0 exceptions`, exit 0) and every number on its output lines (outcome counts, ops, scripted turns, unused / invalid opcode lists) is unchanged against the baseline run, and `fx-audit` keeps the same clean counts and issue-class counts, unless the change is meant to alter battle scripts or effect handling. To diff two builds scene by scene, set `OC_SOAK_LIST=1` (one `scene N outcome K` line per scene) and compare the output files.
 
 `OC_BATTLE_AUDIT` turns on a per-tick checker in the battle view (`src/game/battle/battle_audit.h`, `battle_view_anchor.cpp`, `battle_camera.cpp`); each anomaly logs one `AUDIT ...` warning.
 
@@ -286,6 +288,7 @@ Most `static const` reads are cached for the process lifetime, so set the variab
 | `OC_SWEEP_SCENARIO` | `src/app/app_route.cpp` | integer | Story counter (script variable 0) every swept room is entered with. |
 | `OC_STUCK_TICKS` | `src/game/field_world.cpp` | integer > 0 | Field watchdog limit in ticks for a stuck script wait or input lock (the sweeps use a short one). |
 | `OC_EXIT_KIND` | `src/game/field_world_transition.cpp` | `0`..`6` | Forces the fade kind of every room change. |
+| `OC_ATTACH_DRIFT` | `src/game/field_world_tick.cpp` | set | After every field tick, draws each D6-attached model at render fractions 0 and 0.5 and logs `attach drift: room <r> ent <e> on ent <p> point <n>: drawn <d> units off the parent's attach point` when it is more than half a unit away from its parent's attach point (+ the FE 46 offset). Zero lines over a run = the attachments stay rigid. |
 | `OC_BUILD_DIR` | `tests/routes/run.ps1`, `tests/routes/run_save.ps1` | build folder | Build tree the route runner uses (default `build\win-x64`). |
 | `OC_EXE` | `tools/py/sfx_batch.py` | exe path | `opencross.exe` that `sfx_batch.py` runs (default `build\win-x64\bin\Debug\opencross.exe`). |
 | `OC_WC` | `tools/py/sfx_batch.py` | integer | Passed to `ocbattleseq sfx` as the weapon class (default `0`). |
@@ -319,7 +322,7 @@ Most `static const` reads are cached for the process lifetime, so set the variab
 | Variable | Read by | Values | Meaning |
 |---|---|---|---|
 | `OC_BATTLE_AUDIT` | `battle_camera.cpp`, `battle_view_anchor.cpp` | set; `2` | Per-tick battle flow checks, one `AUDIT` warning per anomaly (section 2); `2` adds the element-table pair list. |
-| `OC_BATTLE_SEED` | `battle_view.cpp`; set by `src/app/app_battle.cpp` from `[Debug] Seed` | decimal integer | Fixes the battle RNG seed (and the random camera picks). |
+| `OC_BATTLE_SEED` | `battle_view.cpp`; set from `[Debug] Seed` by `src/app/app_battle.cpp` (field battles) and `app_boot.cpp` (standalone `[Debug] Battle`) | decimal integer | Fixes the battle RNG seed (and the random camera picks); for a field encounter also its enemy-group variant roll. |
 | `OC_BATTLE_MISS` | `src/battle/battle.cpp` | set | Every PC weapon attack misses. |
 | `OC_BATTLE_NORUN` | `battle_view_ui.cpp` | set | Auto-battle's last-resort run-away is disabled, so a fight ends in a win or a wipe. |
 | `OC_BATTLE_FIELD` | `battle_view.cpp` | stage number | Forces the battle stage (background). |
@@ -330,6 +333,7 @@ Most `static const` reads are cached for the process lifetime, so set the variab
 | `OC_ROUTE_GAUGE` | `battle_view_action.cpp` | set | With `OC_ROUTE_ELEM`: fills PC 0's gauge to the maximum. |
 | `OC_GHOST` | `battle_view_action.cpp` | `u:flag,...` | Sets the script ghost word of units before a harness cast (1 off-stage, 0 shown). |
 | `OC_DEV_VAR` | `battle_view_action.cpp` | `0xOFF=val,...` | Writes battle-script variables (byte offsets) once after the slot-0 init pass. |
+| `OC_DEV_CHIST` | `battle_view_action.cpp` | `e,e,...` | Feeds colour history entries (colour + 1, oldest first) once after the slot-0 init pass, as if those casts had been made: `OC_DEV_CHIST=5,4,1,6,3,2,7` makes the Time Devourer's death (scene 472) take the true ending. |
 | `OC_DEV_FORM` | `battle_view_action.cpp` | creature slot, `-1` own form | Form taken by the cast of element 238. |
 | `OC_DEV_WTGT` | `battle_view_action.cpp` | unit, or `owedK` | Aims the `--weapon` attack at that unit; `owedK` = the K-th (0-based) enemy the battle scripts have marked as owing a death. |
 | `OC_DEV_HP1` | `battle_view_action.cpp` | set | Leaves the `--weapon` target with 1 HP first. |
@@ -523,7 +527,7 @@ Run the scripts from the repo root. `python -I` (isolated: no user site-packages
 
 | Script | Inputs | Outputs | Purpose |
 |---|---|---|---|
-| `tools/py/fx_diff.py` [np] | a capture folder (`ref\states`, `ref\frames`, `ours\ours.log`, `ours\shots`); `--step N` (default 5), `--offset N\|auto`, `--window A B`, `--info`, `--extract`, `--cam-score LOG..`, `--set-cam-pick S`, `--prune` | `ref\tables.json`, `diff.md`, `diff_full.md`, `shots.png` in the folder; the verdict block on stdout | Mechanical diff of one effect cast: sequence tasks, live objects, unit blocks, camera, fog, warp. |
+| `tools/py/fx_diff.py` [np] | a capture folder (`ref\states`, `ref\frames`, `ours\ours.log`, `ours\shots`); `--step N` (default 5), `--offset N\|auto`, `--cast-index N` (align on the Nth cast, 0 = first, when a capture holds several casts of the id; without it the cast under which most other sequences start together wins, ties to the later one, so a capture whose wanted cast is not the best-scoring one needs the flag), `--window A B`, `--info`, `--extract`, `--cam-score LOG..`, `--set-cam-pick S`, `--prune` | `ref\tables.json`, `diff.md`, `diff_full.md`, `shots.png` in the folder; the verdict block on stdout | Mechanical diff of one effect cast: sequence tasks, live objects, unit blocks, camera, fog, warp. The PS1 states are placed on a refresh-time axis from the battle refresh counter each carries (one PS1 game frame takes 2-3 refreshes; our ticks are refreshes), `diff.md` times are `R<refresh>`, `--window` takes refresh times and `--info` also prints `last_refresh:`. |
 | `tools/py/fx_ref.py` [np] | `frames DIR`, `vram STATE\|DIR`, `objects STATE\|DIR`, `seqs STATE\|DIR`, `warp STATE\|DIR`, `models STATE\|DIR`, `nodes STATE`; `--every --crop x y w h --to W H --grid C R --from --upto --name --mat --bit7` | per-frame statistics on stdout | Brightness and colour curves of frame sequences; display buffers, live effect objects, sequence tasks, warp globals, unit model blocks and effect registry of a state. |
 | `tools/py/cmp_frames.py` [np] | `REFDIR OURSDIR OFFSET FIRST LAST STEP [COLS ROWS]`; env `CROP` | per-frame luma and luma-grid table on stdout | Region statistics of reference frames versus OpenCross shots. |
 | `tools/py/cmp_objs.py` [np] | `REFDIR OURS.log OFFSET FIRST LAST STEP` (log made with `OC_FX_OBJECTS`) | per-emitter live object counts on stdout | Compares live object counts per emitter, state versus OpenCross log (runs `fx_ref.py` per state). |
@@ -595,6 +599,7 @@ Run the scripts from the repo root. `python -I` (isolated: no user site-packages
 | `tools/rde_snap.py` | `out.png [width] [height]` | PNG | Best-of-burst screenshot of the RDE window (default 640x512). |
 | `tools/rde_watch.py` | `seconds` | brightest-of-burst mean luma every 0.5 s on stdout | Watches the RDE window brightness. |
 | `tools/rde_montage.py` | `dir out.png n [start end]` | 4-column montage PNG | Tiles n evenly spaced frames of a capture folder. |
+| `tools/py/rde_save_redirect.py` | `--save PATH [--card1 FILE.mcd] [--title-wait S] [--keys LIST] [--shot out.png] [--attach] [--keep-open] [--lang N]`; needs `pydirectinput` | optional 640x512 PNG | Launches RDE, waits for the title, points its save path at a copy or forged `save.dat` and optionally swaps the memory card 1 image; refuses paths inside `Documents\My Games`. Importable: `launch`, `Rde.redirect`, `Rde.replace_card1`, `check_save_path`. Run it under the RDE lock when several agents share the machine. |
 
 ### 5.7 Save checks
 
@@ -614,7 +619,7 @@ Run the scripts from the repo root. `python -I` (isolated: no user site-packages
 | `tests/routes/run.ps1` | `<name> [-Config debug]` (route ini `tests\routes\<name>.ini`, optional `<name>.env`); env `OC_BUILD_DIR` | `<name>.log` next to the ini, the last route lines and the exit code on the console | Runs one route with `OC_QUIET` set and waits for it. |
 | `tools/quiet_start.ps1` | dot-sourced; `Start-Quiet exe args workdir [stdout] [stderr] [-NoMinimize]` | a process object | Starts a test window minimised without activation, so it never takes focus. |
 | `tools/ours_cast.ps1` | `-Out -Cast [-Tgt -Caster -Scene -Field -At -Frames -Cast2 -Cast2At -Cast2Tgt]` | `<Out>\ours.log`, `ours.csv`, `ours.wav` | Runs a battle cast with `OC_SFX_TRACE=1` at deterministic ticks for `sfx_cmp2.py`. |
-| `tools/ours_cast34.ps1` | `<element id>` or `-Folder <name>`; `[-Scene -Caster -Tgt -Ecast -Weapon -Party -CamPick -Seed -CastAt -Frames -Ko -Keep -NoDiff -NoCamSearch -NoPoolSearch -CamPool -Dt -NoDt -NoStats -Auto -AutoFrames -EnemyHp -Offset -Exe]` | `ours\ours.log`, `ours\shots\`, then the `fx_diff.py` diff | OpenCross side of one per-id effect comparison against a PS1 capture. |
+| `tools/ours_cast34.ps1` | `<element id>` or `-Folder <name>`; `[-Scene -Caster -Tgt -Ecast -Weapon -Party -CamPick -Seed -CastAt -Frames -Ko -Keep -NoDiff -NoCamSearch -NoPoolSearch -CamPool -Dt -NoDt -NoStats -Auto -AutoFrames -EnemyHp -Offset -CastIndex -Exe -Ring]` | `ours\ours.log`, `ours\shots\`, then the `fx_diff.py` diff | OpenCross side of one per-id effect comparison against a PS1 capture. The run length defaults to `CastAt` + the capture span in refreshes (`fx_diff.py --info` `last_refresh:`) + 60. `-Ring` passes `--ring` (the capture's field ring). |
 | `tools/ours_trans.sh` | `[tag]` (default `now`; needs the `enc_scale` route shots `es_*.png`) | `ours_<tag>.txt` in the scratch folder | Collects the `enc_scale` route shots and writes the `trans_measure.py` table. |
 
 ### 5.9 Covered elsewhere

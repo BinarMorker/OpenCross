@@ -30,6 +30,22 @@ void trace_bit7(const char* where, const std::string& name, bool anchor, bool ba
   if (seen.insert(key).second) std::fprintf(stderr, "bit7: %s\n", key);
 }
 
+// The object screen test of flag bit 28 for every type but the type-0x02 mesh: the object origin (its view-space position) goes
+// through the projection and the object is dropped when the GTE would report an error: view x / y outside -0x8000..0x7FFF, depth
+// outside 0..0xFFFF, a depth of at most h / 2 (also behind the eye), or a screen x / y outside -1024..1023 (x widened like
+// render::cull_frame). False under the free camera.
+bool origin_off_screen(u32 flags, const Vec3& origin, const ViewParams& view) {
+  if (!(flags & kFlagScreenTest) || render::cull_bypass()) return false;
+  const s64 ir1 = static_cast<s64>(std::floor(origin[0])), ir2 = static_cast<s64>(std::floor(origin[1]));
+  const s64 depth = static_cast<s64>(std::floor(origin[2]));
+  if (ir1 < -0x8000 || ir1 > 0x7FFF || ir2 < -0x8000 || ir2 > 0x7FFF || depth < 0 || depth > 0xFFFF) return true;
+  const s64 proj_h = std::llround(view.h);
+  if (depth * 2 <= proj_h) return true;
+  const s64 scale = std::min<s64>((proj_h << 16) / depth, 0x1FFFF);
+  const s64 sx = (std::llround(view.ox * 65536.0f) + ir1 * scale) >> 16, sy = (std::llround(view.oy * 65536.0f) + ir2 * scale) >> 16;
+  return !render::cull_screen_ok(render::cull_frame(render::wide_extra()), static_cast<float>(sx), static_cast<float>(sy));
+}
+
 }  // namespace
 
 using namespace emitter_detail;
@@ -114,6 +130,32 @@ void EmitterSystem::Impl::collect_meshes(const ViewParams& view, float alpha, st
   }
 }
 
+bool EmitterSystem::MeshInstance::off_screen(const std::array<std::array<s16, 3>, 6>& points, const ViewParams& view) const {
+  if (sprite_type != 14) return off_screen(view);
+  if (!(flags & kFlagScreenTest) || render::cull_bypass()) return false;
+  // Widescreen columns widen the x limits about the PS1 centre column like the packet rules (render::cull_frame).
+  const render::CullFrame frame = render::cull_frame(render::wide_extra());
+  const float widen = frame.x_span / 1023.0f;
+  const s64 x_min = static_cast<s64>(std::floor(frame.x_lo)), x_max = static_cast<s64>(std::floor(frame.x_hi));
+  const s64 x_in_lo = static_cast<s64>(std::ceil(160.0f - 159.0f * widen)), x_in_hi = static_cast<s64>(std::floor(160.0f + 191.0f * widen));
+  const s64 proj_h = std::llround(view.h);
+  const s64 ofx = std::llround(view.ox * 65536.0f), ofy = std::llround(view.oy * 65536.0f);
+  for (const auto& point : points) {
+    const Vec3 rotated = mat.apply({static_cast<float>(point[0]), static_cast<float>(point[1]), static_cast<float>(point[2])});
+    const s64 ir1 = std::clamp<s64>(static_cast<s64>(std::floor(rotated[0] + centre[0])), -0x8000, 0x7FFF);
+    const s64 ir2 = std::clamp<s64>(static_cast<s64>(std::floor(rotated[1] + centre[1])), -0x8000, 0x7FFF);
+    const s64 depth = std::clamp<s64>(static_cast<s64>(std::floor(rotated[2] + centre[2])), 0, 0xFFFF);
+    const s64 scale = proj_h < depth * 2 ? std::min<s64>((proj_h << 16) / depth, 0x1FFFF) : 0x1FFFF;
+    const s64 sx = std::clamp<s64>((ofx + ir1 * scale) >> 16, x_min, x_max), sy = std::clamp<s64>((ofy + ir2 * scale) >> 16, -0x400, 0x3FF);
+    if ((sx >= x_in_lo && sx <= x_in_hi) || (sy >= -31 && sy <= 223)) return false;
+  }
+  return true;
+}
+
+bool EmitterSystem::MeshInstance::off_screen(const ViewParams& view) const {
+  return sprite_type != 14 && origin_off_screen(flags, centre, view);
+}
+
 // Objects whose draw an overlay replaced (poly_tag >= 0): the object transform set up for it (the mesh-sprite one above).
 void EmitterSystem::Impl::collect_tagged(const ViewParams& view, float alpha, std::vector<EmitterSystem::TaggedInstance>& out) const {
   for (const Object& obj : objs) {
@@ -150,6 +192,7 @@ void EmitterSystem::Impl::collect_builtin(const Object& obj, const ViewParams& v
   Vec3 vc = (obj.flags & kFlagViewSpace) ? wpos : view.rot.apply(wpos);
   if (obj.flags & kFlagCamRel) vc[2] += view.h * static_cast<float>(1 << cfg.pos_shift);
   else for (size_t i = 0; i < 3; ++i) vc[i] += view.trans[i];
+  if (origin_off_screen(obj.flags, vc, view)) return;
   const Mat3 mc = (obj.flags & kFlagWorldQuad) ? view.rot * obj.mat : obj.mat;
   int rgb[3];
   for (size_t i = 0; i < 3; ++i) rgb[i] = (static_cast<int>(obj.col[i]) >> 4) & 0xFF;
@@ -387,6 +430,7 @@ void EmitterSystem::Impl::collect(const ViewParams& view, float alpha, std::vect
     Vec3 vc = (obj.flags & kFlagViewSpace) ? wpos : view.rot.apply(wpos);
     if (obj.flags & kFlagCamRel) vc[2] += view.h * static_cast<float>(1 << cfg.pos_shift);
     else for (size_t i = 0; i < 3; ++i) vc[i] += view.trans[i];
+    if (origin_off_screen(obj.flags, vc, view)) continue;
     const Mat3 mc = (obj.flags & kFlagWorldQuad) ? view.rot * mat : mat;
 
     const int blend = static_cast<int>(obj.flags & 7);

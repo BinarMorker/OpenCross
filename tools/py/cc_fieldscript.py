@@ -5,7 +5,7 @@ Original work; the opcode numbers, operand sizes and names were derived as a
 
 Row format:  HEX | operand spec | NAME | conf | semantics
   HEX   : "NN" main opcode, or "FExx" for the 0xFE extended page
-  conf  : C = confirmed (>=2 sources agree and decodes cleanly in data)
+  conf  : C = confirmed (decodes cleanly in data and the handler is understood)
           I = inferred (single source, or name guessed from context)
           ? = length known, semantics unknown
 Operand spec tokens (space separated, in byte order, after the opcode [and sub-opcode]):
@@ -24,7 +24,7 @@ TABLE = r"""
 01 | J | JUMP | C | Unconditional goto (code-area offset).
 02 | T80 T40 M J | IF_JUMP | C | Compare operand0 with operand1 using cond=(M&0xF); jump to J when the comparison holds. cond: 0 ==, 1 !=, 2 >, 3 <, 4 >=, 5 <=, 6 and-nonzero, 7 !=, 8 or, 9 and, A xor-ish (7-A inferred).
 03 | | OP03 | ? | Halts script like STOP (treated as terminator by all decoders); semantics unknown.
-04 | | KILL_SCRIPT | I | Halts script, 'kill script like' (q-gears note).
+04 | | KILL_SCRIPT | I | Halts script, like a kill-script request.
 05 | J | CALL | C | Call subroutine at J (return stack depth 4); ends with RETURN (0D).
 06 | | NOP06 | I | Dummy / no-op.
 07 | c d | RUN_SCRIPT_ASYNC | C | Start script (low nibble of d) of entity c; d high nibble = mode flags. Does not wait.
@@ -46,8 +46,8 @@ TABLE = r"""
 17 | V | INC | C | var++.
 18 | V | DEC | C | var--.
 19 | V S40 M | AND | I | var &= value.
-1A | V S40 M | OR_1A | ? | Listed as |= by q-gears (duplicate of 15).
-1B | V S40 M | XOR_1B | ? | Listed as ^= by q-gears (duplicate of 16).
+1A | V S40 M | OR_1A | ? | Behaves as |= (duplicate of 15).
+1B | V S40 M | XOR_1B | ? | Behaves as ^= (duplicate of 16).
 1C | V U | SHL | I | var <<= U.
 1D | V U | SHR | I | var >>= U.
 1E | V | RAND | C | var = rand().
@@ -109,7 +109,7 @@ TABLE = r"""
 5A | U U | SET_NEXT_ROOM | C | Map jump: U0 = room id, U1 = entry parameter (ROOM_PARAM).
 5B | sel:03{3:b;b S80 S40 S20 S10 M} | OP5B | ? | (b&3)==3: wait; else 4 operands.
 5C | sel:03{3:b;b S80 S40 S20 M U} | JUMP_MOVE | I | Jump-arc movement; (b&3)==3 waits.
-5D | sel:FF{0:b S80 S40 S20 M;b} | SET_CAMERA_POSITION | I | b==0: move camera to x,y,z; b==1: wait. (q-gears/cc_fd disagree on 9 vs 11 bytes; the data shows 9 followed by a separate 5D 01.)
+5D | sel:FF{0:b S80 S40 S20 M;b} | SET_CAMERA_POSITION | I | b==0: move camera to x,y,z; b==1: wait. (Length is 9, followed by a separate 5D 01; an 11-byte reading does not fit the data.)
 5E | sel:FF{0:b U;b} | SET_CAMERA_TO_ACTOR | I | b==0: target entity U; else wait.
 5F | c | SET_CONTROLLED_ENTITY | I | Override which entity the player controls.
 60 | | CLEAR_CONTROLLED_ENTITY | I |
@@ -200,16 +200,16 @@ B4 | U J | JUMP_IF_NO_ITEM | C | Jump if item U not in inventory.
 B5 | U | OPB5 | ? |
 B6 | A4 | OPB6 | ? |
 B7 | S80 M | OPB7 | ? |
-B8 | U | OPB8 | ? | From cc_fd only.
+B8 | U | OPB8 | ? |
 B9 | sel:FF{0:b c U;b c} | OPB9 | ? | Pair B9 00 c U / B9 01 c (second = wait).
-BA | sel:FF{0:b U U U;1:b;b} | OPBA | ? | From cc_fd only.
+BA | sel:FF{0:b U U U;1:b;b} | OPBA | ? |
 BB | b U | RECEIVE_ITEM | C | b==0 give item, b!=0 take; U = item id (0x200 element, 0x400 key item flag bits).
 BC | b b b b J | CHECK_MONEY | I | Jump if money check fails.
 BD | b U | MONEY | I | Add/remove money.
 BE | | OPBE | ? |
-BF | sel:FF{0:b c;b} | OPBF | ? | b==0: start (entity c); b==1: 2-byte follow-up (wait?). Always seen as the pair BF 00 c, BF 01 (q-gears fused them into one 5-byte op).
+BF | sel:FF{0:b c;b} | OPBF | ? | b==0: start (entity c); b==1: 2-byte follow-up (wait?). Always seen as the pair BF 00 c, BF 01 (not a single 5-byte op).
 C0 | c | FREE_EXTRA_ANIMATION | I |
-C1 | C1 | LOAD_ANIMATION | I | b==0: load animation U for entity c (c==FF = party leader); b==1: wait. (q-gears claims 7 bytes when c==FF; the data says 5.)
+C1 | C1 | LOAD_ANIMATION | I | b==0: load animation U for entity c (c==FF = party leader); b==1: wait. (Length is 5 even when c==FF, not 7.)
 C2 | U U U U | SET_LAYER_OPACITY | I |
 C3 | V V | GET_CAMERA_POSITION | I |
 C4 | c | WAIT_ANIMATION | I |
@@ -217,7 +217,7 @@ C5 | U U U | OPC5 | ? |
 C6 | sel:FF{0:b U U;b U U U U} | PLAY_SFX | C | Sound effect id, volume, pan (+2).
 C7 | U | OPC7 | ? |
 C8 | U S40 S20 S10 M U U | OPC8 | ? |
-C9 | U U U | BATTLE | C | Battle: battlescript, battlefield, flags (0x01 keep field music, 0x02 losable, 0x04 dragoon disguise, 0x10 no victory music, 0x20 keep battle music, 0x40 brink-of-death music).
+C9 | U U U | BATTLE | C | Battle: battlescript, battlefield, flags (0x01 keep field music, 0x02 losable, 0x04 dragoon disguise, 0x10 no victory music, 0x20 keep battle music, 0x40 boss theme 0x31 as the encounter song).
 CA | | OPCA | ? |
 CB | | WAIT_ROTATION | I |
 CC | c | WAIT_ROTATION_ENTITY | I |
@@ -244,12 +244,12 @@ E1 | b | MULTI_CHOICE | C | Selection; b = (first<<4)|last choice. Result in var
 E2 | | WAIT_DIALOG | C |
 E3 | c w b | CHARACTER_DIALOG | C | Message w spoken by entity c.
 E4 | c w b | OPE4 | I | Like E3.
-E5 | U J | OPE5 | ? | cc_fd only.
+E5 | U J | OPE5 | ? |
 E6 | U J | JUMP_IF_NOT_RECRUITED | I | Jump if character U not recruited.
-E7 | A4 | OPE7 | ? | 4 ASCII chars (like 'had1'); related to 9B/9C/D3/D7 effect names. cc_fd only.
-E8 | U J | OPE8 | I | Character test + jump (pattern: E8 c,J ; ADD_TO_ROSTER c) - probably jump if recruited. Absent from q-gears and cc_fd.
+E7 | A4 | OPE7 | ? | 4 ASCII chars (like 'had1'); related to 9B/9C/D3/D7 effect names.
+E8 | U J | OPE8 | I | Character test + jump (pattern: E8 c,J ; ADD_TO_ROSTER c) - probably jump if recruited.
 E9 | w J | JUMP_IF_FRAME | C | Jumps when bit (w & 0x1F) of the owned-frames mask is clear.
-FE00 | b | OPFE00 | ? | cc_fd only.
+FE00 | b | OPFE00 | ? |
 FE01 | b | OPFE01 | ? |
 FE02 | U | OPFE02 | ? |
 FE03 | b S80 M | OPFE03 | ? |
@@ -266,7 +266,7 @@ FE0F | c U | OPFE0F | ? |
 FE10 | | BATTLE_SET | I | Set by A3/C9.
 FE11 | U | OPFE11 | ? |
 FE12 | U U U | OPFE12 | ? |
-FE13 | U U U | OPFE13 | ? | cc_fd only.
+FE13 | U U U | OPFE13 | ? |
 FE14 | b | OPFE14 | ? |
 FE15 | U | OPFE15 | ? |
 FE17 | b | OPFE17 | ? |
@@ -278,16 +278,16 @@ FE1C | | UPDATE_CURRENT_FRAME | I |
 FE1D | U U | OPFE1D | ? |
 FE21 | U U U | SETUP_SHAKE | C | Screen shake: horizontal, vertical, time to max.
 FE22 | U U U | CHANGE_SFX_VOLUME | C |
-FE23 | U U U | OPFE23 | ? | cc_fd only.
+FE23 | U U U | OPFE23 | ? |
 FE25 | b | OPFE25 | ? |
 FE29 | U | OPFE29 | ? |
 FE2A | b | OPFE2A | ? |
 FE2B | b U | OPFE2B | ? |
 FE2C | b | OPFE2C | ? |
 FE2D | U | OPFE2D | ? |
-FE2E | | OPFE2E | ? | cc_fd only.
+FE2E | | OPFE2E | ? |
 FE2F | | OPFE2F | ? |
-FE30 | S80 S40 S20 M | OPFE30 | ? | Three signed operands (mode byte 0xE0 in data). cc_fd only.
+FE30 | S80 S40 S20 M | OPFE30 | ? | Three signed operands (mode byte 0xE0 in data).
 FE31 | c | OPFE31 | ? |
 FE32 | | OPFE32 | ? |
 FE33 | b | OPFE33 | ? |
@@ -298,7 +298,7 @@ FE37 | V U | GET_CHAR_LIFE | I |
 FE38 | S80 U M | OPTIONAL_LIFE | I |
 FE3A | S80 U M | OPFE3A | ? |
 FE3B | V U | GET_CHAR_STATUS_BYTE | I |
-FE3C | U | SET_SELF_258 | I | PS1 handler consumes FE 3C U (4 bytes); cc_fd listed 7.
+FE3C | U | SET_SELF_258 | I | PS1 handler consumes FE 3C U (4 bytes); it is not 7.
 FE3D | U U | SET_STATUS | C | Inflict status (|= mask: 1 poison, 8 burn, 16 sprain, 32 flu).
 FE3E | U U | CURE_STATUS | C | Cure status (&= ~mask).
 FE3F | | OPFE3F | ? |
@@ -307,7 +307,7 @@ FE41 | b | OPFE41 | ? |
 FE42 | b | OPFE42 | ? |
 FE43 | U U | OPFE43 | ? |
 FE44 | | DRAW_SYNC | C |
-FE45 | sel:FF{0:b c;b c b b} | OPFE45 | ? | q-gears: if byte1!=0 5 bytes else 3.
+FE45 | sel:FF{0:b c;b c b b} | OPFE45 | ? | Possibly 5 bytes if byte1!=0, else 3; unverified.
 FE46 | S80 S40 S20 M | OPFE46 | ? |
 FE47 | S80 S40 S20 M | OPFE47 | ? |
 FE48 | b U w w w | OPFE48 | ? |
@@ -315,9 +315,9 @@ FE49 | S80 S40 M | OPFE49 | ? |
 FE4A | U | RENAME_CHARACTER | C | Naming screen for character U.
 FE4B | b | OPFE4B | ? |
 FE4C | c | OPFE4C | ? |
-FE4E | b | OPFE4E | ? | cc_fd only.
-FE4F | b U | OPFE4F | ? | cc_fd only.
-FE50 | | OPFE50 | ? | cc_fd only.
+FE4E | b | OPFE4E | ? |
+FE4F | b U | OPFE4F | ? |
+FE50 | | OPFE50 | ? |
 FE52 | U | OPFE52 | ? |
 FE53 | S80 S40 M c | HEAD_ANGLE | I |
 FE55 | c c | LOOK_AT_ENTITY | I |
@@ -327,39 +327,39 @@ FE59 | | OPFE59 | ? |
 FE5A | b | OPFE5A | ? |
 FE5B | | PARTY_SCREEN | C | Character exchange / party screen.
 FE5C | b c U | OPFE5C | ? |
-FE5D | c U | OPFE5D | ? | cc_fd only.
+FE5D | c U | OPFE5D | ? |
 FE5E | U | ELEMENT_SHOP | C |
-FE60 | c U | OPFE60 | ? | cc_fd only.
+FE60 | c U | OPFE60 | ? |
 FE61 | | OPEN_MENU | C |
 FE62 | c U | HEAD_SPEED | I |
 FE63 | | OPFE63 | ? | Stops script if a variable set.
 FE64 | b c | OPFE64 | ? |
 FE65 | sel:FF{0:b U;b} | CHANGE_DISC | C | Disc change prompt.
-FE66 | | OPFE66 | ? | cc_fd only.
-FE67 | U | OPFE67 | ? | cc_fd only.
+FE66 | | OPFE66 | ? |
+FE67 | U | OPFE67 | ? |
 FE68 | U | WEAPON_SHOP | C | Blacksmith / weapon shop.
-FE69 | b | OPFE69 | ? | cc_fd only.
+FE69 | b | OPFE69 | ? |
 FE6B | b | OPFE6B | ? |
-FE6C | b | OPFE6C | ? | cc_fd only.
+FE6C | b | OPFE6C | ? |
 FE6D | | RECOVER_STARS | I |
 FE6E | V | OPFE6E | ? |
 FE6F | b | OPFE6F | ? |
 FE70 | c | OPFE70 | ? |
 FE71 | b | ALT_PORTRAIT | I |
-FE72 | | OPFE72 | ? | cc_fd only.
+FE72 | | OPFE72 | ? |
 FE73 | U U | LEARN_LIMIT_2 | I |
 FE74 | U U | LEARN_LIMIT_1 | I |
-FE75 | U | OPFE75 | ? | cc_fd only (grand slam screen?).
+FE75 | U | OPFE75 | ? | Possibly a grand slam screen.
 FE76 | V | OPFE76 | ? |
-FE77 | w | OPFE77 | ? | cc_fd only.
+FE77 | w | OPFE77 | ? |
 FE78 | U U | OPFE78 | ? | Stalls until a condition is met.
 FE79 | U U | LEARN_LIMIT_0 | I |
 FE7A | U | ADD_FRAME_TO_COLLECTION | I |
 FE7B | U | TOGGLE_LIMIT_MODE | I |
-FE7C | U U | OPFE7C | ? | cc_fd only.
-FE7D | U | OPFE7D | ? | cc_fd only.
+FE7C | U U | OPFE7C | ? |
+FE7D | U | OPFE7D | ? |
 FE7E | | OPFE7E | ? |
-FE80 | b | OPFE80 | ? | cc_fd only.
+FE80 | b | OPFE80 | ? |
 FE81 | b | OPFE81 | ? |
 FE82 | V | GET_STARS_TOTAL | I | PS1 handler reads a u16 var id (4 bytes total).
 FE83 | | OPFE83 | ? | Seen once (sui_a05f) directly before RECEIVE_ITEM; length taken as 2 (fits the surrounding code).

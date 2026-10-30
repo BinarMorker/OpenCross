@@ -11,6 +11,7 @@
 #include "audio/akao_bank.h"
 #include "audio/akao_player.h"
 #include "audio/akao_seq.h"
+#include "audio/akao_tables.h"
 #include "audio/bgm_switch.h"
 #include "audio/bgm_table.h"
 #include "audio/hca_stream.h"
@@ -112,6 +113,10 @@ void test_table() {
   CHECK(!audio::bgm_entry_by_file(25) && !audio::bgm_entry_by_file(73));
   CHECK(audio::bgm_path(2) == "cdrom/sound/bgm/BGM002.sab");
   for (int i = 0; i < audio::kBgmSongCount; ++i) CHECK(audio::bgm_entry(i)->song_id == i);
+  // Battle song of the A3 / C9 flags: 0x40 = the boss theme on both sources (des_b06f's Fire Dragon C9 #453 carries flags 0x40).
+  CHECK(audio::battle_song(0, false) == 2 && audio::battle_song(0, true) == 0x14);
+  CHECK(audio::battle_song(0x40, false) == 0x31 && audio::battle_song(0x40, true) == 0x31 && audio::battle_song(0x70, true) == 0x31);
+  CHECK(audio::bgm_entry(audio::kBossBattleSong)->file_no == 50);
 }
 
 void test_mixer_gain() {
@@ -251,7 +256,7 @@ void test_sequence() {
   CHECK(audio::akao_op_length(&code->data[0], code->data.size()) == 4);
   CHECK(audio::akao_op_length(&code->data[10], 3) == 1 && audio::akao_op_length(&code->data[12], 1) == 0);
 
-  audio::AkaoPlayer player(44100, false);
+  audio::AkaoPlayer player(44100);
   player.start_program(code, 0, table);
   const u32 frames = 44100;
   std::vector<float> out(size_t(frames) * 2);
@@ -271,7 +276,7 @@ void test_sequence() {
     if (std::fabs(out[i * 2]) > 1e-4f || std::fabs(out[i * 2 + 1]) > 1e-4f) last = i;
   CHECK(last > size_t(0.370 * 44100) && last < size_t(0.405 * 44100));
   CHECK(player.finished() && player.ticks() >= 119 && player.ticks() <= 121);
-  audio::AkaoPlayer player2(44100, false);
+  audio::AkaoPlayer player2(44100);
   player2.start_program(code, 0, table);
   player2.render(out.data(), 1000);
   CHECK(player2.active_voices() == 1);
@@ -545,9 +550,69 @@ void test_sfx_live_ram() {
   CHECK(max_diff(kept, expected) > 1e-2f);
 }
 
+// A8 / A9 volumes are signed bytes: A8 0xC0 (-64) plays the A8 0x40 note phase-inverted, so a +0x40 / 0xC0 pair cancels; an A9 slide to
+// 0xC0 ends at the same inverted volume.
+void test_signed_volume() {
+  auto table = std::make_shared<audio::InstrumentTable>();
+  table->overlay(audio::parse_bank(tiny_bank_at(0, 0x1100, 0x79)));
+  auto render = [&](std::vector<u8> volume_ops) {
+    auto code = std::make_shared<audio::AkaoCode>();
+    code->data = {0xA1, 0x00, 0xA5, 0x06};
+    code->data.insert(code->data.end(), volume_ops.begin(), volume_ops.end());
+    code->data.insert(code->data.end(), {0xF0, 0xC0, 0xA0});
+    audio::AkaoPlayer player(44100, true);
+    player.start_program(code, 0, table);
+    std::vector<float> out(size_t(8192) * 2);
+    player.render(out.data(), 8192);
+    return out;
+  };
+  const std::vector<float> positive = render({0xA8, 0x40}), negative = render({0xA8, 0xC0}), slid = render({0xA8, 0x40, 0xA9, 0x01, 0xC0});
+  float peak = 0, residual = 0, slide_residual = 0;
+  for (size_t i = 4096; i < positive.size(); ++i) {
+    peak = std::max(peak, std::fabs(positive[i]));
+    residual = std::max(residual, std::fabs(positive[i] + negative[i]));
+    slide_residual = std::max(slide_residual, std::fabs(slid[i] - negative[i]));
+  }
+  CHECK(peak > 1e-2f);
+  CHECK(residual < 1e-5f);
+  CHECK(slide_residual < 1e-5f);
+}
+
+// FE 19 arms a volume slide that every note key-on starts from its signed start volume: with start = target it plays the note at that volume
+// whatever the channel volume was (positive or phase-inverted), and A8 / A9 cancel it.
+void test_keyon_volume_slide() {
+  auto table = std::make_shared<audio::InstrumentTable>();
+  table->overlay(audio::parse_bank(tiny_bank_at(0, 0x1100, 0x79)));
+  auto render = [&](std::vector<u8> volume_ops) {
+    auto code = std::make_shared<audio::AkaoCode>();
+    code->data = {0xA1, 0x00, 0xA5, 0x06};
+    code->data.insert(code->data.end(), volume_ops.begin(), volume_ops.end());
+    code->data.insert(code->data.end(), {0xF0, 0xC0, 0xA0});
+    audio::AkaoPlayer player(44100, true);
+    player.start_program(code, 0, table);
+    std::vector<float> out(size_t(8192) * 2);
+    player.render(out.data(), 8192);
+    return out;
+  };
+  auto max_diff = [](const std::vector<float>& lhs, const std::vector<float>& rhs) {
+    float diff = 0;
+    for (size_t i = 4096; i < lhs.size(); ++i) diff = std::max(diff, std::fabs(lhs[i] - rhs[i]));
+    return diff;
+  };
+  const std::vector<float> plain = render({0xA8, 0x40}), inverted = render({0xA8, 0xC0}), loud = render({0xA8, 0x7F});
+  CHECK(max_diff(render({0xA8, 0x7F, 0xFE, 0x19, 0x40, 0x01, 0x40}), plain) < 1e-5f);
+  CHECK(max_diff(render({0xA8, 0x7F, 0xFE, 0x19, 0xC0, 0x01, 0xC0}), inverted) < 1e-5f);
+  CHECK(max_diff(render({0xA8, 0x7F, 0xFE, 0x19, 0x40, 0x01, 0x40, 0xA8, 0x7F}), loud) < 1e-5f);
+  float peak = 0;
+  for (size_t i = 4096; i < loud.size(); ++i) peak = std::max(peak, std::fabs(loud[i]));
+  CHECK(peak > 1e-2f);
+  CHECK(max_diff(render({0xA8, 0x7F, 0xFE, 0x19, 0x40, 0x01, 0x40}), loud) > 0.2f * peak);
+}
+
 // Pitch is a property of the SPU model, not of the output rate: a 14-sample square (+7 x7, -7 x7 nibbles, low nibble first; the decoded
 // sample is 28 frames + the loop block again) played one octave above the base note (C6 = note 72 = base + 12, 192 ticks) sounds at
-// 2 * 44100 / 14 = 6300 Hz whether the player renders at 44.1 kHz or 48 kHz, measured by zero crossings over 0.1 .. 0.5 s.
+// 2 * 44100 / 14 = 6300 Hz whether the player renders at 44.1 kHz or 48 kHz, measured by zero crossings over 0.1 .. 0.5 s; E1 random pitch
+// moves the note by the driver's random byte.
 void test_pitch_rate() {
   Bytes bytes(0x40 + 16 + 16, 0);
   std::memcpy(bytes.data(), "AKAO", 4);
@@ -571,18 +636,29 @@ void test_pitch_rate() {
   table->overlay(bank);
   auto code = std::make_shared<audio::AkaoCode>();
   code->data = {0xA1, 0x00, 0xA5, 0x06, 0xA8, 0x7F, 0xF0, 0xC0, 0xA0};
-  for (const u32 rate : {44100u, 48000u}) {
-    audio::AkaoPlayer player(rate, false);
-    player.start_program(code, 0, table);
+  auto measure_hz = [&](const std::shared_ptr<audio::AkaoCode>& program, u32 rate) {
+    audio::AkaoPlayer player(rate);
+    player.start_program(program, 0, table);
     const u32 frames = rate;
     std::vector<float> out(size_t(frames) * 2);
     player.render(out.data(), frames);
     int crossings = 0;
     const size_t begin = rate / 10, end = rate / 2;
     for (size_t i = begin + 1; i < end; ++i) crossings += (out[i * 2] >= 0) != (out[(i - 1) * 2] >= 0);
-    const double hz = crossings / 2.0 / (double(end - begin) / rate);
-    CHECK(std::fabs(hz - 6300.0) < 30.0);
-  }
+    return crossings / 2.0 / (double(end - begin) / rate);
+  };
+  for (const u32 rate : {44100u, 48000u}) CHECK(std::fabs(measure_hz(code, rate) - 6300.0) < 30.0);
+  // E1 random pitch: the first note reads random byte 0 (0x8D, bit 7 set = down): 0x2000 - ((0x2000 * 0xFF >> 8) * 0x8D >> 9) = 0x1739,
+  // 6300 * 0x1739 / 0x2000 = 4564 Hz. E2 turns it off again.
+  auto random_code = std::make_shared<audio::AkaoCode>();
+  random_code->data = {0xA1, 0x00, 0xA5, 0x06, 0xA8, 0x7F, 0xE1, 0xFF, 0xF0, 0xC0, 0xA0};
+  CHECK(std::fabs(measure_hz(random_code, 44100) - 4564.0) < 30.0);
+  random_code->data.insert(random_code->data.begin() + 8, 0xE2);
+  CHECK(std::fabs(measure_hz(random_code, 44100) - 6300.0) < 30.0);
+  CHECK(audio::kAkaoRandom[0] == 0x8D && audio::kAkaoRandom[255] == 0x89);
+  CHECK(audio::akao_random_pitch(0x1000, 20, 0x00) == 0x1000);
+  CHECK(audio::akao_random_pitch(0x1000, 20, 0x7F) == 0x1000 + ((0x1000 * 20 >> 8) * 0x7F >> 7));
+  CHECK(audio::akao_random_pitch(0x1000, 20, 0xFF) == 0x1000 - ((0x1000 * 20 >> 8) * 0xFF >> 9));
 }
 
 // Live BGM source switch (bgm_switch.h, AkaoPlayer::measure_timing / seek_music): the unrolled song time is scaled by the loop-length ratio
@@ -616,18 +692,18 @@ void test_bgm_switch() {
   seq->code = std::make_shared<audio::AkaoCode>();
   seq->code->data = {0xFE, 0x00, 0x00, 0x80, 0xA1, 0x00, 0xA5, 0x05, 0xA8, 0x7F, 0x03, 0xC8, 0x03, 0x2F, 0xCA};
   seq->channels = {{0, 0}};
-  audio::AkaoPlayer measured(48000, false);
+  audio::AkaoPlayer measured(48000);
   measured.load_music(seq, table);
   const SongTiming looped = measured.measure_timing();
   CHECK(looped.looping() && std::fabs(looped.intro - 0.2) < 0.03 && std::fabs(looped.loop - 0.4) < 0.03);
   auto once = std::make_shared<audio::AkaoSeq>(*seq);
   once->code = std::make_shared<audio::AkaoCode>();
   once->code->data = {0xFE, 0x00, 0x00, 0x80, 0xA1, 0x00, 0xA5, 0x05, 0xA8, 0x7F, 0x03, 0x2F, 0xA0};
-  audio::AkaoPlayer measured_once(48000, false);
+  audio::AkaoPlayer measured_once(48000);
   measured_once.load_music(once, table);
   const SongTiming one_shot = measured_once.measure_timing();
   CHECK(!one_shot.looping() && one_shot.length > 0.35 && one_shot.length < 0.5);
-  audio::AkaoPlayer seeked(48000, false), continuous(48000, false);
+  audio::AkaoPlayer seeked(48000), continuous(48000);
   seeked.load_music(seq, table);
   continuous.load_music(seq, table);
   seeked.seek_music(1.3);
@@ -702,6 +778,8 @@ int main() {
   test_sfx_room_banks();
   test_sfx_room_leave_after_battle();
   test_sfx_live_ram();
+  test_signed_volume();
+  test_keyon_volume_slide();
   test_battle_render();
   test_pitch_rate();
   test_sab();

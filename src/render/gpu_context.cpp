@@ -399,6 +399,20 @@ void GpuContext::end_target(RenderTarget& target) {
   begin_rendering(current_images(), false, clear_);
 }
 
+void GpuContext::copy_color(RenderTarget& target) {
+  if (!in_frame_ || !target.valid()) return;
+  end_rendering();
+  const PassImages images = current_images();
+  resolve(images);
+  SDL_GPUBlitInfo blit{};
+  blit.source = {images.resolve ? images.resolve : images.color, 0, 0, 0, 0, images.extent.width, images.extent.height};
+  blit.destination = {target.color(), 0, 0, 0, 0, target.width(), target.height()};
+  blit.load_op = SDL_GPU_LOADOP_DONT_CARE;
+  blit.filter = SDL_GPU_FILTER_LINEAR;
+  SDL_BlitGPUTexture(cmd_, &blit);
+  begin_rendering(images, false, clear_);
+}
+
 void GpuContext::clear_depth() {
   if (!in_frame_) return;
   begin_rendering(current_images(), false, clear_);

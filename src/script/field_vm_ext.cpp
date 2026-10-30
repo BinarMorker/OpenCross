@@ -18,6 +18,12 @@ void FieldVM::exec_ext(u8 sub) {
     yield_ = true;
     return host_.system_ready();
   };
+  // The screen ops open their screen through the field's launcher and step on; the FE 61 after each waits until it has closed.
+  auto open_screen = [&](MenuKind kind, int arg, int length) {
+    if (!idle_gate()) return;
+    host_.request_menu(kind, arg);
+    advance(length);
+  };
   switch (sub) {
     case 0x00:
       if (byte_at(1) == 0)
@@ -249,8 +255,7 @@ void FieldVM::exec_ext(u8 sub) {
       if (!(self.flags38 & flag38::kNo3dObject)) host_.head_op(HeadOp::Facing, ent_, -1, operand_s(3, 5, 0x40), operand_s(1, 5, 0x80), 0, self.head_turn_rate);
       advance(6);
       break;
-    // FE 4A: only selects the name entry; the FE 61 after it opens it.
-    case 0x4A: if (idle_gate() && menu_request(MenuKind::NameEntry, operand_u(1))) advance(3); break;
+    case 0x4A: open_screen(MenuKind::NameEntry, operand_u(1), 3); break;
     case 0x4B: set_flag(self.flags38, 20, byte_at(1) != 0); advance(2); break;
     case 0x4C: {
       const int target = entity_operand(1);
@@ -330,7 +335,7 @@ void FieldVM::exec_ext(u8 sub) {
       }
       break;
     case 0x5A: self.flags270 = (self.flags270 & 0x7FFFFFFFu) | (static_cast<u32>(byte_at(1) & 1) << 31); advance(2); break;
-    case 0x5B: if (menu_request(MenuKind::PartyScreen, 0)) advance(1); break;
+    case 0x5B: open_screen(MenuKind::PartyScreen, 0, 1); break;
     case 0x5C: {
       const int target = entity_operand(2);
       if (target >= 0) {
@@ -344,10 +349,14 @@ void FieldVM::exec_ext(u8 sub) {
       break;
     }
     case 0x5D: host_.table_op(0xFE5D, byte_at(1), operand_u(2)); advance(4); break;
-    case 0x5E: if (menu_request(MenuKind::ElementShop, operand_u(1))) advance(3); break;
+    case 0x5E: open_screen(MenuKind::ElementShop, operand_u(1), 3); break;
     case 0x5F: set_flag(self.flags274, 9, byte_at(1) & 1); advance(2); break;
     case 0x60: host_.table_op(0xFE60, byte_at(1), operand_u(2)); advance(4); break;
-    case 0x61: if (menu_request(MenuKind::MainMenu, 0)) advance(1); break;
+    // FE 61 opens nothing: it waits in place while a screen opened by the op before it is pending or open.
+    case 0x61:
+      if (host_.menu_active()) yield_ = true;
+      else advance(1);
+      break;
     case 0x62: {  // entity c head-turn rate (used by the next head op) = U
       const int target = entity_operand(1);
       if (target >= 0) ents_[static_cast<size_t>(target)].head_turn_rate = static_cast<u16>(operand_u(2));
@@ -384,11 +393,11 @@ void FieldVM::exec_ext(u8 sub) {
         set_global(Global::TradingPostRow, operand_u(1));
         set_global(Global::TradingPostCue, 1);
         host_.table_op(0xFE67, 0xBD, 0);
-        // Only selects the trading post; FE 61 opens it (as FE 5E / FE 68 do for the shops).
-        if (menu_request(MenuKind::TradingPost, operand_u(1))) advance(3);
+        host_.request_menu(MenuKind::TradingPost, operand_u(1));
+        advance(3);
       }
       break;
-    case 0x68: if (menu_request(MenuKind::WeaponShop, operand_u(1))) advance(3); break;
+    case 0x68: open_screen(MenuKind::WeaponShop, operand_u(1), 3); break;
     case 0x69: host_.table_op(0xFE69, byte_at(1), 0); advance(2); break;
     case 0x6A: set_global(Global::Reg6A, operand_u(1)); advance(3); break;
     case 0x6B: set_global_bit(16, byte_at(1) & 1); advance(2); break;
@@ -407,6 +416,7 @@ void FieldVM::exec_ext(u8 sub) {
       if (idle_gate()) {
         set_global(Global::SavePointPreamble, 1);
         host_.table_op(0xFE72, 3, 0);
+        host_.request_menu(MenuKind::MainMenu, 0);
         advance(1);
       }
       break;
@@ -450,15 +460,10 @@ void FieldVM::exec_ext(u8 sub) {
       opaque(0xFE83, 0, 0);
       advance(1);
       break;
-    // FE 84 / FE 85: the idle gate, then they only select the launcher mode (0x30 New Game+ title
-    // list with the cleared game kept in the playinit buffer / 4 save list after the gear is stripped and variable 0x7E = 3); the FE 61
-    // after them opens it (as FE 5E / 67 / 68 do for the shops). Both are used once, in the ending room.
-    case 0x84:
-      if (idle_gate() && menu_request(MenuKind::NewGamePlus, 0)) advance(1);
-      break;
-    case 0x85:
-      if (idle_gate() && menu_request(MenuKind::Save, 0)) advance(1);
-      break;
+    // FE 84 / FE 85: the launcher mode 0x30 New Game+ title list with the cleared game kept in the playinit buffer / 4 save list after
+    // the gear is stripped and variable 0x7E = 3. Both are used once, in the ending room.
+    case 0x84: open_screen(MenuKind::NewGamePlus, 0, 1); break;
+    case 0x85: open_screen(MenuKind::Save, 0, 1); break;
     default: {
       const OpInfo* info = find_op(key);
       if (!info) {

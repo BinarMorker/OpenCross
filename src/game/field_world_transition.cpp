@@ -6,6 +6,7 @@
 #include <cstring>
 #include <format>
 
+#include "audio/bgm_table.h"
 #include "audio/voice.h"
 #include "core/log.h"
 #include "game/cheats.h"
@@ -85,16 +86,40 @@ int FieldWorld::shake_offset(s32 amp) {
   return ((random * amplitude + 1) >> 15) - amplitude / 2;
 }
 
+// (rand * a >> 16) + a / 2 with rand = 0..0x7FFF: the picture moves right / down by [a/2, a) pixels.
+int FieldWorld::display_shake_offset(int amp) {
+  if (amp <= 0) return 0;
+  shake_.rng = shake_.rng * 1664525u + 1013904223u;
+  const int random = static_cast<int>((shake_.rng >> 16) & 0x7FFF);
+  return ((random * amp) >> 16) + amp / 2;
+}
 
+
+// A8: mode 0 fades back to the picture, any other mode to black, over `arg` ticks (0 = at once), with the room change's subtractive
+// slot-0 fade. It acts only when it flips the direction of the last slot-0 fade, and then starts from the far end: a fade to black
+// while the screen is black or going black (room exit, room entry before the entry fade, an earlier A8) does nothing, and so does a
+// fade back while the screen is coming back.
 void FieldWorld::fade(int mode, int arg) {
-  const float target = mode == 1 ? 1.0f : 0.0f;
-  fade_target_ = target;
-  fade_sub_ = false;
+  const bool to_black = mode != 0;
+  if (to_black == fade_black_) return;
+  fade_black_ = to_black;
+  fade_target_ = to_black ? 1.0f : 0.0f;
+  fade_add_ = false;
   if (arg <= 0) {
-    fade_ = target;
+    fade_ = fade_target_;
   } else {
+    fade_ = to_black ? 0.0f : 1.0f;
     fade_step_ = 1.0f / static_cast<float>(arg);
   }
+}
+
+void FieldWorld::begin_entry_fade(int kind) {
+  fade_ = 1.0f;
+  fade_target_ = 0.0f;
+  fade_step_ = 1.0f / static_cast<float>(kind == 2 ? kWhiteFadeIn : kRoomFadeIn);
+  fade_add_ = kind == 2;
+  fade_black_ = false;
+  fade_kind_ = kind;
 }
 
 void FieldWorld::draw_sync() {}
@@ -130,8 +155,8 @@ void FieldWorld::request_battle(int battle_id, int field, int flags) {
     mixer_->stop();
     handoff_.battle_music_stopped = true;
     // The battle song starts DURING the encounter effect, not at the battle load; BattleAudio::start_battle_theme then finds it playing.
-    // Song 2 is played as BGM021 (0x14) in the remastered source; the transition plays the same theme so there is no restart at the load.
-    start_song(bgm_remastered_ ? 0x14 : 2, 127);
+    // Flag 0x40 picks the boss theme; the battle adopts the same song so there is no restart at the load.
+    start_song(audio::battle_song(flags, bgm_remastered_), 127);
   }
   handoff_.battle_state = BattleState::Intro;
   handoff_.intro_tick = tick_count_;
@@ -183,11 +208,7 @@ void FieldWorld::end_battle(int result_code) {
     rebind_party();
   }
   // Field re-entry: a subtractive fade from black over 0x30 ticks.
-  fade_ = 1.0f;
-  fade_target_ = 0.0f;
-  fade_step_ = 1.0f / static_cast<float>(kRoomFadeIn);
-  fade_sub_ = true;
-  fade_kind_ = 0;
+  begin_entry_fade(0);
   // The saved field song is restored after EVERY battle, flag 1 included
   // (the victory song 0x16 / 0x17 and the battle theme are replaced); only BATTLE flag 0x20 skips it (the script plays the next
   // song itself). A song that is still playing is left alone by start_song.
@@ -227,6 +248,13 @@ void FieldWorld::step_camera() {
   int sx = camera_.cam.x, sy = camera_.cam.y;
   if (shake_.ax != 0) sx = camera_.clamp_x(view_, vm_.global_flags(), camera_.cam.x + shake_offset(shake_.ax));
   if (shake_.ay != 0) sy = camera_.clamp_y(view_, vm_.global_flags(), camera_.cam.y + shake_offset(shake_.ay));
+  // Sequence shake (op 2E): the display itself moves, so the offset is not held to the pan limits.
+  if (sequences_) {
+    int amp_x = 0, amp_y = 0;
+    sequences_->shake_amplitude(amp_x, amp_y);
+    sx -= display_shake_offset(amp_x);
+    sy -= display_shake_offset(amp_y);
+  }
   // Damage-floor jolt: 8 frames, n = 7 .. 0 (decremented before drawing). The host draws it as a 50 % ghost of the previous
   // picture (jolt_view); the new picture is not moved.
   if (fstat_.jolt > 0) {
@@ -270,9 +298,12 @@ void FieldWorld::begin_jump(int, int) {
     return;
   }
   // The colour ramps 0 -> 0xFF in n steps (0x50 black, 0x40 white); the room switches on the tick the screen is fully black / white.
+  // A screen an A8 already took (or is taking) to black keeps that fade.
+  if (fade_black_) return;
+  fade_black_ = true;
   fade_target_ = 1.0f;
   fade_step_ = 1.0f / static_cast<float>(fade_kind_ == 2 ? kWhiteFadeOut : kRoomFadeOut);
-  fade_sub_ = true;
+  fade_add_ = fade_kind_ == 2;
 }
 
 void FieldWorld::step_transition() {
@@ -299,15 +330,13 @@ void FieldWorld::step_transition() {
     return;
   }
   const std::string from = view_.room_name();
+  const int entry_kind = fade_kind_;
   if (!load_room(target, pending.param)) {
     finish_jump_failed(std::format("loading {} failed", target));
     return;
   }
   // Kind 0 fades in over 0x30 ticks (subtractive, from black), kind 2 over 0x20 (additive, from white).
-  fade_ = 1.0f;
-  fade_target_ = 0.0f;
-  fade_step_ = 1.0f / static_cast<float>(fade_kind_ == 2 ? kWhiteFadeIn : kRoomFadeIn);
-  fade_sub_ = true;
+  begin_entry_fade(entry_kind);
   if (captured) {
     // The new room fades in from black over n ticks (kind 1 0x30, 3 0x20, 4 0x30, 5 / 6 0 -> 1), while
     // step_capture adds the old frame over it at brightness b / 128 (0x80 falling by 0x800000 / D per
@@ -331,6 +360,7 @@ void FieldWorld::finish_jump_failed(const std::string& why) {
   status_ = "exit unavailable: " + why;
   log::warn("field: {}", status_);
   capture_.want = capture_.ready = capture_.active = false;
+  fade_black_ = false;
   fade_target_ = 0.0f;
   fade_step_ = 1.0f / static_cast<float>(kFadeTicks);
   // Unpark the triggered scripts (the exit's ON_COLLISION ends in STOP_EXEC) and give the controls back.

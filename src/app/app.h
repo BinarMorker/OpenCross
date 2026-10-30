@@ -54,7 +54,9 @@
 #include "ui/keyitem_popup.h"
 #include "ui/lowres.h"
 #include "ui/menu/main_menu.h"
+#include "ui/menu/picker_model.h"
 #include "ui/menu/status_model.h"
+#include "ui/monster_pick_screen.h"
 #include "ui/party_screen.h"
 #include "ui/feature_icons.h"
 #include "ui/pause_screen.h"
@@ -337,6 +339,10 @@ class App {
   bool world_name_ok = false;
   ui::PartyScreen party_screen;
   bool party_ok = false;
+  // The Grand Slam monster picker (FE 75 + FE 61) and its creature models.
+  ui::MonsterPickScreen monster_picker;
+  ui::PickerModelView picker_models{meshes, files};
+  bool monster_picker_ok = false;
   bool menu_ok = false, shop_ok = false, key_popup_ok = false;
 
   // ---- the field, battles, the title ------------------------------------------------------------------------------------------

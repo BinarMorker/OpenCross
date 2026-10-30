@@ -544,6 +544,10 @@ void MeshPipeline::draw(const MeshModel& model, const DrawParams& params) {
     passes[npass++] = {Kind::Solid, 0.0f};
   } else if (!split_wet) {
     if (flash) {
+      // The PS1 draws each polygon white (B - F) and then normal (B + F) before the next one, back to front, so a nearer polygon's
+      // subtraction removes what the farther ones added. The depth of the nearest blended surface first: both blended passes then touch
+      // only that surface (max(B - light, 0) + texel * light per pixel) instead of summing every layer of the model.
+      passes[npass++] = {Kind::DepthOnly, 0.0f};
       passes[npass++] = {Kind::Solid, 0.0f, true};
       passes[npass++] = {Kind::Semi, 0.0f, true, 2};
     }
@@ -593,8 +597,9 @@ void MeshPipeline::draw(const MeshModel& model, const DrawParams& params) {
         bound = pipe->handle();
         SDL_BindGPUGraphicsPipeline(render_pass, bound);
       }
-      // STP texel filter: the Semi pass blends the STP texels only; every other pass draws a semi-transparent mesh's non-STP texels.
-      const float stp_filter = pass.kind == Kind::Semi ? 2.0f : semi_mesh ? 1.0f : 0.0f;
+      // STP texel filter: the Semi pass blends the STP texels only (the flash routine's depth pass covers the same texels); every other pass
+      // draws a semi-transparent mesh's non-STP texels.
+      const float stp_filter = pass.kind == Kind::Semi || (pass.kind == Kind::DepthOnly && flash) ? 2.0f : semi_mesh ? 1.0f : 0.0f;
       const int ti = (params.eye_frame >= 1 && params.eye_frame <= 2 && model_draw.texture == 0 && model.eye_base >= 0) ? model.eye_base + params.eye_frame - 1 : model_draw.texture;
       TexRef tex = ti >= 0 ? sets[static_cast<size_t>(ti)] : fallback;
       if (params.hd && ti >= 0 && static_cast<size_t>(ti) < hd_sets.size() && hd_sets[static_cast<size_t>(ti)])

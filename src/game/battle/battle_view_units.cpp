@@ -156,13 +156,11 @@ void BattleView::fill_ctx(int unit, bseq::Ctx& ctx) const {
   // bit 31 HP <= max / 4.
   ctx.flags = (ctx.dead ? 1u : 0u) | (unit_rec.guard ? 0x200u : 0u) | ((visual.hp_shown * 4 <= unit_rec.max_hp && !ctx.dead) ? 0x80000000u : 0u);
   // Equipment bits set once per party unit (read by anmseq ops 0xA6 / 0xA7 / 0xA8 and by the sky pack): 0x2000 weapon
-  // item 0x26 (Mastermune), 0x4000 any accessory 0xC1 (Hero's Shield), 0x8000 = weapon 0x3D (Hero's Blade) and (0xC1 count + 0xC0 count) == 2.
+  // item 0x26 (Mastermune), 0x4000 any accessory 0xC1 (Hero's Shield), 0x8000 the hero set (Unit::hero_set).
   if (unit_rec.pc) {
-    int shield = 0, medal = 0;
-    for (u16 accessory : unit_rec.eq.acc) shield += accessory == 0xC1, medal += accessory == 0xC0;
     if (unit_rec.eq.weapon_id == 0x26) ctx.flags |= 0x2000u;
-    if (shield) ctx.flags |= 0x4000u;
-    if (unit_rec.eq.weapon_id == 0x3D && shield + medal == 2) ctx.flags |= 0x8000u;
+    if (std::find(unit_rec.eq.acc.begin(), unit_rec.eq.acc.end(), u16{0xC1}) != unit_rec.eq.acc.end()) ctx.flags |= 0x4000u;
+    if (unit_rec.hero_set) ctx.flags |= 0x8000u;
   }
   // Op 0x9F GetCommon (mode 41): the unit's own common word.
   ctx.common = unit_rec.ctrl12;

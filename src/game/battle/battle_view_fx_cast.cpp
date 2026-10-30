@@ -329,9 +329,15 @@ bool BattleView::fx_begin() {
   cb.ambient = [this](int r, int g, int b, int ticks) { fx_ambient_set(r, g, b, ticks); };
   cb.stage = [this](int stage) { fx_swap_stage(stage); };
   cb.form = [this](int ph) { fx_form_phase(ph); };
+  cb.song = [this](int song) { audio_.play_song(song); };
   cb.fog_off = [this] {
     fx_fog_on_ = false;
     fx_unit_fog_.fill(false);
+  };
+  cb.lights = [this](const effects::Vec3& pos, effects::LightMatrices& matrices, std::array<float, 3>& back) {
+    matrices = effects::light_matrices(fx_lights_, pos, false);
+    for (size_t k = 0; k < 3; ++k) back[k] = static_cast<float>(fx_ambient_.cur[k]) / 256.0f;
+    return true;
   };
   fx_->set_callbacks(std::move(cb));
   fx_->set_sfx(audio_.sfx());

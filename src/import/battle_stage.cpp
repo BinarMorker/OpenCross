@@ -384,7 +384,7 @@ struct TexKey {
 // polygon is drawn with its raw colour (colour / 255, a 0x80 vertex is mid grey) and the renderer samples a white texel for it.
 // Texel centres: a PS1 packet u addresses texel u itself and RDE nudges every polygon u, v by half a texel before its bilinear
 // sampler; sampling at the integer boundary blended half of the neighbouring atlas tile along every face edge.
-// Submeshes are runs of equal (texture, data semi bit, tpage abr): the renderer picks the blend state per run. Packet corner
+// Submeshes are runs of equal (texture, data semi bit, tpage abr, direct-colour page): the renderer picks the blend state per run. Packet corner
 // order (0,1,2) / (2,1,3): the GPU draws the face only when NCLIP(0,1,2) > 0, which the renderer reproduces with back-face
 // culling. The stock env page (VRAM page 0x95 = (320, 256) 8-bit through CLUT row (0, 239)) is the texture the battle unit
 // packer reads for env-mapped parts without shading flag 0x80; it is blank when no stage image reaches it.
@@ -410,8 +410,9 @@ StageAsset build_asset(const Parsed& parsed) {
       part.ground = entry.type == kTRing;
       part.source_vertices = static_cast<u32>(mesh.verts.size());
       part.source_faces = static_cast<u32>(mesh.faces.size());
+      part.cull_points = mesh_cull_points(mesh.verts);
       std::map<std::array<u64, 3>, u32> vertex_map;
-      int cur_key = -2;
+      int cur_key = -2, cur_page = -1;
       for (const StageFace& face : mesh.faces) {
         if (face.semi) ++part.semi_transparent_faces;
         std::array<float, 3> centroid{0, 0, 0};
@@ -479,13 +480,16 @@ StageAsset build_asset(const Parsed& parsed) {
           corner[k] = it->second;
         }
         const int key = (tex + 1) * 8 + (face.semi ? 4 : 0) + (face.textured ? abr : 0);
-        if (key != cur_key) {
+        const int direct_page = face.textured && mode == 2 ? tpx | tpy << 16 : -1;
+        if (key != cur_key || direct_page != cur_page) {
           cur_key = key;
+          cur_page = direct_page;
           assets::StageSubMesh submesh;
           submesh.texture = tex;
           submesh.first_index = static_cast<u32>(part.indices.size());
           submesh.semi = face.semi;
           submesh.abr = face.textured ? abr : 0;
+          submesh.direct_page = direct_page;
           part.submeshes.push_back(submesh);
         }
         static constexpr int kTri[3] = {0, 1, 2}, kQuad[6] = {0, 1, 2, 2, 1, 3};
@@ -564,6 +568,23 @@ StageAsset build_asset(const Parsed& parsed) {
 }
 
 }  // namespace
+
+std::array<std::array<s16, 3>, 6> mesh_cull_points(const std::vector<std::array<s16, 3>>& verts) {
+  std::array<int, 3> hi{-0x7FFF, -0x7FFF, -0x7FFF}, lo{0x7FFF, 0x7FFF, 0x7FFF};
+  for (const auto& vert : verts)
+    for (size_t axis = 0; axis < 3; ++axis) {
+      hi[axis] = std::max(hi[axis], static_cast<int>(vert[axis]));
+      lo[axis] = std::min(lo[axis], static_cast<int>(vert[axis]));
+    }
+  std::array<std::array<s16, 3>, 6> points{};
+  for (size_t axis = 0; axis < 3; ++axis) points[0][axis] = static_cast<s16>((hi[axis] + lo[axis]) / 2);
+  points[1][0] = static_cast<s16>(hi[0]);
+  points[2][0] = static_cast<s16>(lo[0]);
+  points[3][2] = static_cast<s16>(hi[2]);
+  points[4][2] = static_cast<s16>(lo[2]);
+  points[5][1] = static_cast<s16>(lo[1]);
+  return points;
+}
 
 std::optional<StageMeshSrc> parse_stage_mesh(ByteSpan data, std::string* err) {
   try {

@@ -24,7 +24,8 @@ namespace {
 //   clip    camera space -> clip, already multiplied with the instance transform
 //   fogc    depth-cue far colour (colour bytes, 0x80 = neutral) in rgb, w = fog slope A (p = A + B / z, 0 = no fog)
 //   color   object colour / 128 (rgb), w = blend factor (0.25 for B+F/4, else 1)
-//   params  x = OT bias, y = depth mode (0 packet slot, 1 fixed slot, 2 per-fragment z) + 4 * uv-scroll flag, z = output alpha (0.5 for
+//   params  x = OT bias, y = depth mode (0 packet slot, 1 fixed slot, 2 per-fragment z) + 4 * uv-scroll flag (+ 8 HD depth cue, + 16 EdgeBlend
+//           strip, + 32 the texture is a picture copy: 15-bit black texels are transparent), z = output alpha (0.5 for
 //           the average blend), w = fog offset B
 // The camera z of a point is the w of its clip position (the projection's last row is (0, 0, 1, 0)).
 //   uvw     x/y = uv phase (texels), z = off_u + 256 * off_v + 65536 * (1 bilinear wrap + 2 EdgeBlend tiling), w = win_w + 256 * win_h
@@ -167,6 +168,20 @@ bool corners_pass(const std::array<float, 12>& cam, const std::array<float, 3>* 
   tri_ok[0] = size_ok(0, 1, 2);
   tri_ok[1] = corners == 4 && size_ok(2, 1, 3);
   return true;
+}
+
+// An op-37 morph with a usable target part (same vertex count).
+bool rebuilt_morph(const StageInstance& in, const assets::StageAsset* asset) {
+  if (in.morph_part < 0 || !asset || static_cast<size_t>(in.morph_part) >= asset->parts.size() || static_cast<size_t>(in.part) >= asset->parts.size()) return false;
+  return asset->parts[static_cast<size_t>(in.part)].vertices.size() == asset->parts[static_cast<size_t>(in.morph_part)].vertices.size();
+}
+
+// A screen copy that one of the part's sub-meshes samples.
+bool rebuilt_screen(const StageInstance& in, const assets::StageAsset* asset) {
+  if (!in.screen || !asset || static_cast<size_t>(in.part) >= asset->parts.size()) return false;
+  const auto& subs = asset->parts[static_cast<size_t>(in.part)].submeshes;
+  int dx = 0, dy = 0;
+  return std::any_of(subs.begin(), subs.end(), [&](const assets::StageSubMesh& sub) { return in.screen_offset(sub.direct_page, dx, dy); });
 }
 
 bool packet_passes(const StageInstance& in, const StageMesh& mesh, const StageMesh::Packet& pk, float proj_h, float ox, float oy, bool tri_ok[2], const CullFrame& cf) {
@@ -554,7 +569,8 @@ void StagePipeline::draw(const StageMesh& mesh, const Mat4& proj, std::span<cons
   SDL_GPUCommandBuffer* command_buffer = ctx_->cmd();
   linear_draw_ = linear && mesh.sets_linear.size() == mesh.sets.size();
   const std::vector<TexRef>& sets = linear_draw_ ? mesh.sets_linear : mesh.sets;
-  // Morphing instances (op 37) are drawn last from blended copies of their vertices (see below); the static pass skips them.
+  // Morphing instances (op 37) and the ones sampling a screen copy are drawn last from per-frame copies of their vertices (see below); the
+  // static pass skips them.
   std::vector<const StageInstance*> morphing, grounds;
   struct Item {
     const StageInstance* in;
@@ -565,8 +581,7 @@ void StagePipeline::draw(const StageMesh& mesh, const Mat4& proj, std::span<cons
   std::vector<Item> opaque, semi;
   for (const StageInstance& in : instances) {
     if (in.part < 0 || static_cast<size_t>(in.part) >= mesh.parts.size()) continue;
-    if (in.morph_part >= 0 && asset && static_cast<size_t>(in.morph_part) < asset->parts.size() && static_cast<size_t>(in.part) < asset->parts.size() &&
-        asset->parts[static_cast<size_t>(in.part)].vertices.size() == asset->parts[static_cast<size_t>(in.morph_part)].vertices.size()) {
+    if (rebuilt_morph(in, asset) || rebuilt_screen(in, asset)) {
       morphing.push_back(&in);
       continue;
     }
@@ -700,26 +715,40 @@ void StagePipeline::draw(const StageMesh& mesh, const Mat4& proj, std::span<cons
 
   for (const StageInstance* pin : grounds) draw_cpu(mesh, *asset, proj, *pin, sets);
 
-  // Op 37 morph: vertices = lerp(A, B, t), rebuilt per frame in the dynamic ring buffer and drawn with the
-  // part's own sub-meshes (textures, blend) through the same per-draw uniforms as a static instance.
+  // Op 37 morph: vertices = lerp(A, B, t); a screen-copy instance: the UVs of its screen sub-meshes address the copy. Rebuilt per frame in the
+  // dynamic ring buffer and drawn with the part's own sub-meshes (textures, blend) through the same per-draw uniforms as a static instance.
   for (const StageInstance* pin : morphing) {
     const StageInstance& in = *pin;
     const assets::StagePart& from_part = asset->parts[static_cast<size_t>(in.part)];
-    const assets::StagePart& to_part = asset->parts[static_cast<size_t>(in.morph_part)];
     const u32 nv = static_cast<u32>(from_part.vertices.size()), ni = static_cast<u32>(from_part.indices.size());
     if (dyn_vused_ + nv > kDynVertices || dyn_iused_ + ni > kDynIndices) {
-      log::warn("stage: morph geometry overflow ({} vertices, {} indices)", nv, ni);
+      log::warn("stage: rebuilt geometry overflow ({} vertices, {} indices)", nv, ni);
       continue;
     }
-    const float morph_t = std::clamp(in.morph_t, 0.0f, 1.0f);
     std::vector<assets::StageVertex> blended(from_part.vertices.begin(), from_part.vertices.end());
-    for (u32 i = 0; i < nv; ++i) {
-      const assets::StageVertex& tv = to_part.vertices[i];
-      for (size_t k = 0; k < 3; ++k) {
-        blended[i].pos[k] += (tv.pos[k] - blended[i].pos[k]) * morph_t;
-        blended[i].centre[k] += (tv.centre[k] - blended[i].centre[k]) * morph_t;
+    if (rebuilt_morph(in, asset)) {
+      const assets::StagePart& to_part = asset->parts[static_cast<size_t>(in.morph_part)];
+      const float morph_t = std::clamp(in.morph_t, 0.0f, 1.0f);
+      for (u32 i = 0; i < nv; ++i) {
+        const assets::StageVertex& tv = to_part.vertices[i];
+        for (size_t k = 0; k < 3; ++k) {
+          blended[i].pos[k] += (tv.pos[k] - blended[i].pos[k]) * morph_t;
+          blended[i].centre[k] += (tv.centre[k] - blended[i].centre[k]) * morph_t;
+        }
       }
     }
+    // The packet texel u, v of a page at (dx, dy) in the copy addresses copy pixel (dx + u, dy + v); the texel centre is half a pixel in.
+    const bool screen = rebuilt_screen(in, asset);
+    if (screen)
+      for (const assets::StageSubMesh& asub : from_part.submeshes) {
+        int dx = 0, dy = 0;
+        if (!in.screen_offset(asub.direct_page, dx, dy)) continue;
+        for (u32 k = asub.first_index; k < asub.first_index + asub.index_count && k < ni; ++k) {
+          assets::StageVertex& vertex = blended[from_part.indices[k]];
+          const float copy_x = static_cast<float>(dx) + vertex.uv_raw[0] + 0.5f, copy_y = static_cast<float>(dy) + vertex.uv_raw[1] + 0.5f;
+          vertex.uv = {copy_x * in.screen_uv[0] + in.screen_uv[2], 1.0f - (copy_y * in.screen_uv[1] + in.screen_uv[3])};
+        }
+      }
     write_vertices(blended.data(), nv, dyn_vused_);
     write_indices(from_part.indices.data(), ni, dyn_iused_);
     bind_vertex_buffer(render_pass, dyn_vertices_.handle());
@@ -737,17 +766,23 @@ void StagePipeline::draw(const StageMesh& mesh, const Mat4& proj, std::span<cons
       const int blend = draw_blend(in, sub, factor, alpha);
       const Pipeline& pl = (ps1_jitter().on ? pipes_affine_ : pipes_)[std::clamp(in.cull, 0, 2)][blend];
       SDL_BindGPUGraphicsPipeline(render_pass, pl.handle());
-      bind_texture(*ctx_, render_pass, sets[static_cast<size_t>(sub.texture)]);
+      // A screen sub-mesh samples the copy at its rebuilt UVs, never through the op-36 window.
+      int dx = 0, dy = 0;
+      const bool on_screen = screen && in.screen_offset(asub.direct_page, dx, dy);
+      StageInstance plain = in;
+      plain.uv_scroll = plain.uv_scroll && !on_screen;
+      bind_texture(*ctx_, render_pass, on_screen ? in.screen : sets[static_cast<size_t>(sub.texture)]);
       PushData pd;
       pd.clip = proj * cam;
-      fill_push(pd, in, cue_, factor, alpha, smooth_fog_, linear_draw_);
+      fill_push(pd, plain, cue_, factor, alpha, smooth_fog_, linear_draw_);
+      if (on_screen) pd.params[1] += 32.0f;
       fill_lights(pd, proj, blend, lights_);
       push_uniforms(command_buffer, pd);
       SDL_DrawGPUIndexedPrimitives(render_pass, asub.index_count, 1, dyn_iused_ + asub.first_index, static_cast<int32_t>(dyn_vused_), 0);
     }
     dyn_vused_ += nv;
     dyn_iused_ += ni;
-    if (edge_blend() && !from_part.seams.empty()) draw_seams(mesh, from_part, mp, proj, cam, in, sets, blended, nullptr, ps1_jitter().on);
+    if (edge_blend() && !from_part.seams.empty() && !screen) draw_seams(mesh, from_part, mp, proj, cam, in, sets, blended, nullptr, ps1_jitter().on);
     // restore the static buffers for any later static draw in this pass
     bind_vertex_buffer(render_pass, mesh.vertices.handle());
     bind_index_buffer(render_pass, mesh.indices.handle());

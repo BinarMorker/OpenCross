@@ -66,11 +66,11 @@ struct MotionRequest {
   s32 params[3] = {0, 0, 0};
 };
 
-// Each launcher request below is followed by an FE 61 that opens it.
+// The screens the field's launcher opens; the op that requests one is followed by an FE 61 that waits until it has closed.
 enum class MenuKind : u8 {
   // FE 5B  character exchange
   PartyScreen,
-  // FE 61
+  // FE 72 (save points)
   MainMenu,
   // FE 5E (arg = shop id)
   ElementShop,
@@ -86,6 +86,8 @@ enum class MenuKind : u8 {
   Save,
   // FE 84: the New Game+ title list (launcher mode 0x30)
   NewGamePlus,
+  // FE 75 (arg = the Grand Slam round 0..2): the monster picker
+  MonsterPicker,
 };
 
 // FE 38 / FE 39 / FE 3A

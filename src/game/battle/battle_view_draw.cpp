@@ -100,8 +100,8 @@ void BattleView::replay(const render::Frame&, const render::Letterbox& lb, float
       case Op::Panel:
         // battle-win4-large, both art modes.
         if (win_base_.set && win_frame_.set) {
-          // Plain stretch of the subtractive base plate (approximated by a multiply), then the 9-sliced frame.
-          sprites_->set_blend(render::BlendMode::Multiply);
+          // Plain stretch of the subtractive base plate (as the element description window draws it), then the 9-sliced frame.
+          sprites_->set_blend(render::BlendMode::Subtract);
           sprites_->draw(win_base_.set, to_x(op.x + dx), to_y(op.y), op.w * canvas_scale, op.h * canvas_scale, 0, 0, 1, 1, 0xFFFFFFFFu);
           sprites_->set_blend(render::BlendMode::Alpha);
           nine_slice(win_frame_.set, win_frame_.w, win_frame_.h, to_x(op.x + dx), to_y(op.y), op.w * canvas_scale, op.h * canvas_scale, 28.0f, 14.0f * canvas_scale, 0xFFFFFFFFu);
@@ -247,9 +247,10 @@ void BattleView::draw_scene(const render::Frame& frame, const render::Letterbox&
   if (fx_warp_begin(frame)) {
     draw_scene_3d(fx_warp_frame_, lb, sprites_resume);
     fx_warp_end(frame, lb);
-    return;
+  } else if (!fx_cross_draw(frame, lb, sprites_resume)) {
+    draw_scene_3d(frame, lb, sprites_resume);
   }
-  draw_scene_3d(frame, lb, sprites_resume);
+  fx_tint_draw(frame, lb);
 }
 
 void BattleView::draw_scene_3d(const render::Frame& frame, const render::Letterbox& lb, bool sprites_resume) {

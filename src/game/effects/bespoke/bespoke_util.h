@@ -47,13 +47,6 @@ struct NegativeStrip {
   }
 };
 
-// Full-screen colour fade/flash: blend 2 = additive flash, 3 = subtractive darkening. level 0..255.
-inline void screen_fade(std::vector<FxPrim>& out, int blend, int level, u8 r = 255, u8 g = 255, u8 b = 255) {
-  if (level <= 0) return;
-  const float scale = static_cast<float>(std::min(level, 255)) / 255.0f;
-  out.push_back(rect_prim(0, 0, 320, 240, clamp8(static_cast<float>(r) * scale), clamp8(static_cast<float>(g) * scale), clamp8(static_cast<float>(b) * scale), blend, 0));
-}
-
 // World-space mesh -> Tri prims (two-sided). `world[i]`/`col[i]` per vertex; faces with a vertex behind the camera are skipped.
 inline void emit_mesh(const ViewParams& view, const FxMesh& mesh, const std::vector<Vec3>& world, const std::vector<std::array<u8, 3>>& colours,
                       int blend, std::vector<FxPrim>& out, u32 order_base = 0) {

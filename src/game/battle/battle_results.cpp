@@ -772,10 +772,10 @@ void BattleResults::set_auto(bool on) { impl_->auto_on = on; }
 
 bool BattleResults::open(const battle::Battle& finished, int scene_id) {
   Impl& impl = *impl_;
-  // Result codes 1 / 3 / 4 and scene 0x1DD show no screen; a flight or a scripted code 5+ shows it without rewards (they are a victory's).
+  // Result codes 1 / 3 / 4, scene 0x1DD and monster-party fights show no screen; a flight or a scripted code 5+ shows it without rewards (they are a victory's).
   const battle::Outcome outcome = finished.outcome();
   const int code = finished.result_code();
-  if (!impl.ctx || code == 1 || code == 3 || code == 4 || scene_id == 0x1DD) return false;
+  if (!impl.ctx || code == 1 || code == 3 || code == 4 || scene_id == 0x1DD || finished.monster_party()) return false;
   if (outcome != battle::Outcome::Victory && outcome != battle::Outcome::Fled && outcome != battle::Outcome::Scripted) return false;
   impl.muted = scene_id == 0x1D8 && code != 2;
   const battle::Rewards& rewards = finished.rewards();

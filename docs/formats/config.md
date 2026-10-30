@@ -49,7 +49,7 @@ Sections are listed in the order `Config::save` writes them; keys in each table 
 | `WideHud` | `full` | `default 16:9 full` | Widescreen only. `default` = battle HUD and main menu stay on the 4:3 canvas (shown as "4:3" in the window); `16:9` = spread to at most a 16:9 frame's width; `full` = to the window's edges. An unknown value keeps the default. |
 | `WideEdgeFade` | 4 | 0..96 | Widescreen only: fade the room picture's cut edge to black over this many layer pixels; 0 = hard cut. |
 | `Widescreen` | 0 | bool | The field, world map, battle and title sea fill the window's width; menus, dialogue, logo and movies stay 4:3. Off = 4:3 with black bars. F7 toggles it. |
-| `ArtMode` | `hd` | `hd original modded` | Art set: RDE's HD assets / the PS1 disc assets / HD plus the mods and OpenCross's own improvements. Any other value reads as `hd`. F6 cycles it. |
+| `ArtMode` | `hd` | `hd original modded` | Art set: RDE's HD assets / the PS1 disc assets / HD plus the mods and OpenCross's own improvements. `classic` is accepted as an alias of `original`. Any other value reads as `hd` and logs a warning. F6 cycles it. |
 | `Ps1Res` | 0 | bool | "Retro look": draw the 3D and the menus at PS1 resolution and scale up with sharp pixels. |
 | `RenderScale` | 1.00 | `0.5 0.75 1 1.5 2 3 4` | Resolution of the 3D pictures as a multiple of the output (with `Ps1Res`: of the 320 x 224 PS1 picture). The stored value snaps to the nearest listed value. |
 | `Ps1Jitter` | 0 | bool | Integer vertex snapping and affine texture mapping in the 3D passes. |

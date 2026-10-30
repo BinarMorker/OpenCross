@@ -10,7 +10,7 @@ The title room (`opening.bin`, rooms 1 / 8) has only three 2D layers: L0 = the P
 * `title.prd` is a stage-like drp (`battle_stage.md`) with 122 entries (record 23 on disc 1, 393 on disc 2), loaded by the engine at boot. It holds:
   * 36 type-0x02 scenery meshes (`kaso`, `joso`, `jos1/2`, `roof`, `far*`, `fish`, `kame`, `hugu`, `ei` ...);
   * 59 type-0x0A emitters that instance them (sprite type 14);
-  * 11 type-0x10 sequences (`tit0..tit3`, children `indi`, `indj`, `kill`, `kil2`, `kil3`, `kilj`, and `mo1c`, seven controller-rumble ramps (op 0x29) that no sequence of the pack starts);
+  * 11 type-0x10 sequences (`tit0..tit3`, children `indi`, `indj`, `kill`, `kil2`, `kil3`, `kilj`, and `mo1c`, seven controller-rumble ramps (op 0x29) that the field's playback of movie 2 starts, `room_effects.md` 5.2);
   * 14 type-0x0C camera shots (`k001`, `k002`, `j001..j003`, `j101/2`, `j201..3`, `j301..3`, `1`). A `titN` sequence selects camera shots (op 0x23, with delays), starts emitters (0x22) and starts child sequences (0x2F); its screen-colour (0x2B) and tint-bracket (0x3F) commands are not presented in the title.
 * `title.ltd` is a cpt of VRAM uploads `{u32 0x1101 CLUT | 0x1100 image, u16 x, u16 y, u16 dx, u16 dy, u16 w (halfwords), u16 h, data}`; the VRAM position is (x + dx, y + dy). Five blocks, all uploaded (they are not animation frames):
   * CLUT rows at (256, 228), 256 x 12;

@@ -64,6 +64,9 @@ class MainMenu {
   bool save_locked() const;
 
   void open(GameState& state, bool can_save);
+  // The ending's save prompt (field op FE 85): the Save screen without the Save / Load list, starting on the save choice; Cancel on
+  // the choice closes the menu, Cancel on a file list returns to the choice.
+  void open_save_list(GameState& state);
   void close();
   bool closed() const;
   // A file was written since open(); the script reads it as variable 0x4C (SAVE_RESULT) for the ending's save prompt.

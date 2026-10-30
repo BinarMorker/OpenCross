@@ -84,9 +84,14 @@ struct FxHooks {
   std::function<void(int phase)> form_swap;
   // Clears the depth cue flag the pack's op 0x24 set (kamei state 3).
   std::function<void()> fog_off;
+  // The GTE light rows / colour columns built for a world point (PS1 axes) from the battle's light slots, and the back colour (bytes / 256):
+  // what the lit packers read (kamei's dome). False = no lighting (dummy stage).
+  std::function<bool(const Vec3& pos, LightMatrices& matrices, std::array<float, 3>& back)> lights;
   // The global anmseq word 0 that battle scripts write: spark's impact helper runs while it is non-zero and clears it at the last slot.
   std::function<int()> script_gate;
   std::function<void()> clear_script_gate;
+  // The song-change request of the field's music player: the current song ends and `song` starts (lasdes2 ops 0x101 / 0x103).
+  std::function<void(int song)> play_song;
 };
 // ---- battle models the overlays steer (PS1 model block fields) ------------------------------------------------
 // Units and axes are the PS1's: world y down, positions in world units (the 20.12 fields >> 12), angles 4096 = one turn, scale 4096 = 1.0.
@@ -292,11 +297,27 @@ struct FxModels {
   bool env_clut_set = false;
   // Pad 0's newly pressed buttons this tick in the PS1 bit layout (0x20 = the confirm button; 155slot stops a reel on it).
   u16 pad_edge = 0;
-  // miki: the displayed frame is copied to VRAM (x, y) at OT entry `ot` every frame (x < 0 = none). Not consumed
-  // by the battle host yet (the pack meshes sampling that page keep the pack's texels).
+  // miki: the picture is copied to VRAM (x, y) at OT entry `ot` every frame (x < 0 = none); the battle host makes the copy and the pack
+  // mesh faces on that direct-colour page sample it (BattleView::fx_draw).
   struct Capture {
     int x = -1, y = 0, ot = 0;
   } capture;
+  // A camera cross-fade (lasdes2 ops 0x104 - 0x106): a second camera task plays shot `shot` of the pack's bank (`serial` changes on every
+  // start; the host cuts it to key 0 then) while the battle camera keeps running. The picture is the battle camera's view, every channel
+  // lowered by `fill` (0..255, subtractive), plus the second camera's view times alpha / 128 (additive). `promote`: the battle camera stops
+  // and the second one takes its place (the cross-fade is over); `stop`: the second camera ends. The host consumes both requests.
+  struct CrossView {
+    std::string shot;
+    int serial = 0;
+    int alpha = 0, fill = 0;
+    bool promote = false, stop = false;
+  } cross;
+  // A full-screen flat colour drawn over the finished picture (lasdes2 op 0x10D): mode 0 opaque (nothing while the colour is black),
+  // 1..4 the semi-transparency ABR mode - 1.
+  struct Tint {
+    u8 rgb[3] = {0, 0, 0};
+    int mode = 0;
+  } tint;
   FxModel* caster(int i) { return i >= 0 && static_cast<size_t>(i) < casters.size() ? &units[static_cast<size_t>(casters[static_cast<size_t>(i)])] : nullptr; }
   FxModel* target(int i) { return i >= 0 && static_cast<size_t>(i) < targets.size() ? &units[static_cast<size_t>(targets[static_cast<size_t>(i)])] : nullptr; }
 };
@@ -504,7 +525,6 @@ void flatten_prims(const std::vector<FxPrim>& sorted, std::vector<FlatQuad>& out
 // ---- registration of the builtin modules (called by the registry) ------------------------------------------------------------------
 void register_band_wipes(BespokeRegistry& registry);
 void register_line_rings(BespokeRegistry& registry);
-void register_death_dissolves(BespokeRegistry& registry);
 void register_mesh_deforms(BespokeRegistry& registry);
 void register_motion_tasks(BespokeRegistry& registry);
 // actor_script.cpp: 19helf golem shine opthedo kamedes 41grav 43acce 22torune kamei + state-only
@@ -527,7 +547,7 @@ void register_ground_ports(BespokeRegistry& registry);
 void register_tech_ports(BespokeRegistry& registry);
 // mesh_techs.cpp: jakotu fnoise rakugaki hensin ghost2 miki (private model draws, model_draw.h)
 void register_mesh_techs(BespokeRegistry& registry);
-// death_ports.cpp: garadeth mushi ki_deth drg_deth octdeth daimou_d + the dissolves, lasdes1
+// death_ports.cpp: garadeth mushi ki_deth drg_deth octdeth daimou_d + the dissolves, lasdes1, lasdes2
 void register_death_ports(BespokeRegistry& registry);
 // screen_ports.cpp: muteki 155slot
 void register_screen_ports(BespokeRegistry& registry);

@@ -69,8 +69,9 @@ class SequencePlayer {
   bool start_caster_clone(std::string_view name, int caster);
   // Auto-start of the stock hosts: 'own' when caster == target, else 'main'.
   bool start_main(bool caster_is_target = false);
-  // D7 STOP_EFFECT: unlinks the task only (emitters it started keep running). "0000" stops all but 'loop'.
+  // D7 STOP_EFFECT: unlinks the tasks of `name` only (emitters they started keep running).
   void stop(std::string_view name);
+  // D7 "0000": unlinks every task, 'loop' included, and ends the screen shake.
   void stop_all();
 
   // One 60 Hz tick.

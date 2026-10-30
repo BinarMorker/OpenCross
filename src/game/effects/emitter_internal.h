@@ -25,7 +25,7 @@ constexpr u32 kFlagFaceVelMask = 3u << 13;
 // With bit 15, multiply the actor's attach joint rotation into the matrix.
 constexpr u32 kFlagJointRot = 1u << 7;
 constexpr u32 kFlagRelParent = 1u << 15, kFlagZyx = 1u << 16, kFlagFixedSlot = 1u << 23, kFlagCamRel = 1u << 24;
-constexpr u32 kFlagViewSpace = 1u << 25, kFlagWorldQuad = 1u << 26, kFlagNoDeathSpawn = 1u << 27, kFlagExt = 1u << 29;
+constexpr u32 kFlagViewSpace = 1u << 25, kFlagWorldQuad = 1u << 26, kFlagNoDeathSpawn = 1u << 27, kFlagScreenTest = 1u << 28, kFlagExt = 1u << 29;
 
 // Nested spawn limit (death / child chains).
 constexpr int kMaxDepth = 6;

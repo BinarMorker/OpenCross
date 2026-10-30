@@ -1,7 +1,7 @@
 #pragma once
 // Room backdrop: loads a field room through the VFS, uploads its background layers and draws them in the field picture
-// (320 x 224 buffer rows, RDE's framing: render::Letterbox::field) scaled to the window (parallax groups, per-layer visibility, optional RDE HD chip2 set), plus the shared
-// floor shadows and the actor pass. It owns the room scene, walk mesh and projection camera but no game state: the scroll
+// (320 x 224 buffer rows, RDE's framing: render::Letterbox::field) scaled to the window (parallax groups, per-layer visibility, optional RDE HD chip2 set), plus the actor
+// pass. It owns the room scene, walk mesh and projection camera but no game state: the scroll
 // position, the actors and the player are driven by FieldWorld (game/field_world.h).
 #include <future>
 #include <array>
@@ -109,14 +109,9 @@ class RoomView {
   float edge_fade = 0.0f;
 
   // ---- drawing ----------------------------------------------------------------------------------------------------
-  struct Shadow {
-    float x = 0, y = 0, z = 0;
-    // The shadow quad's half extents (op 8C RECT_SIZE, default 0x26), NOT the 8B radius.
-    float half_w = 38, half_h = 38;
-  };
   // `alpha` (0..1) interpolates between the last two simulated ticks. Background first (call between SpriteBatch begin()
   // and end()), then the actors (3D pass, outside SpriteBatch begin/end).
-  void draw(render::SpriteBatch& sprites, float view_w, float view_h, float alpha, std::span<const Shadow> shadows = {}) const;
+  void draw(render::SpriteBatch& sprites, float view_w, float view_h, float alpha) const;
   // `looks` (optional, parallel to `actors`) = per-actor light colour + water rule (room_lighting.h); without it every
   // actor uses Actor::tint and is dry.
   void draw_actors(render::MeshPipeline& meshes, const render::Frame& frame, float alpha, std::span<const Actor* const> actors,
@@ -169,16 +164,12 @@ class RoomView {
   double* hd_upload_ms_ = nullptr;
   std::future<std::pair<std::optional<import::Chip2>, std::string>> chip2_future_;
   void clear();
-  void draw_shadow(render::SpriteBatch& sprites, const render::Letterbox& lb, float scroll_x, float scroll_y,
-                   const Shadow& shadow) const;
 
   const vfs::Vfs* files_ = nullptr;
   render::GpuContext* ctx_ = nullptr;
   render::SpriteBatch* sprites_ = nullptr;
   render::MeshPipeline* meshes_ = nullptr;
   render::Sampler sampler_;
-  render::Texture shadow_tex_;
-  render::TexRef shadow_set_;
   render::Sampler fade_sampler_;
   // 128 x 1 black, alpha 255 -> 0 (the widescreen edge fade ramp).
   render::Texture fade_tex_;

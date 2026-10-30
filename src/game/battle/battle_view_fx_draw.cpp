@@ -87,6 +87,7 @@ void BattleView::fx_end() {
   pa_.handle.reset();
   fx_state_log("pack end");
   fx_grey_apply(true);
+  fx_cross_.on = false;
   // The screen copy warp (the zoom-blur double image) is a global of the effect system: the pack end does not clear it, the next
   // effect start does, and so does the battle's idle camera handler while no shot / timeline runs. A pack
   // that ends (or is cut short) with the warp still on would leave every later frame doubled until some next pack: off at the pack end, unless
@@ -340,6 +341,14 @@ void BattleView::fx_draw(const render::Frame& frame, const render::Letterbox& lb
   render::StagePipeline::DepthCue mesh_cue;
   mesh_cue.active = fx_fog_on_;
   mesh_cue.r = fog_cur_.r, mesh_cue.g = fog_cur_.g, mesh_cue.b = fog_cur_.b, mesh_cue.near = fog_cur_.near, mesh_cue.far = fog_cur_.far;
+  // An overlay's frame copy (miki): the mesh faces on direct-colour pages inside the copy's 320 x 224 VRAM rectangle sample the picture as
+  // drawn up to the request's ordering-table slot (everything filed deeper). The copy is made in the painter pass below, before its first
+  // item at or above that slot, so those faces go through the painter's sort whatever their blend.
+  const effects::FxModels* copy_models = fx_->bespoke_models();
+  const bool copy_on = copy_models && copy_models->capture.x >= 0 && fx_copy_ensure(frame, lb);
+  const int copy_origin = copy_on ? copy_models->capture.x | copy_models->capture.y << 16 : -1;
+  const int copy_slot = copy_on ? copy_models->capture.ot : 0;
+  bool copy_pending = false;
   {
     std::vector<effects::EmitterSystem::MeshInstance> inst;
     fx_->collect_meshes(view, alpha_, inst);
@@ -363,6 +372,8 @@ void BattleView::fx_draw(const render::Frame& frame, const render::Letterbox& lb
         if (const int wu = mi.sprite_type == 14 ? fx_weapon_mesh_unit(*mi.name) : -1; wu >= 0) weapon_inst.emplace_back(wu, &mi);
         continue;
       }
+      if (asset && static_cast<size_t>(pit->second) < asset->parts.size() && mi.off_screen(asset->parts[static_cast<size_t>(pit->second)].cull_points, view))
+        continue;
       render::StageInstance in;
       in.part = pit->second;
       for (size_t k = 0; k < 9; ++k) in.cam[k] = mi.mat.m[k];
@@ -393,6 +404,19 @@ void BattleView::fx_draw(const render::Frame& frame, const render::Letterbox& lb
           for (const auto& op : fx_->emitters().header_def(static_cast<size_t>(mi.owner)).ops)
             if (op.op == 0x36)
               if (auto* scroll = std::get_if<assets::FxUvScroll>(&op.arg)) in.uv_window = {scroll->off_u, scroll->off_v, scroll->win_w, scroll->win_h};
+      }
+      if (copy_on && asset && static_cast<size_t>(in.part) < asset->parts.size()) {
+        const auto& subs = asset->parts[static_cast<size_t>(in.part)].submeshes;
+        in.screen = fx_copy_set_;
+        in.screen_origin = copy_origin;
+        in.screen_uv = {lb.scale / fw, lb.scale_y / fh, lb.ox / fw, lb.oy / fh};
+        int dx = 0, dy = 0;
+        if (std::any_of(subs.begin(), subs.end(), [&](const assets::StageSubMesh& sub) { return in.screen_offset(sub.direct_page, dx, dy); })) {
+          copy_pending = true;
+          semi_meshes.push_back({in, asset == own_asset});
+          continue;
+        }
+        in.screen = {};
       }
       if (in.blend != 0) semi_meshes.push_back({in, asset == own_asset});
       else (asset == own_asset ? own : res).push_back(in);
@@ -570,8 +594,18 @@ void BattleView::fx_draw(const render::Frame& frame, const render::Letterbox& lb
   std::stable_sort(items.begin(), items.end(), [](const Item& lhs, const Item& rhs) { return lhs.slot != rhs.slot ? lhs.slot > rhs.slot : lhs.order > rhs.order; });
   particles_.begin(frame, static_cast<float>(frame.extent.width), static_cast<float>(frame.extent.height), fx_particle_pass_);
   fx_particle_pass_ = true;
+  // The frame copy: the picture so far into fx_copy_rt_ (the rendering resumes with its depth cleared: what follows is filed nearer and
+  // drawn over it, as in the ordering table).
+  auto copy_picture = [&] {
+    copy_pending = false;
+    particles_.end();
+    ctx_->copy_color(fx_copy_rt_);
+    frame.set_scissor(mesh_scissor);
+    particles_.begin(frame, static_cast<float>(frame.extent.width), static_cast<float>(frame.extent.height), true);
+  };
   for (size_t ii = 0; ii < items.size(); ++ii) {
     const Item& it = items[ii];
+    if (copy_pending && it.slot <= copy_slot) copy_picture();
     // A run of semi-transparent mesh objects: drawn through the stage pipeline between the particle batches.
     if (it.kind == 3) {
       std::vector<render::StageInstance> run_own, run_res;
@@ -618,6 +652,8 @@ void BattleView::fx_draw(const render::Frame& frame, const render::Letterbox& lb
       particles_.quad(white_.set, quad.blend, x, y, u, v, quad.c, static_cast<float>(quad.slot) / render::kDepthRange);
     }
   }
+  // Nothing at or above the slot: the copy is still made (a face filed deeper samples it next frame, like the VRAM page).
+  if (copy_pending) copy_picture();
   particles_.end();
   fx_draw_screen(frame, lb);
 }

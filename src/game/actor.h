@@ -269,13 +269,17 @@ class Actor {
   bool attach_frame(int point, float rot[9], float pos[3]) const;
   // Model rotation without scale (row-major 3x3): the entity matrix x the model rotation of the engine.
   void model_rotation(float rot[9]) const;
-  // World matrix of the joint of attach point `point` (model_matrix x joint palette, scale included) and the point's joint-space offset
-  // (attach table entry + its joint's composite matrix). False without a model / joint.
-  bool attach_joint(int point, render::Mat4& joint_world, float offset[3]) const;
-  // Attached display (D6 + FE 46 / FE 47): the model is drawn with this world matrix (rotation x scale + translation,
-  // the parent joint's scale included) instead of the actor pose; the translation is interpolated between ticks. clear_attached() ends it.
-  void set_attached(const render::Mat4& world);
-  void clear_attached() { attached_ = false; }
+  // World matrix of the joint of attach point `point` (model_matrix x joint palette at render fraction `alpha`, scale included) and the
+  // point's joint-space offset (attach table entry + its joint's composite matrix). False without a model / joint.
+  bool attach_joint(int point, float alpha, render::Mat4& joint_world, float offset[3]) const;
+  // Attached display (D6 + FE 46 / FE 47): the model is drawn with the parent's joint matrix of attach point `point` x `local` (the
+  // joint-space translation, rotation and scale) instead of the actor pose. The parent's joint is taken at the same render fraction
+  // as the drawn frame, so the model stays rigidly on the parent however the parent's pose is interpolated. clear_attached() ends it.
+  void set_attached(const Actor* parent, int point, const render::Mat4& local);
+  void clear_attached() {
+    attached_ = false;
+    attach_parent_ = nullptr;
+  }
   bool attached() const { return attached_; }
 
   // Anim-sequence op 1D: `fl pt name name ox oy oz rx ry rz` = start the room emitters named `name` with a follower on
@@ -509,7 +513,9 @@ class Actor {
   } head_;
   std::vector<BoneEmitterRequest> bone_emitters_;
   bool attached_ = false;
-  render::Mat4 attached_cur_, attached_prev_;
+  const Actor* attach_parent_ = nullptr;
+  int attach_point_ = 0;
+  render::Mat4 attach_local_;
 
   // The move keeps its 3D length on a slope.
   bool slope_step(const WalkMesh& walk, float dx, float dz);

@@ -1,7 +1,7 @@
 #pragma once
 // Dopplegang creature list, 220 {u16, s16} records generated from the retail battle overlay. Index = pool slot (= the pool
 // slot byte of the monster records that map to it, and the monster record whose stats the caster takes). `model` = battle
-// model number (kBattleModels index); `val` is only tested != 0 by the debug creature list. Big Catch's power term reads
+// model number (kBattleModels index); `val` is the Grand Slam picker's model scale (4096 = 1, 0 = not drawn). Big Catch's power term reads
 // `model`: max(10, (10000 - model) / 200) * 100 replaces the grid slot term.
 #include <array>
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 
+#include "ui/menu/save_layout.h"
 #include "vfs/vfs.h"
 
 namespace oc::ui {
@@ -23,14 +24,6 @@ int opposite_bit(int colour_bit) {
     default: return 0;
   }
 }
-// Colour mask -> mask of the opposite colours (sorting mode 0 maps the innate bits this way).
-int opposite_mask(int colour_mask) {
-  int opposite = 0;
-  for (int bit = 0x04; bit <= 0x80; bit <<= 1)
-    if (colour_mask & bit) opposite |= opposite_bit(bit);
-  return opposite;
-}
-
 }  // namespace
 
 // ---------------------------------------------------------------------------------------------------------- rules
@@ -173,6 +166,14 @@ int GameState::item_count(int id) const {
     if (entry.id == id) total += entry.qty;
   return total;
 }
+bool GameState::fits(const save::ItemStack* stacks, size_t count, int id) {
+  if (id <= 0) return false;
+  for (size_t i = 0; i < count; ++i)
+    if ((stacks[i].id == id && stacks[i].qty > 0) || stacks[i].id == 0 || stacks[i].qty == 0) return true;
+  return false;
+}
+bool GameState::element_fits(int id) const { return fits(slot.elements.data(), slot.elements.size(), id); }
+bool GameState::item_fits(int id) const { return fits(slot.items.data(), slot.items.size(), id); }
 bool GameState::add_element(int id) { return add_to(slot.elements.data(), slot.elements.size(), id); }
 bool GameState::take_element(int id) { return take_from(slot.elements.data(), slot.elements.size(), id); }
 bool GameState::add_item(int id) { return add_to(slot.items.data(), slot.items.size(), id); }
@@ -230,9 +231,8 @@ Why GameState::can_place(int character, int row, int col, int id) const {
   if (occ && rules->el_fixed(occ)) return Why::Fixed;
   if (!rules->is_element(id) || !eligible(character, id)) return Why::NotEligible;
   if (!rules->window_ok(id, row)) return Why::Window;
-  int have = element_count(id);
-  if (occ == id) have += rules->el_stack(id) ? std::max(1, cell_count(character, row, col)) : 1;
-  if (have < 1) return Why::NoStock;
+  if (element_count(id) < 1) return Why::NoStock;
+  if (occ && !element_fits(occ)) return Why::Full;
   return Why::Ok;
 }
 
@@ -242,22 +242,23 @@ Why GameState::can_remove(int character, int row, int col) const {
   if (occ == 0) return Why::Empty;
   if (rules->el_fixed(occ)) return Why::Fixed;
   if (!cell_available(character, row, col)) return Why::Locked;
+  if (!element_fits(occ)) return Why::Full;
   return Why::Ok;
 }
 
+// The new copies are taken before the occupant goes back to the stock, so a refill of the same element counts only what the stock
+// held, and a return to a stack at 99 is accepted without raising the count.
 Why GameState::place(int character, int row, int col, int id) {
   const Why why = can_place(character, row, col, id);
   if (why != Why::Ok) return why;
   const int cell = cell_index(character, row, col);
   save::SaveChar& ch = slot.chars[static_cast<size_t>(character)];
   const int occ = cell_element(character, row, col);
-  if (occ) {
-    const int copies = rules->el_stack(occ) ? std::max(1, static_cast<int>(ch.equipped_qty[static_cast<size_t>(cell)])) : 1;
-    for (int i = 0; i < copies; ++i) add_element(occ);
-  }
+  const int occ_copies = !occ ? 0 : rules->el_stack(occ) ? static_cast<int>(ch.equipped_qty[static_cast<size_t>(cell)]) : 1;
   const int want = rules->el_stack(id) ? kStackMax : 1;
   int taken = 0;
   while (taken < want && take_element(id)) ++taken;
+  for (int i = 0; i < occ_copies; ++i) add_element(occ);
   ch.grid[static_cast<size_t>(cell)] = static_cast<u16>(id);
   if (rules->el_stack(id)) ch.equipped_qty[static_cast<size_t>(cell)] = static_cast<u8>(taken);
   return Why::Ok;
@@ -270,7 +271,7 @@ Why GameState::remove(int character, int row, int col) {
   save::SaveChar& ch = slot.chars[static_cast<size_t>(character)];
   const int occ = cell_element(character, row, col);
   const bool stack = rules->el_stack(occ);
-  const int copies = stack ? std::max(1, static_cast<int>(ch.equipped_qty[static_cast<size_t>(cell)])) : 1;
+  const int copies = stack ? static_cast<int>(ch.equipped_qty[static_cast<size_t>(cell)]) : 1;
   for (int i = 0; i < copies; ++i) add_element(occ);
   ch.grid[static_cast<size_t>(cell)] = 0;
   if (stack) ch.equipped_qty[static_cast<size_t>(cell)] = 0;
@@ -299,6 +300,19 @@ int GameState::clear_all(int character) {
           remove(character, row, col) == Why::Ok)
         ++cleared;
   return cleared;
+}
+
+int GameState::learn_tech(int character, int rows, int tech) {
+  const data::StatRec* record = rec(character);
+  if (!record || character >= save::kNumChars || rows < 1 || rows > kRows) return -1;
+  int cells = 0;
+  for (int row = 0; row < rows; ++row) cells += std::popcount(static_cast<unsigned>(record->level_mask(row) & (row == rows - 1 ? 0xFF : 0xFFFF)));
+  if (cells < 1 || cells > 48) return -1;
+  u16& cell = slot.chars[static_cast<size_t>(character)].grid[static_cast<size_t>(cells - 1)];
+  const int held = cell & 0x1FF;
+  if (held != 0 && held < 0x80) add_element(held);
+  cell = static_cast<u16>(tech | (cell & 0xC000));
+  return cells - 1;
 }
 
 // The grid editor's list holds two label rows ahead of the occupied stock slots and ends at 192 entries, so only the first 190
@@ -394,7 +408,7 @@ void GameState::sort_elements(SortMode mode, int character) {
     int group, sub;
   };
   std::vector<SortEntry> entries;
-  const int opposite = opposite_mask(innate(character) & 0xFC);
+  const int innate_colour = innate(character) & 0xFC, opposite = opposite_bit(innate_colour);
   for (size_t i = 0; i < slot.elements.size(); ++i) {
     const auto& stack = slot.elements[i];
     if (stack.id == 0 || stack.qty == 0) continue;
@@ -403,13 +417,9 @@ void GameState::sort_elements(SortMode mode, int character) {
     switch (mode) {
       case SortMode::InnateFirst: {
         const int col = rules->el_colour(id);
-        if (id >= 0x01 && id <= 0x30) {
-          if (col & opposite) entry.group = 0, entry.sub = id;
-          else if (col & ~opposite) entry.group = 1, entry.sub = id;
-          else entry.group = 2, entry.sub = entry.slot;
-        } else {
-          entry.group = 3, entry.sub = id;
-        }
+        if (col & innate_colour) entry.group = 0, entry.sub = id;
+        else if (col & opposite) entry.group = 2, entry.sub = entry.slot;
+        else entry.group = 1;
         break;
       }
       case SortMode::AttackFirst:
@@ -426,6 +436,20 @@ void GameState::sort_elements(SortMode mode, int character) {
         break;
     }
     entries.push_back(entry);
+  }
+  if (mode == SortMode::InnateFirst) {
+    // The middle group keeps the stock slots of the other groups and the holes as 0 and goes through an exchange sort over every
+    // slot that also swaps on a 0 in front: the ids come out ascending only where no hole lies between them.
+    std::vector<int> order(slot.elements.size(), -1);
+    for (size_t i = 0; i < entries.size(); ++i)
+      if (entries[i].group == 1) order[static_cast<size_t>(entries[i].slot)] = static_cast<int>(i);
+    auto key = [&](int entry) { return entry < 0 ? 0 : entries[static_cast<size_t>(entry)].id; };
+    for (size_t i = 0; i + 1 < order.size(); ++i)
+      for (size_t j = i; j < order.size(); ++j)
+        if (key(order[j]) < key(order[i]) || key(order[i]) == 0) std::swap(order[i], order[j]);
+    int position = 0;
+    for (int entry : order)
+      if (entry >= 0) entries[static_cast<size_t>(entry)].sub = position++;
   }
   std::stable_sort(entries.begin(), entries.end(),
                    [](const SortEntry& lhs, const SortEntry& rhs) { return lhs.group != rhs.group ? lhs.group < rhs.group : lhs.sub < rhs.sub; });
@@ -449,7 +473,8 @@ std::vector<int> GameState::usable_elements() const {
 
 Why GameState::use_element(int id, int target) {
   const PgRow* pg_entry = rules->pg_row(id);
-  if (!pg_entry || !pg_entry->usable() || element_count(id) <= 0 || target < 0 || target >= save::kNumChars) return Why::NoStock;
+  if (!pg_entry || !pg_entry->usable() || element_count(id) <= 0) return Why::NoStock;
+  if (!available(target)) return Why::NotEligible;
   save::SaveChar& ch = slot.chars[static_cast<size_t>(target)];
   if (pg_entry->heals()) {
     static const int kHeal[4] = {50, 100, 200, 0};
@@ -546,7 +571,10 @@ bool GameState::equip(int character, int eslot, int item) {
   save::SaveChar& ch = slot.chars[static_cast<size_t>(character)];
   const int old = equipped(character, eslot);
   if (item) take_item(item);
-  if (old) add_item(old);
+  if (old && !add_item(old)) {
+    if (item) add_item(item);
+    return false;
+  }
   if (eslot == 0) ch.weapon = static_cast<u16>(item);
   else if (eslot == 1) ch.armour = static_cast<u16>(item);
   else ch.accessory[static_cast<size_t>(eslot - 2)] = static_cast<u16>(item);
@@ -558,14 +586,7 @@ void GameState::unequip_accessories(int character) {
     if (equipped(character, k)) equip(character, k, 0);
 }
 
-int GameState::location_key(u32 scenario) {
-  static constexpr int kStart[30] = {0,  8,  16, 24,  26,  28,  30,  36,  52,  64,  72,  80,  88,  92, 100,
-                                     108, 112, 116, 124, 128, 140, 144, 156, 164, 172, 184, 195, 202, 209, 999};
-  int key = 0;
-  for (int start : kStart)
-    if (static_cast<int>(scenario) >= start) ++key;
-  return std::max(1, key);
-}
+int GameState::location_key(u32 scenario) { return save_layout::location_key(static_cast<int>(scenario)); }
 
 std::string GameState::location_name(const import::LangTables& lt, import::Lang lang, u32 scenario, std::string* second) {
   constexpr char kLf = char(10), kCr = char(13);

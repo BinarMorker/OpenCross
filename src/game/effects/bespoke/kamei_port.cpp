@@ -15,8 +15,8 @@
 // The morph draw: per packet the corners are the two meshes' vertices lerped ((a (0x1000 - R) + b R) >> 12), NCLIP(v0, v1, v2) > 0 only, as
 // GT4 / GT3 on the env page (tpage 0xF5 = page (320, 256) 8 bit, CLUT 0x3BC0) with UVs from the corner's vertex normal turned by the actor's
 // rotation (no camera): u = (vx >> 6) + 0x40, v = (vy >> 6) + 0xC0. Vertex normals: the face normals cross(P1 - P0, P2 - P0) >> 6 normalised,
-// summed into every corner and the corner normalised again after each face. The vertex colours of the meshes are all 0x80; the GTE light
-// colour is not reproduced: the packets keep 0x80.
+// summed into every corner and the corner normalised again after each face. The draw is lit: every corner colour is the GTE normal colour of
+// the first mesh's vertex normal (colour 0x80) under the battle's light slots at the shell's position and the back colour (lit_colour).
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -209,6 +209,12 @@ class Kamei : public OverlayFx {
       for (size_t k = 0; k < 3; ++k) normal[k] = (mesh_a.vnorm[i][k] * (0x1000 - weight) + mesh_b.vnorm[i][k] * weight) >> 12;
       uvs[i] = env_uv(pose_matrix, normal);
     }
+    LightMatrices lights;
+    std::array<float, 3> back{};
+    const bool lit = ctx_.hooks.lights && ctx_.hooks.lights(draw_pos_, lights, back);
+    std::vector<std::array<u8, 3>> colours(mesh_a.verts.size(), {0x80, 0x80, 0x80});
+    if (lit)
+      for (size_t i = 0; i < mesh_a.verts.size(); ++i) colours[i] = lit_colour(pose_matrix, mesh_a.vnorm[i], lights, back);
     for (const import::StageFace& face : mesh_a.faces) {
       FxPrim prim;
       prim.kind = face.n == 3 ? FxPrim::Kind::Tri : FxPrim::Kind::Quad;
@@ -229,7 +235,7 @@ class Kamei : public OverlayFx {
           break;
         }
         depth_sum += z;
-        prim.v[k] = {sx[k], sy[k], 0x80, 0x80, 0x80};
+        prim.v[k] = {sx[k], sy[k], colours[vi][0], colours[vi][1], colours[vi][2]};
         prim.u[k] = uvs[vi][0];
         prim.w[k] = uvs[vi][1];
       }
@@ -267,6 +273,20 @@ class Kamei : public OverlayFx {
     const int u = (unit[0] >> 6) + 0x40, v = (unit[1] >> 6) + 0xC0;
     const int halfword = ((v << 8) | u) & 0xFFFF;
     return {static_cast<u8>(halfword & 0xFF), static_cast<u8>(halfword >> 8)};
+  }
+  // The corner colour of the lit draw (GTE normal colour): the light rows are built for the shell's position with the light vectors negated
+  // and turned into model space by the actor's rotation, so per light c = max(0, -dir . (R n)) with the first mesh's normal n; colour =
+  // 0x80 * (back + sum light colour * c), clamped to 255.
+  static std::array<u8, 3> lit_colour(const Mat3& pose_matrix, const std::array<int, 3>& normal, const LightMatrices& lights, const std::array<float, 3>& back) {
+    const Vec3 turned = pose_matrix.apply({static_cast<float>(normal[0]) / 4096.0f, static_cast<float>(normal[1]) / 4096.0f, static_cast<float>(normal[2]) / 4096.0f});
+    std::array<float, 3> shade = back;
+    for (size_t i = 0; i < 3; ++i) {
+      const float facing = std::max(0.0f, -(lights.dir[i][0] * turned[0] + lights.dir[i][1] * turned[1] + lights.dir[i][2] * turned[2]));
+      for (size_t k = 0; k < 3; ++k) shade[k] += lights.rgb[i][k] * facing;
+    }
+    std::array<u8, 3> out;
+    for (size_t k = 0; k < 3; ++k) out[k] = static_cast<u8>(std::clamp(static_cast<int>(128.0f * shade[k]), 0, 255));
+    return out;
   }
   void load_meshes() {
     if (ctx_.pack_prd.empty()) return;

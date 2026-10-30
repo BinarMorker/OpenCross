@@ -152,6 +152,9 @@ class GpuContext {
   void begin_target(RenderTarget& target, const Frame& frame, Frame& out);
   void begin_target(RenderTarget& target, const Frame& frame, Frame& out, const float (&clear_rgba)[4]);
   void end_target(RenderTarget& target);
+  // Inside a frame: copies the colour of the rendering in progress (resolved when multisampled) into `target`'s colour image, scaled to
+  // its size with bilinear filtering, and resumes the rendering: colour kept, depth cleared.
+  void copy_color(RenderTarget& target);
   void clear_depth();
   void set_scissor(const Rect& rect);
   void wait_idle();

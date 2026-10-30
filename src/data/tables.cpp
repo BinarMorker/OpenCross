@@ -213,6 +213,10 @@ bool GameTables::load(const vfs::Vfs& game_fs, std::string* err) {
   if (auto exe = game_fs.read("cdrom/prog/slps_023.64"); exe && exe->size() >= 0x5B584 + 256)
     rng_table.assign(exe->begin() + 0x5B584, exe->begin() + 0x5B584 + 256);
 
+  // --- encounter variant bands
+  if (auto prg = game_fs.read("cdrom/prog/btlinit.prg"); prg && prg->size() >= 0x6AF8 + 8 * 4)
+    for (size_t i = 0; i < 8; ++i) variant_bands.push_back({rd16(*prg, 0x6AF8 + i * 4), rd16(*prg, 0x6AF8 + i * 4 + 2)});
+
   // --- names
   import::LangTables lang_tables;
   lang_tables.init(&game_fs);

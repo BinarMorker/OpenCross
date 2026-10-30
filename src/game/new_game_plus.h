@@ -3,7 +3,7 @@
 //   * the ending's save prompt (field op FE 85): every character of the roster gives its grid elements and gear back to the stock,
 //     variable 0x7E = 3, then the save list (launcher mode 4) writes the "cleared" save;
 //   * Continue of a cleared save re-enters the ending room with ROOM_PARAM 3: FE 84 keeps the cleared game in the carry-over buffer
-//     and the FE 61 after it opens the title list in variant 2 (launcher mode 0x30): "New Game +" / "Continue +";
+//     and opens the title list in variant 2 (launcher mode 0x30): "New Game +" / "Continue +";
 //   * the carry-over takes the cleared game into the new game (New Game+) or into a loaded save (Continue+);
 //   * FE 3F (Serge's room at the real start): the dream party is dropped; a normal game also gets fresh data, a New Game+ keeps the
 //     carried state and gets the Relief Charm + Time Shifter.
@@ -41,7 +41,7 @@ inline constexpr int kNgTitleParam = 3;
 
 // Launcher mode -> title variant (1 title list, 2 New Game+ list, 3 save list only; 0 = main menu).
 int title_variant(int launcher_mode);
-// The field op that selects the launcher mode before FE 61: FE 59 -> 3, FE 84 -> 0x30, FE 85 -> 4.
+// The field op that selects the launcher mode (the FE 61 after it waits for the screen): FE 59 -> 3, FE 84 -> 0x30, FE 85 -> 4.
 int launcher_mode_for_op(int fe_op);
 
 // Quantity != 0 is tested separately.

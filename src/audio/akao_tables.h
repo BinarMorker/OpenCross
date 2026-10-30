@@ -6,6 +6,14 @@ namespace oc::audio {
 
 // Stereo pan gains: left gain = [idx], right gain = [idx ^ 0xFF]; Q15 (32768 = 1.0).
 extern const s16 kAkaoPanGain[256];
+// The driver's random bytes (E1 random pitch), read at the 60 Hz frame counter.
+extern const u8 kAkaoRandom[256];
+// E1 random pitch of a note's pitch register: bit 7 of the random byte clear raises it by (pitch * depth >> 8) * byte >> 7, set lowers
+// it by (pitch * depth >> 8) * byte >> 9 (32-bit unsigned arithmetic).
+inline u32 akao_random_pitch(u32 pitch, u32 depth, u8 random) {
+  const u32 scaled = (pitch * depth >> 8) * random;
+  return random & 0x80 ? pitch - (scaled >> 9) : pitch + (scaled >> 7);
+}
 // SPU Gaussian interpolation filter (hardware constant, 512 entries): out = (g[0xFF-i]*s[-3] + g[0x1FF-i]*s[-2] + g[0x100+i]*s[-1] +
 // g[i]*s[0]) >> 15 with i = bits 4..11 of the voice pitch counter.
 extern const s16 kSpuGauss[512];

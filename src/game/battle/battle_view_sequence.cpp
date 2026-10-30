@@ -66,6 +66,18 @@ void BattleView::begin_group() {
       if (act_.casters.size() > 1) log::debug("battle: group cast element {} caster list {} units (first {})", e0.element, act_.casters.size(), act_.casters.front());
     }
   }
+  // A PC's double / triple tech (element byte 0x14 != 0xFF): the list is the casting PCs in the order of the record's character bytes, entry k
+  // with variant k, which need not start with the PC that chose it.
+  if (e0.kind == battle::ActionEvent::Kind::Element && act_.actor < battle::kPcSlots && e0.element > 0 &&
+      static_cast<size_t>(e0.element) < tables_->elements.size() && tables_->elements[static_cast<size_t>(e0.element)].b(0x14) != 0xFF) {
+    act_.casters.clear();
+    for (const u8 caster : e0.group) {
+      if (caster >= battle::kPcSlots) break;
+      act_.casters.push_back(caster);
+    }
+    if (act_.casters.empty()) act_.casters = {act_.actor};
+    log::debug("battle: combo tech {} caster list {} units (first {})", e0.element, act_.casters.size(), act_.casters.front());
+  }
 
   // The home pass outside the actor's own end of queue: after an ELEMENT command of a PC was issued every eligible unit goes home before the
   // cast starts. There is NO such pass at an ENEMY's action start: a bystander that was turned to Serge by his earlier attack keeps its yaw
@@ -357,10 +369,11 @@ void BattleView::tick_action() {
       }
       break;
     case Act::Phase::Release:
-      if ((actor_visual.script_done && pending_.empty() && !fx_) || act_.ticks > (fx_ ? 2000 : 600)) {
+      // A running pack ends itself by its own cap (BattleFxRun::kTickCap): the true ending's chain of sequences runs 5605 ticks.
+      if ((actor_visual.script_done && pending_.empty() && !fx_) || act_.ticks > (fx_ ? BattleFxRun::kTickCap : 600)) {
         if (battle_audit() && !(actor_visual.script_done && pending_.empty() && !fx_))
           battle_audit_note(std::format("release of element {} (unit {}) left by the {}-tick timeout (script_done {} pending {} pack {})", act_.ev.front().element, act_.actor,
-                                        fx_ ? 2000 : 600, actor_visual.script_done, pending_.size(), fx_ != nullptr));
+                                        fx_ ? BattleFxRun::kTickCap : 600, actor_visual.script_done, pending_.size(), fx_ != nullptr));
         actor_visual.vm.stop();
         act_.phase = Act::Phase::Settle;
         act_.ticks = 0;
@@ -373,13 +386,28 @@ void BattleView::tick_action() {
         act_.ticks = 0;
       }
       break;
-    case Act::Phase::Run:
-      // The party runs with the camera untouched; then the battle ends (the outro camera follows, tick_finish).
-      if (act_.ticks > kRunTicks) {
+    case Act::Phase::Run: {
+      // The party runs with the camera untouched; then the battle ends (the outro camera follows, tick_finish). Dropped loot holds the
+      // escape and opens the system window at (32, 144); the window ends with the hold, where the battle loop ends.
+      const bool dropped = !act_.ev.empty() && act_.ev.front().sys_msg >= 0;
+      if (dropped && act_.ticks == kRunTicks + kLootDropMsg) {
+        if (const std::string* row = lang_tables_.battle_message(static_cast<u32>(act_.ev.front().sys_msg), lang_); row && !row->empty()) {
+          ScriptMsgReq req;
+          req.sys = true;
+          req.unit = act_.actor;
+          req.text = *row + std::format("{{wend({})}}", kLootDropWait - kLootDropMsg);
+          req.has_pos = true;
+          req.x = 32;
+          req.y = 144;
+          smsg_open(req);
+        }
+      }
+      if (act_.ticks > kRunTicks + (dropped ? kLootDropWait : 0)) {
         act_.phase = Act::Phase::Settle;
         act_.ticks = 0;
       }
       break;
+    }
     case Act::Phase::Settle: {
       bool calm = true;
       for (int i = 0; i < battle::kUnits; ++i) {

@@ -113,7 +113,12 @@ struct SaveSlot {
   void set_gold(u32 amount);
   bool recruited(int char_id) const;
   void set_recruited(int char_id, bool on);
-  u8 progression() const { return head[head::kProgression]; }
+  // Summary copy of script variable 0 (SCENARIO), u16: the key of the slot list's location caption.
+  u16 progression() const { return static_cast<u16>(head[head::kProgression] | (head[head::kProgression + 1] << 8)); }
+  void set_progression(u16 value) {
+    head[head::kProgression] = static_cast<u8>(value & 0xFF);
+    head[head::kProgression + 1] = static_cast<u8>(value >> 8);
+  }
   u16 location() const;
   u8 stars_total() const { return head[head::kStarsTotal]; }
   u8 stars_current() const { return head[head::kStarsCurrent]; }

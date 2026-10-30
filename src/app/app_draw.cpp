@@ -476,6 +476,7 @@ void App::draw_field_ui(const SceneFrame& sf) {
     party_screen.set_hd(platform::art_is_hd(config.art_mode));
     party_screen.draw(frame, vw, vh, true);
   }
+  if (monster_picker_ok && monster_picker.active()) monster_picker.draw(frame, vw, vh);
 }
 
 // The title screen over the title room. Widescreen: the New Game / Continue menu is the static 4:3 menu picture; the 3D sea beside

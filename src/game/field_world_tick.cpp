@@ -81,6 +81,19 @@ void FieldWorld::table_op(u16 key, int arg, int index) {
     }
     return;
   }
+  // FE 7C: character `arg` gets weapon `index`; the weapon it held goes to the item stock.
+  if (key == 0xFE7C && gs_ && arg >= 0 && arg < save::kNumChars) {
+    save::SaveChar& ch = gs_->slot.chars[static_cast<size_t>(arg)];
+    if (ch.weapon) gs_->add_item(ch.weapon);
+    ch.weapon = static_cast<u16>(index);
+    return;
+  }
+  // FE 7D: character `arg` leaves its grid elements and its three accessories in the stock (FE 6F's per-character step).
+  if (key == 0xFE7D && gs_ && arg >= 0 && arg < save::kNumChars) {
+    gs_->clear_all(arg);
+    gs_->unequip_accessories(arg);
+    return;
+  }
   // FE 1B: window skin = U (variable 0x44 too, set by the VM).
   if (key == 0xFE1B) {
     gs_->skin = static_cast<u8>(std::clamp(arg, 0, 14));
@@ -141,10 +154,7 @@ void FieldWorld::set_global(script::Global which, s32 value) {
     case Global::WindowFrames:
       if (gs_) gs_->slot.frames = static_cast<u16>(value);
       break;
-    case Global::ControlYaw:
-      control_yaw_ = value & 0xFFF;
-      yaw_from_script_ = true;
-      break;
+    case Global::ControlYaw: control_yaw_ = value & 0xFFF; break;
     case Global::CameraYOffset: camera_.camera_y_offset = static_cast<float>(value); break;
     case Global::SubmergedOtPush: water_bias_ = value & 0x7FFF; break;
     case Global::PushStrength: push_strength_ = static_cast<s16>(value); break;
@@ -152,6 +162,9 @@ void FieldWorld::set_global(script::Global which, s32 value) {
     case Global::ExitTransition: exit_kind_ = static_cast<s16>(value); break;
     case Global::KeepSfxSlots: sfx_keep_slots_ = static_cast<u32>(value); break;
     case Global::BattleIntroAnchor: handoff_.battle_anchor = value; break;
+    // FE 75: the round, then the flag that opens the monster picker (the FE 61 after it waits for it).
+    case Global::Selection: picker_round_ = value; break;
+    case Global::SelectionFlag: request_menu(script::MenuKind::MonsterPicker, picker_round_); break;
     // Footstep listener, distance band, floor types and volume, read by play_footstep.
     case Global::FootstepVolume: footstep_.volume = value; break;
     case Global::FootstepDryType: footstep_.dry_type = value; break;
@@ -178,6 +191,27 @@ void FieldWorld::opaque_op(u16 key, std::span<const u8>) {
   // FE 6D: current stars = total stars.
   if (key == 0xFE6D) {
     gs_->slot.head[save::head::kStarsCurrent] = gs_->slot.head[save::head::kStarsTotal];
+    return;
+  }
+  // FE 66: the follower rings restart where the party stands now: ring 0 filled with the controlled entity, ring 1 with the slot 1
+  // member (the scripts run it after placing the party, so the followers do not walk back along the old trail).
+  if (key == 0xFE66) {
+    if (party_ent_[0] >= 0) {
+      const int lead = player_entity();
+      if (lead >= 0) trail_fill(0, trail_entry_of(ents_[static_cast<size_t>(lead)].actor));
+    }
+    if (party_ent_[1] >= 0) trail_fill(1, trail_entry_of(ents_[static_cast<size_t>(party_ent_[1])].actor));
+    return;
+  }
+  // FE 7E: Mojo's record name, when it is still the default "Lucky Dan" (game-font kana), becomes "Happy Dan" (two glyphs change).
+  if (key == 0xFE7E && gs_) {
+    constexpr size_t kMojo = 27;
+    constexpr std::array<u8, 12> kLucky = {0xF8, 0x40, 0xF8, 0x66, 0xF8, 0x20, 0xCA, 0xF8, 0x52, 0xF8, 0x47, 0x00};
+    std::array<u8, 16>& name = gs_->slot.chars[kMojo].name;
+    if (std::equal(kLucky.begin(), kLucky.end(), name.begin())) {
+      name[1] = 0x33;
+      name[5] = 0x5D;
+    }
     return;
   }
   // FE 1A: the three defeated-monster records are forgotten (the monsters respawn).
@@ -491,6 +525,7 @@ void FieldWorld::sim_tick() {
   }
   // Display segments of the pose (Actor::end_tick): scripts that step an actor every 2nd-4th tick.
   for (auto& ent_state : ents_) ent_state.actor.end_tick();
+  if (static const bool drift_log = std::getenv("OC_ATTACH_DRIFT") != nullptr; drift_log) check_attach_drift();
   // The fade ran at the top of this tick: switch rooms once it is black / white.
   if (jump_.active && trans_ == Trans::None && !watchdog_.sweep_probe) begin_jump(jump_.room, jump_.param);
   else if (trans_ == Trans::Out) step_transition();

@@ -167,6 +167,10 @@ void BattleView::script_event(const battle::pac::Event& event) {
     // 2C / 38: the HUD follows the stream, not the script that ran ahead.
     case EK::Cutscene:
       hud_off_ = event.a != 0;
+      if (event.a != 0) orbit_block_next_ = true;
+      break;
+    case EK::EngineFlag:
+      if (event.a == 0x39) hud_script_off_ = event.b == 0;
       break;
     // E2: waited for in script_pump (the window closes on the button / {wend}, smsg_tick / smsg_input).
     case EK::WaitDialogue: break;
@@ -214,7 +218,7 @@ void BattleView::script_event(const battle::pac::Event& event) {
       break;
     default:
       // Shade (85: unit bytes, kept by the rules), SyncPos (91), QuarterHp, Invuln,
-      // SfxMute, ScriptedDeath (5C: Battle::check_end), EngineFlag (39 / 7D / 81 / AF: VM state; 7D is read by the target label),
+      // SfxMute, ScriptedDeath (5C: Battle::check_end), EngineFlag (7D / 81 / AF: VM state; 7D is read by the target label),
       // SetResult, NoDrops, Defeated, Killed, Ghost, MenuCursor: consumed by the rules.
       break;
   }

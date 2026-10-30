@@ -24,7 +24,7 @@ SavePrev preview_of(const save::SaveSlot& data, int slot, int block) {
   preview.frames = data.playtime_frames();
   preview.gold = data.gold();
   preview.stars = data.stars_total();
-  preview.scenario = static_cast<u32>(data.head[0x40]) | (static_cast<u32>(data.head[0x41]) << 8);
+  preview.scenario = data.progression();
   preview.flags = data.summary_flags();
   return preview;
 }
@@ -47,7 +47,7 @@ void MainMenu::Impl::load_previews() {
   std::sort(refs.begin(), refs.end(), [](const save::SlotRef& lhs, const save::SlotRef& rhs) { return lhs.block < rhs.block; });
   size_t box = 0;
   for (const save::SlotRef& ref : refs) {
-    if (ref.slot < 0 || ref.slot >= 15 || box >= prev.size()) continue;
+    if (box >= prev.size()) break;
     try {
       prev[box++] = preview_of(save::read_slot(*card, ref.block), ref.slot, ref.block);
     } catch (const std::exception& error) {
@@ -70,7 +70,8 @@ int MainMenu::Impl::save_list_angle(int sel) {
 // an empty choice; confirm or 120 frames back to phase 0); phase 1 = the card's 2 x 8 box grid (card 1's box 0 is the auto-save, never
 // a manual save target; up / down swap rows, boxes 7 and 8 stay) or the page's list (file 0 is its auto-save, never a manual save
 // target; up / down one row, left / right one screen), with the overwrite / load confirmation on a used file. Cancel on the choice or
-// the list returns to phase 0.
+// the list returns to phase 0. The save-list-only mode (save_only) has no phase 0: Cancel on the choice closes the menu, on the list it
+// returns to the choice.
 void MainMenu::Impl::update_save(const Nav& nav) {
   if (save_phase == 0) {
     if ((nav.up || nav.down) && can_save) top_cur = 1 - top_cur, sfx(1);
@@ -95,7 +96,8 @@ void MainMenu::Impl::update_save(const Nav& nav) {
     if (nav.up) save_card = (save_card + 2) % 3, sfx(1);
     if (nav.down) save_card = (save_card + 1) % 3, sfx(1);
     if (nav.cancel) {
-      save_phase = 0;
+      if (save_only) closed = true;
+      else save_phase = 0;
       sfx(6);
     } else if (nav.ok) {
       sfx(8);
@@ -153,7 +155,7 @@ void MainMenu::Impl::update_save(const Nav& nav) {
     return;
   }
   if (nav.cancel) {
-    save_phase = 0;
+    save_phase = save_only ? 2 : 0;
     msg.clear();
     sfx(6);
     return;
@@ -357,18 +359,20 @@ void MainMenu::Impl::build_save() {
   // Box index; box 0 is the auto-save entry. Page: the row = the file number.
   const int cursor = save_phase == 0 ? -1 : on_page ? page_cur : load_mode ? load_cur : save_cur + 1;
   // Widescreen: list + dial right, slot grid left; the wide detail / message frames stay centred. The page's list takes the dial's place.
-  if (!(on_page && save_phase == 1)) {
+  if (!(on_page && save_phase == 1) && !save_only) {
     group(Right);
     save_dial();
   }
   group(Centre);
   // State 0: only the list + dial and frame 0x55 with the description of the highlighted choice. The save choice and its "No save
   // data" message keep them and add frame 0x56: "Please choose a slot." and the lines OpenCross / Slot 1 / Slot 2 (save_layout
-  // choice_y) with the pointer beside the current one.
+  // choice_y) with the pointer beside the current one. The save-list-only mode draws neither the list nor frame 0x55.
   if (save_phase != 1) {
-    Frame(85, sl::kTopMsgX, sl::kTopMsgY);
-    const std::u32string description = utf32(menu_str(top_cur == 0 ? 0x801F2BE0 : 0x801F2C18, top_cur == 0 ? "Save a File" : "Load a File"));
-    HL(sl::kTopMsgInkX, sl::kTopMsgInkY, description, kText, sl::kMsgScale);
+    if (!save_only) {
+      Frame(85, sl::kTopMsgX, sl::kTopMsgY);
+      const std::u32string description = utf32(menu_str(top_cur == 0 ? 0x801F2BE0 : 0x801F2C18, top_cur == 0 ? "Save a File" : "Load a File"));
+      HL(sl::kTopMsgInkX, sl::kTopMsgInkY, description, kText, sl::kMsgScale);
+    }
     if (save_phase == 0) return;
     Frame(86, sl::kMsgX, sl::kMsgY);
     auto line = [&](float x, float y, const std::string& str) { HLfit(x + 1.5f, y + 2.5f, utf32(str), sl::kMsgWidth, sl::kMsgScale); };

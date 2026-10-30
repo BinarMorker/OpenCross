@@ -25,29 +25,6 @@ constexpr float kViewW = render::kLayerW;
 constexpr float kViewH = render::kFieldRows;
 // The loader subtracts 24 from y_min.
 constexpr int kYMinBias = 24;
-// OT slots behind the actor's feet (keeps the shadow from hiding its own model).
-constexpr float kShadowDepthBias = 4.0f;
-// The outer shadow quad is 0x20 larger than the inner one.
-constexpr float kShadowOuter = 0x20;
-
-// Soft grey disc used as the shadow (alpha falls off toward the rim).
-bool make_shadow_texture(render::GpuContext& ctx, render::Texture& tex) {
-  constexpr u32 kN = 64;
-  std::vector<u8> px(kN * kN * 4);
-  for (u32 y = 0; y < kN; ++y)
-    for (u32 x = 0; x < kN; ++x) {
-      const float dx = (static_cast<float>(x) + 0.5f) / (kN * 0.5f) - 1.0f, dy = (static_cast<float>(y) + 0.5f) / (kN * 0.5f) - 1.0f;
-      const float dist = std::sqrt(dx * dx + dy * dy);
-      // Gouraud-style quad look: dark centre fading to nothing at the rim, semi-transparent (a soft, light look): smooth
-      // radial falloff, peak opacity about 60 %.
-      float a = std::clamp((1.0f - dist) / 0.75f, 0.0f, 1.0f);
-      a = a * a * (3.0f - 2.0f * a);
-      u8* texel = &px[(y * kN + x) * 4];
-      texel[0] = texel[1] = texel[2] = 0;
-      texel[3] = static_cast<u8>(a * 0.62f * 255.0f);
-    }
-  return tex.create(ctx, kN, kN, render::TextureFormat::Rgba8, px.data());
-}
 }  // namespace
 
 struct RoomView::Item {
@@ -89,7 +66,6 @@ bool RoomView::init(const vfs::Vfs& files, render::GpuContext& ctx, render::Spri
   meshes_ = &meshes;
   // Nearest sampling: tiles are 1:1 pixel art.
   if (!sampler_.create(ctx, false)) return false;
-  if (make_shadow_texture(ctx, shadow_tex_)) shadow_set_ = render::TexRef(shadow_tex_, sampler_);
   // The widescreen edge fade ramp (smoothstep).
   if (fade_sampler_.create(ctx, true)) {
     u8 ramp[128 * 4];
@@ -501,7 +477,7 @@ void RoomView::scroll_at(float alpha, float& sx, float& sy) const {
   sy = std::floor(sy);
 }
 
-void RoomView::draw(render::SpriteBatch& sprites, float vw, float vh, float alpha, std::span<const Shadow> shadows) const {
+void RoomView::draw(render::SpriteBatch& sprites, float vw, float vh, float alpha) const {
   const render::Letterbox lb = letterbox(vw, vh);
   const float scale_x = lb.scale, sy = lb.scale_y, ox = lb.ox, oy = lb.oy;
   float scroll_x, scroll_y;
@@ -584,7 +560,7 @@ void RoomView::draw(render::SpriteBatch& sprites, float vw, float vh, float alph
   }
   sprites.set_blend(render::BlendMode::Alpha);
   if (bg_lin) sprites.set_filter(render::SpriteFilter::Sampler);
-  // The late layers only: the edge fade and the shadows belong to the first call.
+  // The late layers only: the edge fade belongs to the first call.
   if (late_pass_) return;
   // [Video] WideEdgeFade: widescreen shows more columns than the room has (picture_columns): fade the room's cut edges to black.
   if (edge_fade > 0.5f && fade_set_ && loaded_) {
@@ -596,7 +572,6 @@ void RoomView::draw(render::SpriteBatch& sprites, float vw, float vh, float alph
     if (fade_width > 0.5f && c1 < lb.x0 + lb.w - 0.5f)
       sprites.draw(fade_set_, ox + (c1 - fade_width) * scale_x, y0, fade_width * scale_x, h, 1.0f, 0.0f, 0.0f, 1.0f);
   }
-  for (const Shadow& sh : shadows) draw_shadow(sprites, lb, scroll_x, scroll_y, sh);
 }
 
 void RoomView::picture_columns(const render::Letterbox& lb, float scroll_x, float& c0, float& c1) const {
@@ -625,38 +600,6 @@ render::Rect RoomView::clip_rect(const render::Letterbox& lb, float scroll_x, fl
   // The actor pass scissor: floor of the origin, ceil of the size.
   return {static_cast<s32>(std::max(0.0f, std::floor(left))), static_cast<s32>(std::max(0.0f, std::floor(lb.oy))),
           static_cast<u32>(std::ceil(width)), static_cast<u32>(std::ceil(height))};
-}
-
-void RoomView::draw_shadow(render::SpriteBatch& sprites, const render::Letterbox& lb, float scroll_x, float scroll_y,
-                           const Shadow& sh) const {
-  if (!loaded_ || !shadow_set_) return;
-  // A quad of half-size `radius` (+0x20 for the soft outer rim) on the floor under the actor, projected.
-  // Depth tested at the OT slot z >> 4 like the actor model, so background groups in front of
-  // the actor hide it as well. The bias keeps it just behind the model's own feet. The quad is a soft disc, drawn as the
-  // screen bounding box of the projected square.
-  // The quad is sized by the RECT_SIZE half extents (op 8C, default 0x26), not by the 8B collision radius: a
-  // chest with `8B 75` keeps the 38-unit shadow.
-  const float rx = sh.half_w + kShadowOuter, rz = sh.half_h + kShadowOuter;
-  float zc = 0;
-  float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
-  {
-    render::FieldCamera::Projected center;
-    if (!camera_.project({sh.x, sh.y, sh.z}, center)) return;
-    zc = center.z;
-  }
-  for (int i = 0; i < 4; ++i) {
-    render::FieldCamera::Projected pr;
-    const float sx = (i & 1) ? rx : -rx, sz = (i & 2) ? rz : -rz;
-    if (!camera_.project({sh.x + sx, sh.y, sh.z + sz}, pr)) return;
-    x0 = std::min(x0, pr.sx);
-    x1 = std::max(x1, pr.sx);
-    y0 = std::min(y0, pr.sy);
-    y1 = std::max(y1, pr.sy);
-  }
-  const float scale_x = lb.scale, sy = lb.scale_y;
-  const float depth = (zc / 16.0f + kShadowDepthBias) / render::kDepthRange;
-  sprites.draw_depth(shadow_set_, lb.ox + (x0 + scroll_x) * scale_x, lb.oy + (y0 + scroll_y) * sy, (x1 - x0) * scale_x, (y1 - y0) * sy, depth, 0,
-                     0, 1, 1, render::pack_rgba(255, 255, 255, 255));
 }
 
 void RoomView::draw_actors(render::MeshPipeline& meshes, const render::Frame& frame, float alpha,

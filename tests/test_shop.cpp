@@ -144,6 +144,19 @@ void test_forge() {
   game_state.set_gold(0);
   CHECK(shop::can_forge(game_state, 20, true) == shop::Res::Ok && shop::can_forge(game_state, 22, true) == shop::Res::NoRecipe);
   CHECK(shop::forge(game_state, 20, true) == shop::Res::Ok && game_state.item_count(20) == 2 && game_state.gold() == 0);
+
+  // At 99 held the forge still goes through: materials and gold are taken and the count stays 99.
+  fixture.give(20, 97);
+  fixture.give(1, 2);
+  fixture.give(3, 1);
+  fixture.give(8, 3);
+  game_state.set_gold(400);
+  CHECK(shop::forge(game_state, 20) == shop::Res::Ok && game_state.item_count(20) == 99 && game_state.gold() == 40);
+  CHECK(game_state.item_count(1) == 0 && game_state.item_count(3) == 0 && game_state.item_count(8) == 0);
+  // With no stack of the piece and no free slot it is refused before anything is taken.
+  for (auto& stack : game_state.slot.items)
+    if (stack.id == 20 || stack.id == 0) stack.id = 0x1FF, stack.qty = 1;
+  CHECK(shop::forge(game_state, 20, true) == shop::Res::Full && game_state.item_count(20) == 0);
 }
 
 void test_breakdown_and_sell() {
@@ -224,8 +237,19 @@ void test_trade() {
   CHECK(shop::offer_levels(game_state, els, off) == 4);
   off[1] = 1;
   CHECK(shop::offer_levels(game_state, els, off) == 5);
-  shop::trade_commit(game_state, els, off, row.goods[0]);
+  CHECK(shop::trade_commit(game_state, els, off, row.goods[0]));
   CHECK(game_state.item_count(8) == 1 && game_state.element_count(2) == 1 && game_state.element_count(4) == 0 && game_state.element_count(1) == 1);
+  // At 99 held the offer is still taken and the count stays 99.
+  fixture.give(8, 98);
+  std::vector<int> one(192, 0);
+  one[0] = 1;
+  CHECK(shop::trade_commit(game_state, els, one, row.goods[0]) && game_state.item_count(8) == 99 && game_state.element_count(2) == 0);
+  // With no stack of the goods and no free slot nothing is taken.
+  for (auto& stack : game_state.slot.items)
+    if (stack.id == 8 || stack.id == 0) stack.id = 0x1FF, stack.qty = 1;
+  std::vector<int> green(192, 0);
+  green[2] = 1;
+  CHECK(!shop::trade_commit(game_state, els, green, row.goods[0]) && game_state.element_count(1) == 1);
 }
 }  // namespace
 

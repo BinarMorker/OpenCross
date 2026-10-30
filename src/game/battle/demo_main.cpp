@@ -12,7 +12,9 @@
 //   --stats hp=1023,atk=1,def=127,hit=127,evd=0,mag=1,mdef=127  base stats of every party member (default party {0,1,22} when no --party); --enemyhp u3,u4,u5  HP (and max HP) of the enemy units 3 / 4 / 5 (-1 or empty = unchanged)
 //   --ko <unit>  that party unit starts KO'd (hp 0 + status KO: Revive / Full Revival targets)
 //   --equip <item id>  party slot 0 holds that weapon (e.g. 0x26 = Mastermune); armour / accessories stay the character table's
-//   --party a[,b[,c]]  character ids, slot 0 = the acting PC (default party {0, 1, 22})
+//   --party a[,b[,c]]  character ids, slot 0 = the acting PC (default party {0, 1, 22}); the battle seats the party in this order, so
+//                      --caster / --casttgt / --cast2tgt / --ko 0..2 are the party slots of this list
+//   --ring c,c,c  the field ring at the start: colour names (green white black red yellow blue), indices 0..5, 'all' or 'none'
 //   --cast2 <element> --cast2at <frame> [--cast2tgt <unit>]  a second cast (consecutive casts)
 //   --keys "Down:200,Right:240"  a key press (SDL scancode name) at that frame
 //   --auto  feeds a confirm every 12 frames (Attack, Weak, target, repeat) for smoke tests
@@ -59,8 +61,13 @@ int ocbattleview_main(int argc, char** argv) {
   std::array<int, 7> stat_set{-1, -1, -1, -1, -1, -1, -1};
   bool have_stats = false;
   int ko_unit = -1;
+  // --status unit:lo[,unit:lo]: inflicted status bits OR-ed into the units' merged lo words.
+  std::vector<std::pair<int, u32>> status_lo;
   int equip_weapon = -1;
   std::array<int, 3> enemy_hp{-1, -1, -1};
+  // --ring: the field ring set after the start (unset = the stage's own).
+  std::array<int, 3> start_ring{-1, -1, -1};
+  bool have_ring = false;
   int cast2 = 0, cast2_at = -1, cast2_tgt = -1;
   int shot_every = 0, shot_from = 0, shot_to = 1 << 30, max_frames = -1, win_w = 1280, win_h = 960;
   std::filesystem::path shot_dir;
@@ -110,7 +117,31 @@ int ocbattleview_main(int argc, char** argv) {
         if (*cursor == ',') ++cursor;
       }
     }
+    else if (!std::strcmp(argv[i], "--ring") && i + 1 < argc) {
+      static const char* const kColourNames[6] = {"green", "white", "black", "red", "yellow", "blue"};
+      const std::string list = argv[++i];
+      size_t slot = 0;
+      for (size_t start = 0; start <= list.size() && slot < 3; ++slot) {
+        const size_t end = std::min(list.find(',', start), list.size());
+        const std::string item = list.substr(start, end - start);
+        int colour = item == "all" ? battle::kRingAllColours : item == "none" || item.empty() ? -1 : std::atoi(item.c_str());
+        for (int k = 0; k < 6; ++k)
+          if (item == kColourNames[k]) colour = k;
+        start_ring[slot] = colour;
+        start = end + 1;
+      }
+      have_ring = true;
+    }
     else if (!std::strcmp(argv[i], "--ko") && i + 1 < argc) ko_unit = std::atoi(argv[++i]);
+    else if (!std::strcmp(argv[i], "--status") && i + 1 < argc) {
+      for (char* cursor = argv[++i]; *cursor;) {
+        char* end = cursor;
+        const int unit = static_cast<int>(std::strtol(cursor, &end, 0));
+        if (*end != ':') break;
+        status_lo.emplace_back(unit, static_cast<u32>(std::strtoul(end + 1, &end, 0)));
+        cursor = *end == ',' ? end + 1 : end;
+      }
+    }
     else if (!std::strcmp(argv[i], "--equip") && i + 1 < argc) equip_weapon = static_cast<int>(std::strtol(argv[++i], nullptr, 0));
     else if (!std::strcmp(argv[i], "--autoframes") && i + 1 < argc) auto_frames = std::atoi(argv[++i]);
     else if (!std::strcmp(argv[i], "--field") && i + 1 < argc) field = std::atoi(argv[++i]);
@@ -234,6 +265,8 @@ int ocbattleview_main(int argc, char** argv) {
       rc = 1;
     } else {
       view.set_art_mode(hd);
+      // --ring
+      if (battle::Battle* current = view.battle_mut(); current && have_ring) current->set_ring(start_ring);
       // --enemyhp
       if (battle::Battle* current = view.battle_mut())
         for (int k = 0; k < 3; ++k)
@@ -246,6 +279,10 @@ int ocbattleview_main(int argc, char** argv) {
         battle::Unit& unit = current->unit_mut(ko_unit);
         if (unit.present) unit.hp = 0, unit.lo |= battle::st::kKO;
       }
+      // --status
+      if (battle::Battle* current = view.battle_mut())
+        for (const auto& [unit_index, bits] : status_lo)
+          if (unit_index >= 0 && unit_index < battle::kUnits && current->unit(unit_index).present) current->unit_mut(unit_index).lo |= bits;
       // [Enhancements] from opencross.ini; OC_LIGHTING=1 forces [Enhancements] Lighting on (verification runs without touching the ini)
       meshes.set_enhanced_lighting(config.lighting || std::getenv("OC_LIGHTING") != nullptr);
       // [Enhancements] SmoothReflections; OC_SMOOTH_REFL=1 / 0 overrides it (side-by-side runs without touching the ini)

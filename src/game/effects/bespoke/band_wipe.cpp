@@ -1,4 +1,4 @@
-// Screen-band overlays: canon, hip, jigoku, xgiri, ghost1, sky (screen negatives), muteki (flare), 155slot (reels), yamanek0 / miki
+// Screen-band overlays: canon, hip, jigoku, xgiri, ghost1, sky (screen negatives), muteki (flare), 155slot (reels), yamanek0
 // (frame capture). Four styles over one parameter struct:
 //   Negative  nothing is drawn until the script's op 0x100 (operand = ticks) starts the countdown; while it runs the frame is redrawn as
 //             5 columns of 64 px under a white quad, i.e. the backdrop is inverted. sky adds op 0x101 (ticks, end rgb): the target's tint
@@ -227,7 +227,6 @@ constexpr WipeParams kParams[] = {
     {"muteki", WipeStyle::Flare, 60, false},
     {"155slot", WipeStyle::Reels, 0, false},
     {"yamanek0", WipeStyle::Capture, 60, false},
-    {"miki", WipeStyle::Capture, 60, false},
 };
 
 }  // namespace

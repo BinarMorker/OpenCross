@@ -1,4 +1,4 @@
-"""Checks the cc_save.py dump of file 2 written by the `save` route: every field lands at its expected save-record offset.
+"""Checks the cc_save.py dump of file 1 written by the `save` route (box 2 of an empty card; a new file takes the lowest free number): every field lands at its expected save-record offset.
 Usage: check_save_dump.py <dump.json>"""
 import json
 import sys
@@ -14,7 +14,7 @@ def need(cond, msg):
         errs.append(msg)
 
 
-need(p["title_sjis"].endswith("０３"), "title does not end with the fullwidth file number 03: %r" % p["title_sjis"])
+need(p["title_sjis"].endswith("０２"), "title does not end with the fullwidth file number 02: %r" % p["title_sjis"])
 need(p["leader_name"] == "Serge", "preview leader name %r" % p["leader_name"])
 need(p["party_ids"][0] == 0 and p["party_ids"][1] == 1, "preview party %r" % p["party_ids"])
 need(p["location"] == 27, "location word %r (alu_a01f = room id 27)" % p["location"])

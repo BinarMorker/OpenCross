@@ -251,6 +251,12 @@ void test_flow() {
   CHECK(l2.load_room && l2.room == "wld_a01" && l2.state_changed && continued.state() == game::FlowState::Field && continued.game_state().gold() == 777);
   // RDE's load hook: every loaded game owns the Time Shifter (key item 62).
   CHECK((continued.game_state().slot.key_items() >> 61) & 1);
+  // A location id without a known room is still handed to the host as a room load (it resolves the id or returns to the title).
+  ui::SlotEntry unknown = slot_entry;
+  unknown.data.head[save::head::kLocation] = 0xFF;
+  unknown.data.head[save::head::kLocation + 1] = 0xFF;
+  const game::FlowAction l3 = continued.on_load(unknown);
+  CHECK(l3.load_room && l3.room.empty() && l3.room_id == 0xFFFF);
   // Pip's battle growth column follows his form; the grid layout stays record 43's.
   {
     data::GameTables tb;
@@ -419,6 +425,11 @@ void test_location_key() {
   CHECK(ui::GameState::location_key(44) == 8);
   CHECK(ui::GameState::location_key(52) == ui::GameState::location_key(63));
   CHECK(ui::GameState::location_key(300) == 29);
+  // Head 0x40 holds the whole u16 of variable 0, so the last threshold (999) is reachable.
+  save::SaveSlot slot;
+  slot.set_progression(1000);
+  CHECK(slot.head[0x40] == 0xE8 && slot.head[0x41] == 0x03 && slot.progression() == 1000);
+  CHECK(ui::GameState::location_key(slot.progression()) == 30);
 }
 
 }  // namespace

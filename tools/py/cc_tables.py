@@ -8,6 +8,7 @@ Commands: identify enemies elements groups drops growth chars keyitems shops gea
 import csv
 import io
 import os
+import re
 import struct
 import sys
 import zipfile
@@ -453,31 +454,19 @@ BS_LEN = bytes.fromhex(
     "0505050505050000000000000000000000000000000000000000000000000000"
     "0407010608")
 
-# Semantics of the battle-script opcodes (names are ours; None = unknown).
-BS_NAME = {
-    0x00: "halt", 0x01: "goto", 0x02: "cond_jump", 0x05: "call", 0x0D: "return",
-    0x10: "set", 0x11: "set1", 0x12: "set0", 0x13: "add", 0x14: "sub", 0x15: "bitset", 0x16: "bitxor",
-    0x17: "inc", 0x18: "dec", 0x19: "and", 0x1A: "or", 0x1B: "xor", 0x1C: "shl", 0x1D: "shr", 0x1E: "rand",
-    0x1F: "rand_mul", 0x20: "mul", 0x21: "div", 0x2A: "attacked_marker", 0x2B: "select_target",
-    0x2C: "hide_ui", 0x2D: "delay", 0x2F: "count_colour", 0x3D: "set_anim", 0x55: "pick_random_element",
-    0x57: "store_enemy_count", 0x62: "dialog_pos", 0x67: "queue_attack", 0x75: "read16", 0x76: "write16",
-    0x80: "pc_count", 0x86: "camera_target", 0x96: "invuln_except_colour", 0xA7: "pip_evolve_check",
-    0xE0: "dialogue", 0xE2: "wait_dialogue",
-}
+def bs_names():
+    """Opcode names of the engine's own table (src/battle/pac_opcodes.inc), so the dump and the engine cannot drift."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src", "battle", "pac_opcodes.inc")
+    names = {}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            m = re.match(r'\s*PAC_OP\(0x([0-9A-Fa-f]+),\s*\d+,\s*"([^"]*)"', line)
+            if m and m.group(2):
+                names[int(m.group(1), 16)] = m.group(2)
+    return names
 
-# Names resolved from the battle.prg handlers.
-BS_NAME.update({
-    0x0E: "bind_unit", 0x11: "set1", 0x12: "set0", 0x15: "bit_set", 0x16: "bit_clear", 0x1A: "or", 0x1B: "xor",
-    0x1C: "shl", 0x1D: "shr", 0x1E: "rand15", 0x1F: "rand_mod", 0x20: "mul", 0x21: "div",
-    0x2A: "end_attacked", 0x2D: "delay", 0x34: "ghost_self", 0x35: "ghost_entity", 0x38: "end_cutscene",
-    0x2C: "begin_cutscene", 0x56: "read_flag", 0x57: "count_enemies", 0x58: "play_anim", 0x59: "tick_hint",
-    0x5A: "play_anim_of", 0x5B: "ghost_unit", 0x5C: "set_flag86a", 0x65: "begin_scripted", 0x66: "begin_action",
-    0x75: "read_unit", 0x76: "write_unit", 0x77: "pad", 0x7A: "camera_self", 0x7C: "no_drops", 0x80: "count_pcs",
-    0x83: "set_result", 0x84: "force_quarter_hp", 0x86: "camera_target", 0x87: "clear_queue", 0x89: "timer_ge",
-    0x8C: "mark_defeated", 0x8D: "set_slots", 0x8E: "set_group", 0x8F: "pick_element_of", 0x90: "move_to",
-    0x91: "sync_pos", 0xA4: "end_turn", 0xA6: "end_killed", 0xB0: "lift", 0xB1: "land",
-    0xC0: "start_a", 0xC1: "stop_a", 0xC2: "start_b", 0xC3: "stop_b", 0xC4: "wait_a", 0xC5: "wait_b",
-})
+
+BS_NAME = bs_names()
 
 BS_ENTITY_STRIDE = 0x40
 

@@ -1,19 +1,24 @@
-"""fx_diff.py DIR [--step 5] [--offset N|auto] [--window A B] : the mechanical diff of one effect cast, ps1 (PS1) vs OpenCross.
+"""fx_diff.py DIR [--step 5] [--offset N|auto] [--cast-index N] [--window A B] : the mechanical diff of one effect cast, ps1 (PS1) vs OpenCross.
 
     DIR = tmp\\r34\\<id>   with   ref\\states\\state_NNNNNN.sav (+ ref\\frames\\frame_NNNNNN.png)   and   ours\\ours.log (+ ours\\shots\\shot_NNNNNN.png)
     ours.log = tools\\ours_cast34.ps1 (OC_FX_OBJECTS / OC_FX_SEQ / OC_FX_UNITS = 5): `fxseq:`, `fx objects`, `fx units` + unit lines, `fx camera` lines.
 
 Step 1 extracts every ps1 state once into DIR\\ref\\tables.json (so the states can be deleted afterwards): sequence tasks, live objects (all, with
 the per-emitter first object), unit model blocks, camera, fog, warp. Step 2 parses ours.log into the same shape. Step 3 finds the offset
-(our tick = ps1 frame + offset; the median over common sequence names of our start tick - ps1 start frame (= state frame - elapsed); fallback
+(our tick = ps1 refresh time + offset; the median over common sequence names of our start tick - ps1 start (= refresh time - elapsed); fallback
 the first live object on both sides), then writes DIR\\diff.md (verdict block, per-frame differences, the full table collapsed) and
 DIR\\shots.png (ps1 frame | our shot at the first draw and the peak object count). Missing categories give a `-` verdict, never an error.
+
+Time axis: the PS1 battle runs one game frame (= one capture frame) per 2-3 refreshes while our ticks are refreshes, so the reference states are
+placed by the battle refresh counter they carry (`bf` in tables.json; old captures read it from the manifest `watch` rows), as refresh time = counter -
+counter of the first state; a capture without any counter falls back to the run frame. Every ps1 time in diff.md is that refresh time (`R`), the
+frame files keep their run-frame numbers (`F`).
 
 Tolerances: object count +-2 per emitter, first-object numbers 5 % (abs floor 8), unit position / yaw 64, camera eye / target 64, fog 5 %.
 Options (the plain call runs the diff):
   --extract           tables only (ref\\tables.json from the states; no ours needed) + `cam_pick:` appended to ref\\manifest.txt from camera-shot sequence-task tags
                       (ch1N / tgtN / aprN / numbered shots; the pack's own first sequence and `main` excluded) unless the manifest already has a non-empty one
-  --info              prints `last_frame: N` (the ps1 capture length), `states: M` and `dt: t:N,t:N` (the PS1 loop iteration length in vsyncs along the
+  --info              prints `last_frame: N` (the ps1 capture length in run frames), `last_refresh: R` (its span in refreshes = the number of our ticks the capture covers), `states: M` and `dt: t:N,t:N` (the PS1 loop iteration length in vsyncs along the
                       'main' elapsed t, estimated from how the elapsed counter steps between the 5-frame samples)
   --cam-score LOG..   per our probe log: how many sampled ps1 camera frames match (eye / target within 64) -> `LOG: match/compared shift S` (best of the shifts -1 / 0 / +1 sample), then `best: <index>`, `clear: 1|0` (>= 50 % or >= 2x the runner-up), `shift: S`, `mode: exact|shape` (shape = the eye turned about the target), `score: ok/n`
   --set-cam-pick S    writes `cam_pick: S` into the manifest (replacing an empty line)
@@ -52,7 +57,7 @@ def extract_ref(refdir):
         except Exception as e:  # a state we cannot read: skip it
             print("fx_diff: state %s unreadable (%s)" % (p, e))
             continue
-        t = {"seqs": [], "objs": [], "units": {}, "cam": None, "fog": None, "warp": None}
+        t = {"seqs": [], "objs": [], "units": {}, "cam": None, "fog": None, "warp": None, "bf": st.u32(0x800E0518)}
         try:
             reg = fr.Registry(st)
             base, ts = fr.tasks(st)
@@ -105,6 +110,43 @@ def norm_ref(tabs):
     return tabs
 
 
+def manifest_refresh_counters(d):
+    """{run frame: battle refresh counter} from the `watch` rows of ref\\manifest.txt (captures extracted before the counter was kept in tables.json)."""
+    mp = manifest_path(d)
+    out = {}
+    if os.path.isfile(mp):
+        with open(mp, "r", encoding="utf-8-sig", errors="replace") as fh:
+            for line in fh:
+                m = re.match(r"\s*(\d+) btl_frame=(\d+)", line)
+                if m:
+                    out[int(m.group(1))] = int(m.group(2))
+    return out
+
+
+def to_refresh_time(d, tabs):
+    """Re-keys the per-run-frame tables by refresh time: the PS1 battle runs one game frame (one capture frame) per 2-3 refreshes, and our ticks are
+    refreshes, so key = battle refresh counter - the counter of the first state. Each table keeps its run frame as `F` (frame files, --info).
+    Sequence elapsed counters advance in refreshes too, so `key - elapsed` is a start on the same axis. Without any counter the run frame stays the key."""
+    fallback = manifest_refresh_counters(d)
+    for f, t in tabs.items():
+        if "bf" not in t and f in fallback:
+            t["bf"] = fallback[f]
+    frames = sorted(tabs)
+    if not frames or any("bf" not in tabs[f] for f in frames):
+        for f in frames:
+            tabs[f]["F"] = f
+        return tabs
+    first = tabs[frames[0]]["bf"]
+    out = {}
+    for f in frames:
+        key = tabs[f]["bf"] - first
+        while key in out:
+            key += 1
+        tabs[f]["F"] = f
+        out[key] = tabs[f]
+    return out
+
+
 def load_ref(d, force=False):
     jp = os.path.join(d, "ref", "tables.json")
     sd = os.path.join(d, "ref", "states")
@@ -113,13 +155,13 @@ def load_ref(d, force=False):
         newest = max((os.path.getmtime(os.path.join(sd, f)) for f in os.listdir(sd) if f.endswith(".sav")), default=0) if have_states else 0
         if os.path.getmtime(jp) >= newest:
             with open(jp) as fh:
-                return norm_ref({int(k): v for k, v in json.load(fh).items()})
+                return to_refresh_time(d, norm_ref({int(k): v for k, v in json.load(fh).items()}))
     if not have_states:
         return {}
     tabs = extract_ref(os.path.join(d, "ref"))
     with open(jp, "w") as fh:
         json.dump({str(k): v for k, v in tabs.items()}, fh)
-    return norm_ref(tabs)
+    return to_refresh_time(d, norm_ref(tabs))
 
 
 # ------------------------------------------------------------------------------------------------------------------ ours side
@@ -232,7 +274,7 @@ def by_em(objs):
 
 
 def ref_seq_starts(ref):
-    """{name: earliest (state frame - elapsed)} over all states, and {name: (first seen frame, last seen frame)}."""
+    """{name: earliest (refresh time - elapsed)} over all states, and {name: (first seen time, last seen time)}."""
     st = {}
     seen = {}
     for f in sorted(ref):
@@ -245,49 +287,36 @@ def ref_seq_starts(ref):
 
 
 CHOSEN_BIRTH = [None]   # the root birth find_offset picked when the capture holds several packs
+CAST_INDEX = [None]     # --cast-index N: align on the Nth (0 = first) root birth instead of the best-scoring one
 
 
 def ref_seq_births(ref):
-    """{name: [birth frames]} : one per run of consecutive samples in which the sequence is live (a gap or a jump of its start by > 8 = a new birth)."""
+    """{name: [birth refresh times]} : one per run of consecutive samples in which the sequence is live (a gap or an elapsed counter that went
+    back = a new birth; a counter that falls behind the refresh time, as in the effects' slow motion, is the same birth)."""
     out = {}
     last = {}
-    prev_f = None
     for f in sorted(ref):
         names = set()
         for s in ref[f]["seqs"]:
             n = s["name"]
             names.add(n)
-            b = f - s["elapsed"]
-            if n not in last or last[n] is None or abs(last[n] - b) > 8:
-                out.setdefault(n, []).append(b)
-            last[n] = b
+            if n not in last or last[n] is None or s["elapsed"] < last[n]:
+                out.setdefault(n, []).append(f - s["elapsed"])
+            last[n] = s["elapsed"]
         for n in list(last):
             if n not in names:
                 last[n] = None
-        prev_f = f
     return out
 
 
 MAIN_CREDIT = 3  # ps1 Anti-Red per-frame states: main elapsed 7 at the first visible frame = first-run delta 3 + the pass delta 4, i.e. its start frame reads ~3-6 early; fog / camera of the same frames agree with ours at main-start - 3
 
 
-def snap_offset(ref, ours, raw, step):
-    """The samples of both sides sit on grids (ps1 every `step` frames, ours every `step` ticks): an offset off the grid makes `nearest` read
-    a sample up to step // 2 ticks away (the 'common lead' of ~5 frames was 2 ticks of estimator bias + 2 of snapping)."""
-    if not ref or not ours:
-        return raw
-    q = min(ref) % step
-    r = statistics.mode([t % step for t in ours])
-    base = (r - q) % step
-    k = round((raw - base) / step)
-    return int(base + k * step)
-
-
-def find_offset(ref, ours, oseqs, step=5):
+def find_offset(ref, ours, oseqs):
     rs, _ = ref_seq_starts(ref)
     # A sequence task born inside an update is run at once with the update's
     # delta (+0x14 elapsed, +0x18 wait) and again by the task loop of the same pass, so a CHILD (op 0x2F) starts with elapsed ~2 deltas
-    # (ps1 eft1 elapsed 8 beside main 7 at the first visible frame) and its 'start frame' (state frame - elapsed) comes out 4-8 early. The
+    # (ps1 eft1 elapsed 8 beside main 7 at the first visible frame) and its 'start' (refresh time - elapsed) comes out 4-8 early. The
     # pack's own `main` / `own` (born by the hand-over) are the roots: align on them, not on the median of all names.
     roots = [n for n in rs if n in oseqs and n in ("main", "own")]
     if roots:
@@ -305,18 +334,21 @@ def find_offset(ref, ours, oseqs, step=5):
                     ok += 1
             return ok
         if len(cands) > 1:
-            best = max(cands, key=lambda b: (score(b), b))
+            if CAST_INDEX[0] is not None:
+                best = cands[min(CAST_INDEX[0], len(cands) - 1)]
+            else:
+                best = max(cands, key=lambda b: (score(b), b))
             CHOSEN_BIRTH[0] = best
             rs = dict(rs)
             for n in roots:
                 rs[n] = best
         raw = int(round(statistics.median([oseqs[n][0] - rs[n] for n in roots]))) - MAIN_CREDIT   # main's elapsed already carries its birth credit
-        return snap_offset(ref, ours, raw, step), "pack %s start (our first command tick - ps1 state frame + elapsed), snapped to the sample grid from %d" % ("/".join(roots), raw)
+        return raw, "pack %s start (our first command tick - ps1 refresh time + elapsed)" % "/".join(roots)
     diffs = [oseqs[n][0] - rs[n] for n in rs if n in oseqs]
     if diffs:
         # A plain median: the root path's birth credit does not hold here (Flag-Bearer 177 reads one sample better at 190 than at this 193,
         # Canon Cannon 298 five frames worse at 190 than at 195) - pass `--offset N` where a capture needs it.
-        return int(round(statistics.median(diffs))), "median of %d common sequence starts (our first command tick - ps1 state frame + elapsed)" % len(diffs)
+        return int(round(statistics.median(diffs))), "median of %d common sequence starts (our first command tick - ps1 refresh time + elapsed)" % len(diffs)
     rf = next((f for f in sorted(ref) if ref[f]["objs"]), None)
     of = next((t for t in sorted(ours) if ours[t]["objs"]), None)
     if rf is not None and of is not None:
@@ -400,7 +432,7 @@ def dt_schedule(ref):
     for f in sorted(ref):
         for s in ref[f].get("seqs", []):
             if s.get("name") == "main":
-                pts.append((f, s["elapsed"]))
+                pts.append((ref[f]["F"], s["elapsed"]))
                 break
     steps = [(pts[i][1], pts[i + 1][1] - pts[i][1]) for i in range(len(pts) - 1) if pts[i + 1][0] - pts[i][0] == 5]
 
@@ -439,12 +471,13 @@ def tools_only(d, do_extract, do_info, setpick):
                 else:
                     print("cam_pick: - (no camera-shot tags among the ps1 sequence tasks; ours_cast34.ps1 probes the camera pool)")
     if do_info:
-        last = max(ref) if ref else 0
+        last = max(t["F"] for t in ref.values()) if ref else 0
         if not last:
             fd = os.path.join(d, "ref", "frames")
             if os.path.isdir(fd):
                 last = max([int(x[6:12]) for x in os.listdir(fd) if x.startswith("frame_")] or [0])
         print("last_frame: %d" % last)
+        print("last_refresh: %d" % (max(ref) if ref else 0))
         print("states: %d" % len(ref))
         print("dt: %s" % dt_schedule(ref))
     if setpick is not None:
@@ -598,6 +631,7 @@ def main(argv):
     step = opt("--step", default=5)
     offset = opt("--offset", default="auto")
     window = opt("--window", 2, default=None)
+    CAST_INDEX[0] = opt("--cast-index")
     do_extract = "--extract" in args
     do_info = "--info" in args
     do_prune = "--prune" in args
@@ -633,7 +667,7 @@ def main(argv):
             window[0] = CHOSEN_BIRTH[0] - 15
     if window:
         frames = [f for f in frames if window[0] <= f <= window[1]]
-        win_note = "ps1 frames %d..%d" % (window[0], window[1])
+        win_note = "ps1 refresh times %d..%d" % (window[0], window[1])
 
     # stage baseline (T2b): emitters live in ps1 before the first sequence starts (`near`, `far` ...) are the stage, not the cast
     rs_all, _ = ref_seq_starts(ref)
@@ -661,7 +695,7 @@ def main(argv):
         diffs_by_frame.setdefault(f, []).append("%s: %s" % (k, msg))
         v[k][0] += 1
         if len(vnotes[k]) < 6:
-            vnotes[k].append("F%d %s" % (f, msg))
+            vnotes[k].append("R%d %s" % (f, msg))
 
     # sequences
     rs, seen = ref_seq_starts(ref)
@@ -682,19 +716,19 @@ def main(argv):
                     continue
                 v["seq"][0] += 1
                 v["seq"][1] += 1
-                vnotes["seq"].append("%s only in ours (start F%d)" % (n, o0))
+                vnotes["seq"].append("%s only in ours (start R%d)" % (n, o0))
             elif n in rs and n not in oseqs:
                 seq_rows.append((n, r0, "-", "ps1 only"))
                 v["seq"][0] += 1
                 v["seq"][1] += 1
-                vnotes["seq"].append("%s only in ps1 (start F%d)" % (n, r0))
+                vnotes["seq"].append("%s only in ps1 (start R%d)" % (n, r0))
             else:
                 ok = abs(r0 - o0) <= max(step, 2)
                 seq_rows.append((n, r0, o0, "ok" if ok else "start differs by %d" % (o0 - r0)))
                 v["seq"][1] += 1
                 if not ok:
                     v["seq"][0] += 1
-                    vnotes["seq"].append("%s starts ps1 F%d vs ours F%d" % (n, r0, o0))
+                    vnotes["seq"].append("%s starts ps1 R%d vs ours R%d" % (n, r0, o0))
 
     full = []
     peak = (0, None)
@@ -778,7 +812,7 @@ def main(argv):
     names = [("seq", "sequences"), ("cnt", "object counts"), ("first", "first-object numbers"), ("units", "unit positions / yaw / flags / colour"),
              ("cam", "camera eye / target"), ("fog", "fog"), ("warp", "warp")]
     md = ["# fx_diff %s" % d.replace("\\", "/"), "",
-          "offset (our tick = ps1 frame + offset): **%s** (%s); ps1 states %d (frames %s..%s), compared window: %s, our samples %d, step %d" % (
+          "offset (our tick = ps1 refresh time + offset): **%s** (%s); ps1 states %d (refresh times %s..%s), compared window: %s, our samples %d, step %d" % (
               offset, off_note, len(ref), min(ref) if ref else "-", max(ref) if ref else "-", win_note, len(ours), step), "",
           "## Verdict", ""]
     for k, label in names:
@@ -786,7 +820,7 @@ def main(argv):
         for s in vnotes[k][:4]:
             md.append("    - %s" % s)
     md.insert(md.index("## Verdict") + 2, "- stage emitters (baseline, not counted): %s; peak objects ps1 %d ours %d" % (", ".join(sorted(stage)) or "none", stage_peak[0], stage_peak[1]))
-    md += ["", "## Sequences (start frame = state frame - elapsed; ours = first command tick - offset)", "", "| name | ps1 | ours | note |", "|---|---|---|---|"]
+    md += ["", "## Sequences (ps1 start = refresh time - elapsed; ours = first command tick - offset)", "", "| name | ps1 | ours | note |", "|---|---|---|---|"]
     for r in seq_rows:
         md.append("| %s | %s | %s | %s |" % r)
     md += ["", "## Differences per frame", "(category lines camera / fog / warp / units first, then the counts; capped at 12 lines per frame, the uncapped list is diff_full.md)", ""]
@@ -799,7 +833,7 @@ def main(argv):
         md.append("(none)")
     full_md = ["# fx_diff %s (uncapped differences per frame)" % d.replace("\\", "/"), ""]
     for f in sorted(diffs_by_frame):
-        hdr = "- F%d (tick %s)" % (f, next((l["tick"] for l in full if l["F"] == f), "-"))
+        hdr = "- R%d (tick %s)" % (f, next((l["tick"] for l in full if l["F"] == f), "-"))
         md.append(hdr)
         full_md.append(hdr)
         lst = ordered(f)
@@ -809,7 +843,7 @@ def main(argv):
             md.append("    - ... %d more (diff_full.md)" % (len(lst) - 12))
         for s in lst:
             full_md.append("    - %s" % s)
-    md += ["", "<details><summary>Full per-frame table</summary>", "", "| ps1 F | our tick | objs ps1 | objs ours | eye ps1 | eye ours | tgt ps1 | tgt ours | fog ps1 | fog ours | warp ps1/ours |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+    md += ["", "<details><summary>Full per-frame table</summary>", "", "| ps1 R | our tick | objs ps1 | objs ours | eye ps1 | eye ours | tgt ps1 | tgt ours | fog ps1 | fog ours | warp ps1/ours |", "|---|---|---|---|---|---|---|---|---|---|---|"]
     for l in full:
         rt = ref[l["F"]]
         ot = ours.get(l["tick"]) if l["tick"] is not None else None
@@ -826,7 +860,7 @@ def main(argv):
         fh.write("\n".join(full_md + [""]))
     with open(os.path.join(d, "diff.md"), "w", encoding="utf8") as fh:
         fh.write("\n".join(md))
-    print("\n".join(md[:md.index("## Sequences (start frame = state frame - elapsed; ours = first command tick - offset)")]))
+    print("\n".join(md[:md.index("## Sequences (ps1 start = refresh time - elapsed; ours = first command tick - offset)")]))
 
     # shots.png
     try:
@@ -840,17 +874,18 @@ def main(argv):
         for f in picks:
             tk = f + offset
             tk -= tk % step if step else 0
-            rp = os.path.join(d, "ref", "frames", "frame_%06d.png" % f)
+            fr = ref[f]["F"]
+            rp = os.path.join(d, "ref", "frames", "frame_%06d.png" % fr)
             if not os.path.isfile(rp):  # nearest ps1 frame on disk
                 fd = os.path.join(d, "ref", "frames")
                 cand = [int(x[6:12]) for x in os.listdir(fd) if x.startswith("frame_")] if os.path.isdir(fd) else []
                 if cand:
-                    rp = os.path.join(fd, "frame_%06d.png" % min(cand, key=lambda c: abs(c - f)))
+                    rp = os.path.join(fd, "frame_%06d.png" % min(cand, key=lambda c: abs(c - fr)))
             op = os.path.join(d, "ours", "shots", "shot_%06d.png" % tk)
             used_ref.add(os.path.basename(rp))
             used_ours.add(os.path.basename(op))
             ims = []
-            for pth, lab in ((rp, "ps1 F%d" % f), (op, "ours tick %d" % tk)):
+            for pth, lab in ((rp, "ps1 R%d F%d" % (f, fr)), (op, "ours tick %d" % tk)):
                 if os.path.isfile(pth):
                     im = Image.open(pth).convert("RGB")
                     im = im.resize((int(im.width * 360 / im.height), 360))

@@ -1,0 +1,47 @@
+# Zelbess Grand Slam (zel_a17i). The clerk (ent 5) offers round 1; accepting runs FE 75 #0 (round 0, picker selected) and FE 61, which
+# opens the monster picker over the Dopplegang pool (variables 0x3E0..0x3FE, here 129 creatures as on a late save). The picks start on the
+# first three pool creatures; Right moves to pick 2, confirm opens the list, Down x6 scrolls one row, confirm takes that creature for pick 2,
+# cancel returns to the picks and cancel again commits: battle 479 starts with the three creatures as the party.
+0 wait 5
+- request party_add 1
+- request party_add 2
+- set var 0x3E0 0xFFFF
+- set var 0x3E2 0xFFFF
+- set var 0x3E4 0xFFFF
+- set var 0x3E6 0xFFFF
+- set var 0x3E8 0xFFFF
+- set var 0x3EA 0xFFFF
+- set var 0x3EC 0xFFFF
+- set var 0x3EE 0xFFFF
+- set var 0x3F0 0x2000
+- wait idle 600
+- put 410 500
+- wait 10
+- approach 5 60 900
+- action
+- choose 0
+- skip 1800
+- wait dialogue open 900
+- skip 1800
+- wait menu open 900
+- wait 60
+- screenshot gs_01_open.png
+- tap right
+- tap confirm
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down
+- tap down
+- wait 20
+- screenshot gs_02_scrolled.png
+- tap confirm
+- tap cancel
+- wait 10
+- screenshot gs_03_picked.png
+- tap cancel
+- wait battle start 900
+- wait 200
+- screenshot gs_04_battle.png
+- quit

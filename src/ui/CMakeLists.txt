@@ -16,6 +16,10 @@ add_library(oc_ui STATIC
   ps1_font.cpp
   party_screen.h
   party_screen.cpp
+  monster_pick.h
+  monster_pick.cpp
+  monster_pick_screen.h
+  monster_pick_screen.cpp
   pause_screen.h
   pause_screen.cpp
   feature_icons.h
@@ -48,8 +52,8 @@ add_library(oc_ui STATIC
 )
 target_link_libraries(oc_ui PUBLIC oc_core oc_platform oc_vfs oc_import oc_text oc_render oc_save oc_data SDL3::SDL3)
 
-# Status-screen model view (needs the field Actor, so it lives outside oc_ui, which oc_game depends on).
-add_library(oc_menu_model STATIC menu/status_model.h menu/status_model.cpp)
+# Status-screen and Grand Slam picker model views (they need the field Actor, so they live outside oc_ui, which oc_game depends on).
+add_library(oc_menu_model STATIC menu/status_model.h menu/status_model.cpp menu/picker_model.h menu/picker_model.cpp)
 target_link_libraries(oc_menu_model PUBLIC oc_ui oc_game oc_battle_view oc_render oc_import)
 
 add_subdirectory(title)

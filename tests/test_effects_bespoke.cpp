@@ -97,6 +97,50 @@ void test_negative_strip() {
 }
 
 // muteki: the task draws only when the pack has the 'renz' sheet (type 0x15); the dummy stage has none: nothing at all
+// lasdes2's scene ops: the song changes, the camera cross-fade words, the tint lerp and the eye-frame copy.
+void test_lasdes2() {
+  DummyStage st;
+  FxModels ms;
+  ms.units.resize(4);
+  ms.targets = {3};
+  st.ctx.models = &ms;
+  std::vector<int> songs;
+  st.ctx.hooks.play_song = [&songs](int song) { songs.push_back(song); };
+  auto effect = BespokeRegistry::instance().create("lasdes2", st.ctx);
+  CHECK(effect != nullptr);
+  if (!effect) return;
+  std::vector<int> words = {0, 0, 0x42};
+  effect->command(0x101, words.data(), static_cast<int>(words.size()));
+  effect->command(0x103, words.data(), static_cast<int>(words.size()));
+  CHECK(songs == std::vector<int>({0x3B, 0x42}));
+  words = {4, 0, 's' | ('t' << 8), '0' | ('1' << 8)};
+  effect->command(0x104, words.data(), static_cast<int>(words.size()));
+  CHECK(ms.cross.shot == "st01" && ms.cross.serial == 1);
+  effect->tick();
+  CHECK(ms.cross.alpha == 32);
+  for (int i = 0; i < 4; ++i) effect->tick();
+  CHECK(ms.cross.alpha == 128 && ms.cross.fill == 0);
+  words = {2};
+  effect->command(0x106, words.data(), static_cast<int>(words.size()));
+  effect->tick();
+  CHECK(ms.cross.fill == 127 && !ms.cross.promote);
+  effect->tick();
+  effect->tick();
+  CHECK(ms.cross.fill == 255 && ms.cross.promote);
+  words = {2, 0, 2 | static_cast<int>(static_cast<s16>(0xFF00)), 128};
+  effect->command(0x10D, words.data(), static_cast<int>(words.size()));
+  CHECK(ms.tint.mode == 2);
+  effect->tick();
+  effect->tick();
+  CHECK(ms.tint.rgb[0] == 127 && ms.tint.rgb[1] == 64 && ms.tint.rgb[2] == 0);
+  effect->tick();
+  CHECK(ms.tint.rgb[0] == 255 && ms.tint.rgb[1] == 128);
+  words = {1, 0, 2};
+  effect->command(0x10C, words.data(), static_cast<int>(words.size()));
+  CHECK(ms.vram_moves.size() == 1 && ms.vram_moves[0].x == 352 && ms.vram_moves[0].y == 256 && ms.vram_moves[0].dx == 0x3C4 && ms.vram_moves[0].dy == 0x32);
+  CHECK(effect->done());
+}
+
 void test_muteki_falloff() {
   DummyStage st;
   auto effect = BespokeRegistry::instance().create("muteki", st.ctx);
@@ -684,6 +728,7 @@ int main() {
   test_registry();
   test_negative_strip();
   test_muteki_falloff();
+  test_lasdes2();
   test_ring();
   test_dissolve();
   test_flatten();

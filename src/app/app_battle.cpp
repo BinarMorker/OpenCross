@@ -4,8 +4,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdlib>
 
+#include "battle/rng.h"
+#include "battle/rules.h"
 #include "core/log.h"
 #include "game/game_session.h"
 
@@ -14,8 +17,19 @@ namespace oc::app {
 FieldBattleArgs App::make_field_battle_args(const game::FieldWorld::BattleRequest& rq) {
   FieldBattleArgs battle_args;
   battle_args.rq = rq;
-  const int scene = tables_ok ? tables.scene_for(rq.battle_id, 0) : -1;
-  battle_args.scene = scene;
+  // Reproducible fights: the view reads its seed from this variable.
+  if (config.debug_seed) {
+    const std::string seed = std::to_string(config.debug_seed * 2654435761u + ++battle_counter * 40503u);
+    _putenv_s("OC_BATTLE_SEED", seed.c_str());
+  }
+  if (tables_ok) {
+    // The encounter's variant roll comes before the battle's generator starts: a stream of its own, derived from the battle seed so
+    // seeded fights repeat their enemy group too.
+    u32 seed = static_cast<u32>(std::chrono::steady_clock::now().time_since_epoch().count());
+    if (const char* env = std::getenv("OC_BATTLE_SEED")) seed = static_cast<u32>(std::strtoul(env, nullptr, 10)) ^ 0x5CE7E5u;
+    battle::GameRng rng(seed, tables.rng_table);
+    battle_args.scene = battle::encounter_scene(rng, tables, rq.battle_id);
+  }
   std::vector<battle::PartyMember> party;
   std::vector<int> battle_ids = world.party_chars();
   {  // Relief Charm: outside battle 0x3DD the relief member takes every battle slot holding Serge
@@ -27,11 +41,6 @@ FieldBattleArgs App::make_field_battle_args(const game::FieldWorld::BattleReques
   if (tables_ok)
     for (int id : battle_ids) party.push_back(game::party_member_from_state(tables, flow_ready ? flow.game_state() : world.game_state(), id,
                                                                                        flow_ready ? &flow.machine().custom_names() : nullptr));
-  // Reproducible fights: the view reads its seed from this variable.
-  if (config.debug_seed) {
-    const std::string seed = std::to_string(config.debug_seed * 2654435761u + ++battle_counter * 40503u);
-    _putenv_s("OC_BATTLE_SEED", seed.c_str());
-  }
   game::BattleView::StartOptions& bopt = battle_args.bopt;
   bopt.flags = rq.flags;
   // An id > 0x1FF plays the stage's 'boss' intro.
@@ -47,6 +56,9 @@ FieldBattleArgs App::make_field_battle_args(const game::FieldWorld::BattleReques
     bopt.growth = setup.growth;
     bopt.bench = std::move(setup.bench);
     bopt.dopple_mask = world.dopple_mask();
+    bopt.piggy_bank = world.vm().var(0x176);
+    // The last Grand Slam picks; only a monster-party scene uses them.
+    bopt.monster_party = world.monster_party();
   }
   battle_args.party = std::move(party);
   return battle_args;
@@ -106,11 +118,13 @@ void App::finish_field_battle() {
   battle_in_field = false;
   // RDE's battle counter: +1 when a fight ends in result 0 or 3, capped.
   if (code == 0 || code == 3) ext_host.battles = std::min<u32>(ext_host.battles + 1, 0xFFFF);
-  if (battle.battle()) game::apply_battle_result(world.game_state(), tables, *battle.battle(), &growth_progress);
+  // A monster-party fight (the Grand Slam) writes nothing back: no rewards, records, HP or Dopplegang pool.
+  const bool written_back = battle.battle() && !battle.battle()->monster_party();
+  if (written_back) game::apply_battle_result(world.game_state(), tables, *battle.battle(), &growth_progress);
   // The Dopplegang pool goes back to the globals.
-  if (battle.battle()) world.set_dopple_mask(battle.battle()->dopple_mask());
+  if (written_back) world.set_dopple_mask(battle.battle()->dopple_mask());
   // The results screen's HP: growth gain + heal menu.
-  if (std::array<int, battle::kPcSlots> hp; results_ok && battle.battle() && results.take_final_hp(hp)) {
+  if (std::array<int, battle::kPcSlots> hp; results_ok && written_back && results.take_final_hp(hp)) {
     const auto& pm = battle.battle()->party();
     for (size_t i = 0; i < pm.size() && i < hp.size(); ++i)
       if (hp[i] >= 0 && pm[i].char_id >= 0 && pm[i].char_id < save::kNumChars) {

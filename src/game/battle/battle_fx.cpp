@@ -408,8 +408,9 @@ std::shared_ptr<const FxPack> BattleFxLibrary::get(int eid) {
       for (const int entry : caster_entries)
         for (int variant = 0; variant < 3 && pack->reaction_lands_no_number; ++variant)
           if (script_emits(pack->anim, entry, variant, bseq::Event::Damage)) pack->reaction_lands_no_number = false;
-      if (pack->has_main || !pack->fx.emitters.empty()) out = pack;
-      else log::debug("battle fx: eid {} has no main sequence nor emitters", eid);
+      // A pack with only a type-0x1A 'main' table (kill, comebigi, konsin, bre_roza) is the caster's script: the stock host runs its entry 0.
+      if (pack->has_main || !pack->fx.emitters.empty() || pack->tables.count("main")) out = pack;
+      else log::debug("battle fx: eid {} has no main sequence, emitters nor script table", eid);
     }
   }
   cache_[eid] = out;
@@ -579,7 +580,9 @@ effects::FxContext BattleFxRun::make_context(const effects::ViewParams& view) co
   ctx.pack_prd = ByteSpan(pack_->prd.data(), pack_->prd.size());
   if (cb_.stage) ctx.hooks.set_stage = cb_.stage;
   if (cb_.fog_off) ctx.hooks.fog_off = cb_.fog_off;
+  if (cb_.lights) ctx.hooks.lights = cb_.lights;
   if (cb_.form) ctx.hooks.form_swap = cb_.form;
+  if (cb_.song) ctx.hooks.play_song = cb_.song;
   ctx.hooks.script_gate = [] { return bseq::Vm::global(0); };
   ctx.hooks.clear_script_gate = [] { bseq::Vm::set_global(0, 0); };
   return ctx;
@@ -1026,9 +1029,12 @@ BattleFxRun::OpClass BattleFxRun::op_class(int op, int len) {
     // the lit model path: back colour ramp (SequencePlayer -> Callbacks::ambient), the three light intensities zeroed
     // (BattleView::fx_other); the lights themselves are sprite type 17 objects (EmitterSystem / LightTable)
     case 0x65: case 0x66:
+    // pad rumble (SequencePlayer::vib_op -> platform::Rumble), the music volume fade (BattleView::fx_other -> BattleAudio::fade_music)
+    case 0x28: case 0x29: case 0x54:
       return OpClass::Presented;
-    // no picture: pad rumble (0x28 / 0x29: SequencePlayer::vib_op -> platform::Rumble), the sound queue / CD (0x52 / 0x53 / 0x6A), music volume fade (0x54)
-    case 0x28: case 0x29: case 0x52: case 0x53: case 0x54: case 0x6A:
+    // no picture and nothing to do here: the battle continuation hold counter (0x53 hold, 0x52 release one hold next frame) and the reload of
+    // bttim.ltd into the shared VRAM (0x6A); the packs here own their textures and the effect end is BattleFxRun::done()
+    case 0x52: case 0x53: case 0x6A:
       return OpClass::NonVisual;
     // short form = shake (rooms); the 16-byte battle form = colour matrix
     case 0x2A: return len < 16 ? OpClass::Presented : OpClass::Missing;

@@ -173,26 +173,23 @@ FlowAction FlowMachine::on_load(const ui::SlotEntry& entry) {
   state_ = FlowState::Field;
   action.state_changed = true;
   action.stop_music = true;
-  // The location word is the room id (0xFC/0xFD = the wld_a01 / wld_b01 world map rooms).
+  // The location word is the room id (0xFC/0xFD = the wld_a01 / wld_b01 world map rooms). The host resolves the id on the saved disc;
+  // a room it cannot load sends the game back to the title.
   const char* room = import::room_name_for_id(entry.data.location());
-  if (room || entry.data.location() > 0) {
-    action.load_room = true;
-    action.room = room ? room : "";
-    action.room_id = entry.data.location();
-    // ROOM_PARAM of a loaded slot = its variable 0x3A. Room init copies var 2 into 0x3A and save events overwrite it with the
-    // entrance they resume at (gal_b09i: `SET $3A, #4` before the save menu, so a Continue re-enters with param 4 and the wake-up
-    // event runs on).
-    action.param = static_cast<u16>(entry.data.head[0x188 + 0x3A] | (entry.data.head[0x189 + 0x3A] << 8));
-    action.restore_position = true;
-    // The leader's position is the engine-written variables 0x12 (X) / 0x14 (Z) of the saved global block (head 0x188 + id); the
-    // word pair at head 0x488 is the unrelated variable 0x300 / 0x302 (it lies off the walk mesh).
-    const auto var = [&](int id) { return static_cast<s16>(entry.data.head[0x188 + static_cast<size_t>(id)] | (entry.data.head[0x189 + static_cast<size_t>(id)] << 8)); };
-    action.x = var(0x12);
-    action.z = var(0x14);
-    log::info("flow: slot {} room {} ({}) position {}, {}  scenario {}", entry.slot, room ? room : "?", entry.data.location(), action.x, action.z, var(0));
-  } else {
-    log::warn("flow: slot {} has unknown location {}", entry.slot, entry.data.location());
-  }
+  action.load_room = true;
+  action.room = room ? room : "";
+  action.room_id = entry.data.location();
+  // ROOM_PARAM of a loaded slot = its variable 0x3A. Room init copies var 2 into 0x3A and save events overwrite it with the
+  // entrance they resume at (gal_b09i: `SET $3A, #4` before the save menu, so a Continue re-enters with param 4 and the wake-up
+  // event runs on).
+  action.param = static_cast<u16>(entry.data.head[0x188 + 0x3A] | (entry.data.head[0x189 + 0x3A] << 8));
+  action.restore_position = true;
+  // The leader's position is the engine-written variables 0x12 (X) / 0x14 (Z) of the saved global block (head 0x188 + id); the
+  // word pair at head 0x488 is the unrelated variable 0x300 / 0x302 (it lies off the walk mesh).
+  const auto var = [&](int id) { return static_cast<s16>(entry.data.head[0x188 + static_cast<size_t>(id)] | (entry.data.head[0x189 + static_cast<size_t>(id)] << 8)); };
+  action.x = var(0x12);
+  action.z = var(0x14);
+  log::info("flow: slot {} room {} ({}) position {}, {}  scenario {}", entry.slot, room ? room : "?", entry.data.location(), action.x, action.z, var(0));
   return action;
 }
 

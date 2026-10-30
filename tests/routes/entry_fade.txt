@@ -1,0 +1,9 @@
+# Every field entry fades in from black over 0x30 ticks after INIT, whatever INIT asked for: on entrance 4 tel_b22e's INIT runs
+# FADE 1, #0 and its cutscene never fades back in by itself (wait room fails while the screen is faded).
+0 wait room tel_b22e 90               # debug Room= start
+- screenshot ef_01_start.png
+- load tel_b22e 4                     # route load
+- wait 2
+- wait room tel_b22e 90
+- screenshot ef_02_load.png
+- quit

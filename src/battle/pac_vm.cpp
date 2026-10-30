@@ -307,7 +307,7 @@ void Vm::interpret(int entity) {
     cur_slot_ = frame.slot;
     ++ops_;
     ++op_counts_[op];
-    if (oi.conf == '?') unimplemented_.insert(op);
+    if (oi.conf == 'U') unimplemented_.insert(op);
     const Step result = exec(entity, frame, op, adv);
     for (const auto& [index, before] : writes_)
       if (vars_[index] != before && read_tick_[index] == vtime_ && read_entity_[index] < entity) stale_read_ = true;
@@ -855,7 +855,7 @@ Vm::Step Vm::exec(int entity, Frame& frame, u8 op, int& adv) {
       store(dst(1), next);
       break;
     }
-    // '?' and default-skip ops advance by their length.
+    // 'U' and default-skip ops advance by their length.
     default: break;
   }
   (void)adv;
@@ -1215,28 +1215,32 @@ bool ScriptedBrain::plan_turn(Battle& battle, int unit, Rng& rng, std::vector<En
   return true;
 }
 
-// Queue entries (op 67) -> one action per target bit (each entry is resolved against its target mask).
+// Queue entries (op 67) -> actions: a weapon entry attacks each unit of its target mask in turn; an element entry is one cast aimed at
+// every unit of the mask (the field ring and the cast-colour history take it once).
 void ScriptedBrain::to_actions(const Battle& battle, const std::vector<QueuedAttack>& queued, std::vector<EnemyAction>& out) {
   for (const QueuedAttack& attack : queued) {
     // Countdown reset: the core does it.
     if (attack.type == 4) continue;
-    for (int unit = 0; unit < kUnits; ++unit) {
-      if (!(attack.mask >> unit & 1u)) continue;
-      EnemyAction ea;
-      ea.target = unit;
-      ea.seq = attack.seq;
-      ea.group = attack.group;
-      if (attack.type == 0 || attack.type == 5) {
-        ea.kind = EnemyAction::Kind::Weapon;
-        ea.strength = attack.value;
-      } else if (attack.type == 1 || attack.type == 2 || attack.type == 3 || attack.type == 6) {
-        if (attack.value <= 0 || attack.value >= static_cast<int>(battle.tables().elements.size())) continue;
-        ea.kind = EnemyAction::Kind::Element;
-        ea.element = attack.value;
-      } else {
-        continue;
-      }
+    const u32 mask = attack.mask & ((1u << kUnits) - 1);
+    if (!mask) continue;
+    EnemyAction ea;
+    ea.seq = attack.seq;
+    ea.group = attack.group;
+    if (attack.type == 1 || attack.type == 2 || attack.type == 3 || attack.type == 6) {
+      if (attack.value <= 0 || attack.value >= static_cast<int>(battle.tables().elements.size())) continue;
+      ea.kind = EnemyAction::Kind::Element;
+      ea.element = attack.value;
+      ea.target = std::countr_zero(mask);
+      ea.targets = mask;
       out.push_back(ea);
+    } else if (attack.type == 0 || attack.type == 5) {
+      ea.kind = EnemyAction::Kind::Weapon;
+      ea.strength = attack.value;
+      for (int unit = 0; unit < kUnits; ++unit) {
+        if (!(mask >> unit & 1u)) continue;
+        ea.target = unit;
+        out.push_back(ea);
+      }
     }
   }
 }

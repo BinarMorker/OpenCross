@@ -12,6 +12,7 @@
 #include "game/effects/sequence_player.h"
 #include "game/effects/soft_raster.h"
 #include "game/effects/strip_smooth.h"
+#include "import/battle_stage.h"
 #include "import/room_effects.h"
 
 using namespace oc;
@@ -482,7 +483,8 @@ void test_ot_slot() {
   bank.add(&fx);
   effects::EmitterSystem sys(bank);
   sys.register_all();
-  sys.start("0000");
+  sys.start("nrm");
+  sys.start("fix");
   for (int tick = 0; tick < 3; ++tick) sys.tick();
   effects::ViewParams view;
   view.trans = {0, 0, 1600};
@@ -560,6 +562,60 @@ void test_sequence_player() {
   CHECK(player.active() == 0);
   CHECK(!player.running("main"));
   CHECK(!player.start("nope"));
+}
+
+// The name "0000": start (field B6) looks it up as a name and starts nothing; kill (field 9C / E7) stops every header and frees every
+// object. The repeating 'loop' sequence restarts at its end; stop(name) leaves it alone, stop_all (field D7 "0000") unlinks it as well
+// and ends the shake.
+void test_every_name() {
+  assets::RoomEffects fx = make_pack();
+  auto waiting = make_emitter("wai1", 0, 0, 0, {xyz(0x08, 0, 0, 0), val(0x0F, 500)});
+  waiting.flags = 4;
+  fx.emitters.push_back(waiting);
+  fx.emitters.push_back(make_emitter("run1", 0, 0, 2, {xyz(0x08, 0, 0, 0), val(0x0F, 500)}));
+  auto cmd = [](u16 op, u16 len, u16 wait, const char* name, std::vector<u8> data) {
+    assets::SeqCmd command;
+    command.op = op;
+    command.len = len;
+    command.wait = wait;
+    command.name = name;
+    command.data = std::move(data);
+    command.data.resize(len - 4u, 0);
+    return command;
+  };
+  assets::Sequence loop;
+  loop.name = "loop";
+  loop.cmds = {cmd(0x20, 8, 30, "", {}), cmd(0x21, 8, 0, "", {})};
+  fx.sequences.push_back(loop);
+  assets::Sequence other;
+  other.name = "shk1";
+  std::vector<u8> shake(8, 0);
+  shake[4] = 6;
+  other.cmds = {cmd(0x2E, 12, 100, "", shake), cmd(0x21, 8, 0, "", {})};
+  fx.sequences.push_back(other);
+  effects::EffectBank bank;
+  bank.add(&fx);
+  effects::EmitterSystem sys(bank);
+  sys.register_all();
+  CHECK(!sys.start("0000"));
+  CHECK(!sys.header_running(0) && sys.header_running(1));
+  for (int tick = 0; tick < 4; ++tick) sys.tick();
+  CHECK(sys.live_objects() > 0);
+  CHECK(sys.kill("0000"));
+  sys.tick();
+  CHECK(!sys.header_running(1) && sys.live_objects() == 0);
+  effects::SequencePlayer player(bank, sys);
+  CHECK(player.start("loop") && player.start("shk1"));
+  for (int tick = 0; tick < 40; ++tick) player.tick();
+  CHECK(player.running("loop") && player.running("shk1"));
+  player.stop("shk1");
+  CHECK(player.running("loop") && !player.running("shk1"));
+  int ax = 0, ay = 0;
+  player.shake_amplitude(ax, ay);
+  CHECK(ax == 6);
+  player.stop_all();
+  player.shake_amplitude(ax, ay);
+  CHECK(player.active() == 0 && ax == 0);
 }
 
 // Nested type-0x01 pack (effect/particle.prd > fenc): import::nested_pack returns the inner drp by name, nothing for an entry of another
@@ -810,6 +866,51 @@ void test_lens_flash() {
 }
 }  // namespace
 
+// Flag bit 28: the six bound points of a mesh and the screen test (dropped only when every point is in a screen corner).
+void test_object_screen_test() {
+  const auto points = import::mesh_cull_points({{-100, -200, -50}, {300, 40, 70}, {0, 0, 0}});
+  CHECK(points[0] == (std::array<s16, 3>{100, -80, 10}));
+  CHECK(points[1] == (std::array<s16, 3>{300, 0, 0}) && points[2] == (std::array<s16, 3>{-100, 0, 0}));
+  CHECK(points[3] == (std::array<s16, 3>{0, 0, 70}) && points[4] == (std::array<s16, 3>{0, 0, -50}) && points[5] == (std::array<s16, 3>{0, -200, 0}));
+  effects::ViewParams view;
+  view.h = 256.0f, view.ox = 160.0f, view.oy = 112.0f;
+  effects::EmitterSystem::MeshInstance mi;
+  mi.sprite_type = 14;
+  mi.flags = 1u << 28;
+  mi.centre = {0, 0, 1000};
+  CHECK(!mi.off_screen(points, view));
+  mi.centre = {5000, 5000, 1000};
+  CHECK(mi.off_screen(points, view));
+  mi.centre = {5000, 0, 1000};
+  CHECK(!mi.off_screen(points, view));
+  mi.centre = {0, 5000, 1000};
+  CHECK(!mi.off_screen(points, view));
+  mi.centre = {5000, 5000, 1000};
+  mi.flags = 0;
+  CHECK(!mi.off_screen(points, view));
+  // Other types (here the ground) project their origin only: a screen x past 1023, a depth up to h / 2 or behind the eye drops them.
+  mi.flags = 1u << 28;
+  mi.sprite_type = 19;
+  CHECK(mi.off_screen(points, view) && mi.off_screen(view));
+  mi.centre = {5000, 0, 1000};
+  CHECK(mi.off_screen(view));
+  mi.centre = {3000, 0, 1000};
+  CHECK(!mi.off_screen(view) && !mi.off_screen(points, view));
+  mi.centre = {0, 0, 128};
+  CHECK(mi.off_screen(view));
+  mi.centre = {0, 0, 129};
+  CHECK(!mi.off_screen(view));
+  mi.centre = {0, 0, -10};
+  CHECK(mi.off_screen(view));
+  mi.centre = {0, 0, 70000};
+  CHECK(mi.off_screen(view));
+  mi.flags = 0;
+  CHECK(!mi.off_screen(view));
+  mi.flags = 1u << 28;
+  mi.sprite_type = 14;
+  CHECK(!mi.off_screen(view));
+}
+
 int main() {
   test_lens_flash();
   test_good();
@@ -824,9 +925,11 @@ int main() {
   test_blend_arithmetic();
   test_ot_slot();
   test_sequence_player();
+  test_every_name();
   test_nested_pack();
   test_rot_order();
   test_strip_smooth();
+  test_object_screen_test();
   std::printf(failures ? "%d failure(s)\n" : "ok\n", failures);
   return failures ? 1 : 0;
 }

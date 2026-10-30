@@ -26,7 +26,6 @@ add_library(oc_effects STATIC
   bespoke/bespoke.cpp
   bespoke/band_wipe.cpp
   bespoke/line_ring.cpp
-  bespoke/death_dissolve.cpp
   bespoke/mesh_sweep.cpp
   bespoke/mesh_flight.cpp
   bespoke/mesh_water.cpp

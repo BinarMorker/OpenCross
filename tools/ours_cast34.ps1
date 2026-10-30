@@ -1,5 +1,5 @@
 # Our side of one per-id battle-effect comparison against the ps1 capture. usage: tools\ours_cast34.ps1 <element id> [-Scene N] [-Caster U] [-Tgt U] [-Ecast] [-Weapon] [-Party a,b,c] [-CamPick s] [-Seed n] [-CastAt f] [-Frames n]
-#   [-Keep] [-NoDiff] [-NoCamSearch] [-CamPool a,b,c] [-Dt "t:N,t:N" | -NoDt] [-NoStats]
+#   [-Keep] [-NoDiff] [-NoCamSearch] [-CamPool a,b,c] [-Dt "t:N,t:N" | -NoDt] [-NoStats] [-Ring c,c,c]
 # OC_FX_DT = the PS1 loop iteration length the ps1 capture shows (fx_diff.py --info `dt:`), so an overlay's
 # per-call emitter fires happen once per dt ticks as in ps1; -Dt gives a schedule / constant by hand, -NoDt = the 60 Hz pace (dt 1).
 # Runs the Debug opencross.exe ocbattleview headless (deterministic ticks, --shotevery 5) with OC_FX_OBJECTS / OC_FX_SEQ / OC_FX_UNITS = 5 and writes
@@ -12,13 +12,13 @@
 # fx_diff.py --extract first when ref\tables.json is missing (it also fills cam_pick: from the sequence tags); with no pick known the camera
 # pool (-CamPool) is probed - one short parallel run per member, scored against the ps1 camera by fx_diff.py --cam-score - and the winner is written to the
 # manifest (-NoCamSearch = the old default ch13; every member is scored at the time shifts -1 / 0 / +1 sample, accepted at >= 50 % or when it is
-# >= 2x the runner-up, the shift is printed); -Frames defaults to CastAt + the ps1 capture length; -Keep keeps states / frames / shots (no --prune); -NoDiff skips the diff.
+# >= 2x the runner-up, the shift is printed); -Frames defaults to CastAt + the ps1 capture span in battle refreshes (fx_diff.py --info `last_refresh:`; one ps1 game frame takes 2-3 refreshes) + 60; -Keep keeps states / frames / shots (no --prune); -NoDiff skips the diff.
 param([int]$Id=-1,[int]$Scene=-1,[int]$Caster=-1,[int]$Tgt=-1,[switch]$Ecast,[switch]$Weapon,[string]$Party="",[string]$CamPick="",[int]$Seed=1,[int]$CastAt=-1,[int]$Frames=-1,
       [switch]$Keep,[switch]$NoDiff,[switch]$NoCamSearch,[switch]$NoPoolSearch,[string]$CamPool="ch10,ch11,ch12,ch13",[string]$Dt="",[switch]$NoDt,[switch]$NoStats,
-      [string]$Folder="",[switch]$Auto,[int]$AutoFrames=300,[string]$EnemyHp="",[string]$Offset="",[string]$Exe="",[int]$Ko=-1)
+      [string]$Folder="",[switch]$Auto,[int]$AutoFrames=300,[string]$EnemyHp="",[string]$Offset="",[int]$CastIndex=-1,[string]$Exe="",[int]$Ko=-1,[string]$Ring="")
 $Root=(Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 # -Folder <name> (the capture folder: "<id>" = a PC element, "<id>_s<scene>_u<unit>" = an enemy own-cast) takes id / scene / caster / mode from the folder
-# name + ref\manifest.txt (mode: enemy -> -Ecast); -Auto = ocbattleview --auto --autoframes 300 (scripted-dialogue scenes); -Offset N|auto = fx_diff.py --offset.
+# name + ref\manifest.txt (mode: enemy -> -Ecast); -Auto = ocbattleview --auto --autoframes 300 (scripted-dialogue scenes); -Offset N|auto = fx_diff.py --offset; -CastIndex N = fx_diff.py --cast-index (align on the Nth cast, 0 = first, when the capture holds several casts of the id).
 # Inside a .claude\worktrees\<x> checkout the capture tree (tmp\r34) and, when the worktree has none, the exe come from MAIN (-Exe overrides the exe).
 $Main=$Root; if($Root -match '^(.*?)\\\.claude\\worktrees\\[^\\]+$'){ $Main=$matches[1] }
 $exe= if($Exe -ne ""){$Exe}else{ Join-Path $Root "build\win-x64\bin\Debug\opencross.exe" }
@@ -82,10 +82,10 @@ if($Tgt -lt 0){
     }
   }
 }
-if($CastAt -lt 0){ $CastAt=200 }   # the usual alignment (ps1 frame F = tick F + 225 for scene 7); fx_diff.py finds the offset itself
+if($CastAt -lt 0){ $CastAt=200 }   # the usual alignment (a ps1 refresh time R = tick R + ~225 for scene 7); fx_diff.py finds the offset itself
 if($Frames -lt 0){
-  $Frames=$CastAt+300
-  if(Test-Path $tj){ foreach($l in (& python $py $dir --info)){ if($l -match '^last_frame:\s*(\d+)' -and [int]$matches[1] -gt 0){ $Frames=$CastAt+[int]$matches[1] } } }   # = the ps1 capture length
+  $Frames=$CastAt+600
+  if(Test-Path $tj){ foreach($l in (& python $py $dir --info)){ if($l -match '^last_refresh:\s*(\d+)' -and [int]$matches[1] -gt 0){ $Frames=$CastAt+[int]$matches[1]+60 } } }   # the ps1 capture's span in refreshes (our ticks; one ps1 game frame = 2-3 refreshes) + a margin for the states before the first sample
 }
 # cam_probe: = this script's own scored pick (trusted). cam_pick: is written by ps1_state.py campick / fx_diff --extract from the ps1
 # sequence-task tags, which are the PACK's own sequences (ch04, ch05, 0000 ...), not the camera pool: accept it only when it is a pool member.
@@ -114,6 +114,7 @@ function RunOurs([string]$pick,[string]$outdir,[int]$nframes,[string[]]$shotargs
   if(-not $NoStats){ $a+=@("--stats","hp=1023,atk=1,def=127,hit=127,evd=0,mag=1,mdef=127"); if($eh){ $a+=@("--enemyhp",$eh) } }
   if($Party -ne ""){ $a+=@("--party",$Party) }
   if($Ko -ge 0){ $a+=@("--ko","$Ko") }   # that party unit starts KO'd (Revive / Full Revival)
+  if($Ring -ne ""){ $a+=@("--ring",$Ring) }   # the field ring at the start (a capture's ring, e.g. blue,green,yellow)
   $q=$a | ForEach-Object { if($_.Contains(" ")){'"'+$_+'"'}else{$_} }
   $lg=Join-Path $outdir "ours.log"
   "cmd: opencross $($q -join ' ')  (OC_BATTLE_SEED=$Seed OC_CAM_PICK=$pick)" | Set-Content (Join-Path $outdir "cmd.txt")
@@ -193,6 +194,6 @@ $lg=Join-Path $out "ours.log"
 MergeOut $lg
 "ours: $lg ($((Get-Item $lg).Length) bytes), shots: $((Get-ChildItem (Join-Path $out 'shots') -Filter *.png).Count)"
 if(-not $NoDiff){
-  $da=@($dir); if($Offset -ne ""){ $da+=@("--offset",$Offset) }; if(-not $Keep){ $da+="--prune" }
+  $da=@($dir); if($Offset -ne ""){ $da+=@("--offset",$Offset) }; if($CastIndex -ge 0){ $da+=@("--cast-index","$CastIndex") }; if(-not $Keep){ $da+="--prune" }
   & python $py @da
 }

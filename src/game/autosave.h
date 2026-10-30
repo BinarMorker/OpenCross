@@ -13,7 +13,7 @@ class Autosave {
   struct Field {
     // The map id the party stands in.
     u16 location = 0;
-    // The main menu may save (script variable 0x3C == 1 and the debug tools were not used).
+    // The main menu may save (script variable 0x3C == 1).
     bool allowed = false;
     // Map id; rooms 0xFA..0xFD have entrance exclusions.
     int room = -1;

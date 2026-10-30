@@ -30,13 +30,16 @@ struct StageVertex {
 // texture indexes StageAsset::textures (-1 = untextured, vertex colour only); semi is packet code bit 1: the faces are semi-transparent
 // in the data (the drawing object can add the bit too); abr is the tpage blend mode of the faces (0 B/2+F/2, 1 B+F, 2 B-F, 3 B+F/4),
 // used when `semi` and the object is opaque; object_texture indexes StageAsset::object_textures after import::bake_object_textures
-// (the part's own image; the vertex UVs address it), -1 = not baked (then `texture` and the atlas UVs apply).
+// (the part's own image; the vertex UVs address it), -1 = not baked (then `texture` and the atlas UVs apply). direct_page is the VRAM
+// origin of the texture page of 15-bit direct-colour faces (x halfwords | y rows << 16; such a page can be a copy of the screen, see
+// render::StageInstance::screen), -1 for indexed and untextured faces.
 struct StageSubMesh {
   int texture = -1;
   u32 first_index = 0, index_count = 0;
   bool semi = false;
   int abr = 0;
   int object_texture = -1;
+  int direct_page = -1;
 };
 
 // A seam strip of one textured packet (render::build_tile_seams): one of the packet's edges is shared with a
@@ -63,7 +66,9 @@ struct StageSeam {
 // code bit 1 (carried, not interpreted); indices: triangles in the packet's corner order, (0,1,2), quads add (2,1,3) - the GPU draws a
 // face only when NCLIP(0,1,2) > 0 on screen (x right, y down), so renderers must cull the other side (render::StagePipeline keeps the
 // mapping to the pipeline's front-face rule); submeshes: runs of equal (texture, semi, abr), in face order; emitters: names of the type
-// 0x0A entries that name this mesh; seams: render::build_tile_seams (after the bake / every re-compose; any art mode).
+// 0x0A entries that name this mesh; seams: render::build_tile_seams (after the bake / every re-compose; any art mode);
+// cull_points: the six file-space points of the object screen test (flag bit 28) taken from the whole vertex array's bounds: the
+// centre, (max x, 0, 0), (min x, 0, 0), (0, 0, max z), (0, 0, min z), (0, min y, 0).
 struct StagePart {
   std::string name;
   u32 entry = 0;
@@ -71,6 +76,7 @@ struct StagePart {
   u32 source_vertices = 0;
   u32 source_faces = 0;
   u32 semi_transparent_faces = 0;
+  std::array<std::array<s16, 3>, 6> cull_points{};
   std::vector<StageVertex> vertices;
   std::vector<u32> indices;
   std::vector<StageSubMesh> submeshes;

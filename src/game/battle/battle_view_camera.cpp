@@ -131,9 +131,10 @@ CamPose BattleView::dynamic_pose(int target) const {
   return pose;
 }
 
-// The menu camera runs only while no camera task and no timeline is alive (a running shot keeps the picture). Top menu: the orbit pose is
-// written every tick (a cut when it starts or the PC changes). Target selection in NORMAL mode, and any all-targets selection: one glide
-// from the pose on screen to `zen0`'s first key at 0x40 / 256 per tick. DYNAMIC mode with a cursor: a glide at 0x14 / 256 per tick to the
+// The menu camera runs only while no camera task and no timeline is alive (a running shot keeps the picture). Top menu, and between actions
+// once nothing is queued: the orbit pose round the last menu's PC is written every tick (a cut when it starts or the PC changes); a
+// battle-script cutscene takes that PC away until a command menu opens again, so the pose written last stays. Target selection in NORMAL
+// mode, and any all-targets selection: one glide from the pose on screen to `zen0`'s first key at 0x40 / 256 per tick. DYNAMIC mode with a cursor: a glide at 0x14 / 256 per tick to the
 // DYNAMIC shot whenever the cursor unit changes. Other menus (element list, waiting) keep what is on screen.
 void BattleView::menu_camera() {
   if (ui_ == Ui::Intro || ui_ == Ui::Result || camera_.task_running() || camera_.sequence_running()) {
@@ -141,7 +142,8 @@ void BattleView::menu_camera() {
     return;
   }
   const bool idle = active_pc_ >= 0 && act_.phase == Act::Phase::None && queue_.empty() && finish_ == Finish::None;
-  const bool top = idle && ui_ == Ui::Top && vis_[static_cast<size_t>(active_pc_)].has_model;
+  const bool between = ui_ == Ui::Wait && !orbit_blocked_ && pending_.empty();
+  const bool top = idle && (ui_ == Ui::Top || between) && vis_[static_cast<size_t>(active_pc_)].has_model;
   const bool target = idle && ui_ == Ui::Target && !targets_.empty();
   const bool all_targets = target && (tgt_mode_ == Tgt::EnemyAll || tgt_mode_ == Tgt::AllyAll);
   if (target && (!cam_dynamic_ || all_targets)) {
@@ -177,7 +179,8 @@ void BattleView::select_approach() {
 
 void BattleView::apply_camera(float alpha) {
   camera_.clear_free_pose();
-  CamPose pose = camera_.pose(alpha);
+  const BattleCamera& source = draw_camera_ ? *draw_camera_ : camera_;
+  CamPose pose = source.pose(alpha);
   // Debug tab free camera: the pose is the free one (the shot / orbit above only seed it); H = 512 x FovDeg.
   if (FreeCam& free_camera = free_cam(); free_camera.on()) {
     if (free_camera.needs_init()) free_camera.init_from(pose.eye, pose.target);
@@ -206,7 +209,7 @@ void BattleView::apply_camera(float alpha) {
     down[i] = di;
   }
   // An anchored shot keeps the ground under the eye at least 256 units below the view centre line: the view is raised along its own up axis.
-  if (camera_.ground_lift() && !free_cam().on()) {
+  if (source.ground_lift() && !free_cam().on()) {
     const float ground_y = dot(down, {0.0f, -pose.eye[1], 0.0f});
     if (ground_y < 256.0f)
       for (size_t i = 0; i < 3; ++i) cam_.eye[i] -= down[i] * (256.0f - ground_y);
@@ -310,6 +313,8 @@ void BattleView::tick_camera() {
     anchor_actors_ = {active_pc_};
     camera_.select("elm0");
   }
+  // An open command menu gives the orbit its PC back.
+  if (ui_ != Ui::Wait && ui_ != Ui::Intro && ui_ != Ui::Result && !hud_off_) orbit_blocked_ = false;
   cam_ui_ = ui_;
   if (ui_ == Ui::Intro) {
     ++intro_ticks_;
@@ -367,6 +372,8 @@ void BattleView::tick_camera() {
     }
   }
   menu_camera();
+  // A cutscene that began last tick holds the camera from now on: the pass above was the one of the tick the action ended.
+  if (orbit_block_next_) orbit_blocked_ = true, orbit_block_next_ = false;
 }
 
 }  // namespace oc::game

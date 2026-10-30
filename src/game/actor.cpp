@@ -614,7 +614,8 @@ void Actor::turn_step() {
 }
 
 void Actor::advance_anim(bool loop_current) {
-  // Animation: 0.25 keyframe per tick; the cross-fade source keeps playing (looping).
+  // Animation: 0.25 keyframe per tick. The cross-fade source keeps playing (looping) only for a blend word with bit 0x8000; otherwise
+  // it holds its time.
   auto advance = [&](int clip, float& tp, float& tc, bool loop) {
     tp = tc;
     if (clip < 0) return;
@@ -643,7 +644,6 @@ void Actor::advance_anim(bool loop_current) {
     }
   };
   advance(clip_, t_prev_, t_cur_, loop_current);
-  // Otherwise the source time is left alone.
   if (from_runs_) advance(from_clip_, from_prev_, from_cur_, true);
   fade_prev_ = fade_cur_;
   if (fade_cur_ < fade_len_) ++fade_cur_;
@@ -719,21 +719,22 @@ render::Mat4 Actor::engine_matrix() const {
   return matrix;
 }
 
-bool Actor::attach_joint(int point, render::Mat4& joint_world, float offset[3]) const {
+bool Actor::attach_joint(int point, float alpha, render::Mat4& joint_world, float offset[3]) const {
   if (!model_ || point < 0 || point >= static_cast<int>(model_->asset.attach.points.size())) return false;
   const assets::AttachPoint& ap = model_->asset.attach.points[static_cast<size_t>(point)];
   std::vector<render::Mat4> pal;
-  palette(1.0f, pal);
+  palette(alpha, pal);
   if (ap.joint >= pal.size()) return false;
-  joint_world = model_matrix(1.0f) * pal[ap.joint];
+  joint_world = model_matrix(alpha) * pal[ap.joint];
   for (int i = 0; i < 3; ++i) offset[i] = ap.pos[static_cast<size_t>(i)];
   return true;
 }
 
-void Actor::set_attached(const render::Mat4& world) {
-  attached_prev_ = attached_ ? attached_cur_ : world;
-  attached_cur_ = world;
-  attached_ = true;
+void Actor::set_attached(const Actor* parent, int point, const render::Mat4& local) {
+  attach_parent_ = parent;
+  attach_point_ = point;
+  attach_local_ = local;
+  attached_ = parent != nullptr;
 }
 
 int Actor::head_joint() const {
@@ -933,8 +934,9 @@ void Actor::tick(const WalkMesh& walk, int heading, bool run) {
   if (tile_flags_ & 0xC800u) run = false;
   if (moving && (tri_ >= 0 || noclip)) {
     const float heading_rad = static_cast<float>(heading & 0xFFF) * kUnitsToRad;
-    // 16.16 velocity -> units.
-    const float step = static_cast<float>(run ? speed * 2 + (speed >> 1) : speed) / 16.0f;
+    // 16.16 velocity -> units; a tile with flag 0x1000 halves the velocity.
+    float step = static_cast<float>(run ? speed * 2 + (speed >> 1) : speed) / 16.0f;
+    if (tile_flags_ & 0x1000u) step *= 0.5f;
     // Screen-correct with the script yaw.
     const float dx = -std::cos(heading_rad) * step, dz = std::sin(heading_rad) * step;
     pad_step_[0] = dx;
@@ -1019,11 +1021,11 @@ ActorPose Actor::pose(float alpha) const {
 }
 
 render::Mat4 Actor::model_matrix(float alpha) const {
-  // Attached: rotation / scale from the parent joint, translation interpolated between the last two ticks.
+  // Attached: the parent's joint at the same render fraction x the joint-space transform.
   if (attached_) {
-    render::Mat4 matrix = attached_cur_;
-    for (int r = 0; r < 3; ++r) matrix.at(r, 3) = attached_prev_.at(r, 3) + (attached_cur_.at(r, 3) - attached_prev_.at(r, 3)) * alpha;
-    return matrix;
+    render::Mat4 joint_world;
+    float joint_offset[3];
+    if (attach_parent_->attach_joint(attach_point_, alpha, joint_world, joint_offset)) return joint_world * attach_local_;
   }
   const ActorPose actor_pose = pose(alpha);
   // A model with yaw (h - 0x400) faces heading h; movement is (-cos h, sin h). With this renderer's mat4_rotation_y the

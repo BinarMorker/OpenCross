@@ -372,11 +372,11 @@ bool FieldVM::exec_core(u8 op) {
       set_flag(self.flags38, 1, byte_at(1) == 0);
       advance(2);
       break;
-    case 0x38:  // ENT_FLAG38_BIT4_SET_CLEAR
+    case 0x38:  // SET_NO_COLLISION_TRIGGER
       set_flag(self.flags38, 2, byte_at(1) == 0);
       advance(2);
       break;
-    case 0x39:  // ENT_FLAG38_BIT8_SET_CLEAR
+    case 0x39:  // SET_NOT_TALKABLE
       set_flag(self.flags38, 3, byte_at(1) == 0);
       advance(2);
       break;
@@ -395,7 +395,7 @@ bool FieldVM::exec_core(u8 op) {
       if (byte_at(1) < 9) host_.set_walk_animation(ent_, byte_at(1), operand_u(2));
       advance(4);
       break;
-    case 0x3E:  // SKIP_FWD_N3: skips U 3-byte instructions
+    case 0x3E:  // SKIP_FWD: skips U 3-byte instructions
       advance(3 + 3 * operand_u(1));
       break;
     case 0x3F:  // WALK_TO (b == 0 start form, else wait form)
@@ -434,7 +434,7 @@ bool FieldVM::exec_core(u8 op) {
         advance(op == 0x42 ? 9 : 11);
       }
       break;
-    case 0x44:  // WALK_FOLLOW_ENT_C (b == 1 wait form); a missing target skips the companion wait form too
+    case 0x44:  // WALK_FOLLOW_ENT (b == 1 wait form); a missing target skips the companion wait form too
     case 0xB8: {  // WALK_FOLLOW_ENT_3D
       const int target = op == 0x44 ? entity_operand(2) : resolve_character(byte_at(2));
       if (byte_at(1) == 1) {
@@ -451,7 +451,7 @@ bool FieldVM::exec_core(u8 op) {
       }
       break;
     }
-    case 0x45:  // WALK_TO_ENT_C_TIMED (b != 0 wait form); a missing target skips the companion wait form too
+    case 0x45:  // WALK_TO_ENT_TIMED (b != 0 wait form); a missing target skips the companion wait form too
     case 0xB9: {  // WALK_TO_ENT_3D_TIMED
       const int target = entity_operand(2);
       if (byte_at(1) != 0) {
@@ -484,7 +484,7 @@ bool FieldVM::exec_core(u8 op) {
       advance(op == 0x46 ? 6 : 8);
       break;
     }
-    case 0x47:  // SET_SLOT_FLAG_126
+    case 0x47:  // SET_SLOT_FLAG
       rec_->flag47 = byte_at(1);
       advance(2);
       break;
@@ -497,7 +497,7 @@ bool FieldVM::exec_core(u8 op) {
       advance(8);
       break;
     }
-    case 0x49:  // GET_TARGET_ROTATION
+    case 0x49:  // GET_OWN_ROTATION
       write_var(word_at(1), host_.get_facing(ent_) & 0xFFF);
       advance(3);
       break;
@@ -516,7 +516,7 @@ bool FieldVM::exec_core(u8 op) {
       advance(12);
       break;
     }
-    case 0x4D: {  // GET_DISTANCE_3D_PACKED
+    case 0x4D: {  // GET_DISTANCE_3D
       const s32 a0 = operand_s(3, 15, 0x40), a1 = operand_s(5, 15, 0x20), a2 = operand_s(7, 15, 0x10), b0 = operand_s(9, 15, 0x08),
                 b1 = operand_s(11, 15, 0x04), b2 = operand_s(13, 15, 0x02);
       write_var(word_at(1), isqrt_dist(b0 - a0, b2 - a2, b1 - a1));
@@ -538,10 +538,10 @@ bool FieldVM::exec_core(u8 op) {
     case 0x50:  // JUMP_IF_NOT_KEY
       jump_or_advance((word_at(1) & host_.keys_held()) == 0, 3, 5);
       break;
-    case 0x51:  // JUMP_IF_NOT_KEY2
+    case 0x51:  // JUMP_IF_NOT_KEY_LATCH
       jump_or_advance((word_at(1) & host_.key_latch()) == 0, 3, 5);
       break;
-    case 0x54:  // CLEAR_SCRIPTVAR2
+    case 0x54:  // CLEAR_KEY_LATCH
       host_.clear_key_latch();
       advance(1);
       break;
@@ -554,7 +554,7 @@ bool FieldVM::exec_core(u8 op) {
         pc = word_at(2);
       }
       break;
-    case 0x59:  // OP59_TICK_ADD
+    case 0x59:  // TICK_BONUS
       budget_ += 0x40;
       advance(1);
       break;

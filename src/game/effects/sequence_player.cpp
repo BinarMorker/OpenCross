@@ -392,13 +392,12 @@ bool SequencePlayer::start_main(bool caster_is_target) {
 }
 void SequencePlayer::stop(std::string_view name) {
   auto& tasks = impl_->tasks;
-  if (name == "0000") {
-    tasks.erase(std::remove_if(tasks.begin(), tasks.end(), [](const Task& task) { return !task.is_loop; }), tasks.end());
-    return;
-  }
   tasks.erase(std::remove_if(tasks.begin(), tasks.end(), [&](const Task& task) { return task.seq->name == name; }), tasks.end());
 }
-void SequencePlayer::stop_all() { impl_->tasks.clear(); }
+void SequencePlayer::stop_all() {
+  impl_->tasks.clear();
+  impl_->shake = Tween{};
+}
 void SequencePlayer::tick() { impl_->tick(); }
 size_t SequencePlayer::active() const { return impl_->tasks.size(); }
 size_t SequencePlayer::active_non_loop() const {

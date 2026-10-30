@@ -14,8 +14,8 @@ namespace oc::game {
 
 namespace {
 
-// The battle theme is song 2 on the original source and song 0x14 on the remastered one; jingles keep their id on both.
-constexpr int kPs1BattleSong = 2, kRdeBattleSong = 0x14;
+using audio::kPs1BattleSong;
+using audio::kRdeBattleSong;
 
 bool weapon_name(const std::string& name) {
   return name.size() == 4 && std::isdigit(static_cast<unsigned char>(name[0])) && (name[1] == 's' || name[1] == 'm' || name[1] == 'l');
@@ -312,23 +312,23 @@ void BattleAudio::play_song(int song) {
 
 // The field starts the battle theme itself on an encounter, so a theme already playing is adopted; a kept field song (C9 flag 1, also when the
 // room's own song is the battle theme's id, and when no mixer state is observable) or any other song playing is left alone.
-void BattleAudio::start_battle_theme(bool keep_field_music) {
+void BattleAudio::start_battle_theme(int battle_flags, bool keep_field_music) {
   if (!mixer_ || !vfs_) return;
   if (keep_field_music) {
     log::info("battle audio: field music kept (C9 flag 1; song {})", mixer_->current_song());
     return;
   }
-  const int battle_song = remastered_ ? kRdeBattleSong : kPs1BattleSong;
-  if (mixer_->playing() && mixer_->current_song() == battle_song) {
+  const int theme = audio::battle_song(battle_flags, remastered_);
+  if (mixer_->playing() && mixer_->current_song() == theme) {
     started_music_ = true;
     song_ = mixer_->current_song();
     return;
   }
-  if (mixer_->playing() && mixer_->current_song() != battle_song) {
+  if (mixer_->playing() && mixer_->current_song() != theme) {
     log::debug("battle audio: music kept (song {})", mixer_->current_song());
     return;
   }
-  if (start_song(battle_song, true)) log::info("battle audio: battle theme (song {})", battle_song);
+  if (start_song(theme, true)) log::info("battle audio: battle theme (song {})", theme);
 }
 
 void BattleAudio::duck_cast() {
@@ -346,6 +346,11 @@ void BattleAudio::restore_cast() {
   ducked_ = false;
   if (!mixer_ || !(started_music_ || mixer_->playing())) return;
   mixer_->fade(0x7F, 0x60 / 60.0);
+}
+
+void BattleAudio::fade_music(int volume, int ticks) {
+  if (!mixer_ || !(started_music_ || mixer_->playing())) return;
+  mixer_->fade(volume & 0x7F, std::max(0, ticks) / 60.0);
 }
 
 void BattleAudio::stop_music() {

@@ -6,17 +6,18 @@ The lifecycle and turn rules of a fight: how a battle is built, what a command c
 
 ### 1.1 From the field to `Battle::start`
 
-* `make_field_battle_args` resolves the scene with `GameTables::scene_for(battle_id, 0)`: an id of 0x200 or more is the scene `id - 0x200`; otherwise `symtbl[id * 8 + variant]`. The variant is always 0 (the weighted variant roll described in `battle_data.md` section 6 is not modelled).
+* `make_field_battle_args` resolves the scene with `battle::encounter_scene`: an id of 0x200 or more (field op C9) is the scene `id - 0x200` and draws nothing; otherwise (op A3, a random encounter) one `rnd(0, 2549)` picks the variant from the 8 bands of `battle_data.md` section 6 (variant 0 half the time, each next one half as often, variant 7 10 in 2550) and the scene is `symtbl[id * 8 + variant]`. The roll uses a generator of its own, seeded from the battle seed (`OC_BATTLE_SEED`, set per fight by `[Debug] Seed`), so a seeded run repeats its enemy groups.
+* Battle id and scene: only two tests read the field's battle id: the Relief Charm below (0x3DD) and the boss intro (an id above 0x1FF, `StartOptions::battle_id`). Every later test of the fight (scene 0x17F countdowns, 0x1D7 / 0x1D8 / 0x1DD music, results screen and New Game+ HP, mode 49's 0x1D8, the event-text table) compares the scene number.
 * The party is the field party (`world.party_chars()`). Relief Charm: unless the battle id is 0x3DD, when the save's relief member is set and not already in the party, every party slot holding character 0 (Serge) takes the relief member instead.
 * `battle_setup` adds: the New Game+ flag, the growth state (star from the save, progress kept by the host for the session, counter from the save) and the bench (every recruited character with non-zero max HP outside the party).
 * `Battle::start` fails (returns false, the host reports the fight as fled) for a scene id outside the table, a party of 0 or more than 3, or a scene that yields no enemy.
 
 ### 1.2 Party
 
-* The party is stably sorted by character id and takes units 0 to 2 in that order.
+* Party slot i (the field party order) takes unit i. Only the placement order follows the character id (the lowest id is placed when the load ends, the others with the party intro); the seat, the HUD panel and the unit slot stay the party slot.
 * Per member (`init_pc`): stats from the save record; HP `min(saved HP, max HP)`; countdown 8 and AP 8; stamina 70; statuses `lo = saved persistent bits (mask 0x39) | gear permanent statuses`, `hi` = gear permanent statuses; status skip masks = armour mask OR defence-accessory masks (`Equip::resist_*`); gender from record word +0x14; stamina rate = record rate + gear stamina modifier, floor 0.
 * Gear HP% (gear flag 0x01, once per accessory): `maxHP = maxHP x (pct + 100) / 100`, plus 1 when that changed nothing, cap 999. Current HP is then the new max HP when the saved HP was at the old max, else the saved HP (never above max). HP 0 starts KO'd.
-* Gear flags are the OR of `flags & 0xF` over weapon, armour and accessories: 0x01 HP%, 0x02 gold x125/100, 0x04 deals x125/100, 0x08 takes x75/100. Accessory flags 0x10 start gauge (`power`), 0x20 offence (adds weapon power, accuracy and MAG), 0x40 defence (adds armour term, MDEF term, evade, status and guard masks), 0x80 stamina rate (`mag`). When no gear table is loaded, or neither the weapon nor the armour id resolves, the flat defaults of `Equip` apply (weapon 16, accuracy 60, variance 20, armour 4, armour variance 20, MDEF gear 4) and the accessories add nothing.
+* Gear flags are the OR of `flags & 0xF` over weapon, armour and accessories: 0x01 HP%, 0x02 gold x125/100, 0x04 deals x125/100, 0x08 takes x75/100. Accessory flags 0x10 start gauge (`power`), 0x20 offence (adds weapon power, accuracy and MAG), 0x40 defence (adds armour term, MDEF term, evade, status and guard masks), 0x80 stamina rate (`mag`). When no gear table is loaded, or neither the weapon nor the armour id resolves, the flat defaults of `Equip` apply (weapon 16, accuracy 60, variance 20, armour 4, armour variance 20, MDEF gear 4) and the accessories add nothing; their ids are still kept (`Equip::acc`), so the Dopplegang accessory 0xFC and the special-status accessories 0xF9 to 0xFB keep working.
 * Pip: a kind byte 0x2B to 0x30 rewrites the cells holding element 0x11F / 0x121 / 0x123 to the form's first tech and 0x120 / 0x122 / 0x124 to its second (section 9), and sets the colour his 18 techs take to his innate colour. Any member whose grid holds element 0x7E (Chrono Cross) turns the colour-history row on for the HUD (`colour_row_shown`).
 * Starting gauge: `-1 + gear start-gauge`, clamped to `[-1, gauge_max]`. `gauge_max` is the deepest grid row (cell / 10) that holds an unlocked cell with an element; -1 when there is none. Usable cells: unlocked, element id non-zero and inside the element table.
 * The relief member is only a different character in the slot; the rules see no difference.
@@ -39,8 +40,8 @@ Per enemy (`init_enemy`, `load_monster_record`), in slot order:
 * Max HP: `min(record, 32767)`, then the New Game+ and gender scaling of `battle_data.md` section 3 (a record gender of 0 costs one RNG draw, `rnd(1, 2)`), final cap 32767. HP starts full.
 * Action period: `ap = record AP; ap += rnd(0, ap >> 2)`. First countdown: `rnd(lo, ap)` with `lo = 1` for scene ids above 0x17F, else 0 (after the AP bonus, so the draw uses the larger value).
 * RNG order per enemy: gender (if rolled), AP bonus, countdown.
-* Enemies start with stamina 70, gauge -1 and `gauge_max` 7 (the enemy gauge rises with landed hits but gates nothing).
-* Field ring: the three `btbgdat` colours of the row named by the battlefield operand when one is given (non-negative), else by the scene's background; a row outside the table leaves the ring empty, and a colour value of 6 or more leaves its slot empty (-1). Slot 0 is the oldest.
+* Enemies start with stamina 70 and gauge -1. Their `gauge_max` is the deepest grid row holding an element (`& 0x7FFF` non-zero) in a cell without the lock bit 0x4000, -1 when there is none; every stock monster cell carries the lock bit, so an enemy gauge stays at -1 (landed hits are clamped to it).
+* Field ring: the three `btbgdat` colours of the stage's row: the battlefield operand when it names a row of the table, else the scene's background (the same choice the stage loader makes); a colour value of 6 or more leaves its slot empty (-1). Slot 0 is the oldest.
 
 ### 1.4 Before the first menu
 
@@ -60,7 +61,7 @@ After the units exist `brain_.begin_battle` runs the scripts' init slot, then `s
 | Command | Cost and effect | After each unit of the command |
 |---|---|---|
 | Attack, 1 to 4 chained strengths (`kMaxChain` = 4) | each hit costs stamina (`battle_data.md` section 10; weak 10 / 12, medium 20 / 25, heavy 30 / 37 when fatigued); the whole chain must fit the stamina at the time of the command, strengths must be 0 to 2; the cost is paid per hit, also on a miss | other PCs recover (2.3), enemies count down `s + 1`, `post_action(s + 1, s + 1)`, `check_end`; the chain stops when the battle ends or the actor is down |
-| Element (a grid cell) | stamina `- 70`; gauge `- (row + 1)`, floor -1; the cell is marked used (section 4) | other PCs recover 1 step (not the target if it is a PC), enemies count down 1, `post_action(7, 1)` |
+| Element (a grid cell) | stamina `- 70`; gauge `- (row + 1)`, floor -1; the cell is marked used (section 4). A double / triple tech (section 4.1): every caster pays 70 and gives up its cell; caster entry k's gauge becomes party slot k's gauge `- (its own cell row + 1)`, clamped to `[-1, slot k's gauge_max]` | other PCs recover 1 step (not the casters, not the target if it is a PC), enemies count down 1, `post_action(7, 1)` |
 | Defend | stamina `+ 10`, cap 70; guard on; "defended" flag on | other PCs recover 1 step, enemies count down 1, `post_action(1, 1)` |
 | Run | the fight ends at once as Fled (2.7, 7): no roll, no cost, no check of the scene | none |
 
@@ -74,7 +75,7 @@ Notes:
 
 ### 2.3 Stamina recovery of the others (`step_after_pc_action`)
 
-For every living PC except the actor and (for a cast) a PC target: stamina rises by the recovery step of `battle_data.md` section 10 (modifier 0), capped at 70. The number of steps is the hit's steps for a weapon hit and 1 for a cast or defend. The same call lowers the countdown of every living enemy that is not 0xFFFF by that number of steps, floor 0.
+For every living PC except the actor, the other casters of a double / triple tech and (for a cast) a PC target: stamina rises by the recovery step of `battle_data.md` section 10 (modifier 0), capped at 70. The number of steps is the hit's steps for a weapon hit and 1 for a cast or defend. The same call lowers the countdown of every living enemy that is not 0xFFFF by that number of steps, floor 0.
 
 ### 2.4 Upkeep per action (`post_action`)
 
@@ -103,14 +104,14 @@ Loop (at most 20000 iterations; exceeding it ends the fight as Stalled):
 1. `check_end` (section 7).
 2. Each living PC whose countdown is 0 (all three are checked in slot order) takes a scripted turn: its countdown is set to its AP (8) and it acts only if Pip's form element is pending (the unit's script slot 2 casts it, other PCs pass) or the PC is confused (a scripted plan if the script has one, else a weak weapon attack on a random living unit other than itself, then `post_action(1, 1)`). Then the reactions run and the loop restarts.
 3. Otherwise the next enemy with countdown 0, scanning the six enemy slots round-robin from the one after the last that acted, takes its turn: countdown 0xFFFF, then either the scripted plan (the script's slot 2; several queued attacks are one turn) or `EnemyBrain::choose`. A turn sets `countdown = ap + rnd(0, ap >> 2)` and runs `post_action`. An enemy element is cast from the grid row `level - 1` (0 when it has no level). A weapon aimed at a dead target retargets to the first living PC; an absent or out-of-range target becomes unit 0. The fallback brain (`RandomBrain`) picks a random living PC, then with 40 percent a random usable mode-0 element of its grid, else a weapon strength 0 / 1 / 2 with 60 / 30 / 10 percent. Then reactions run and the loop restarts.
-4. Otherwise, if any PC `can_open_menu`, the loop returns: the host picks which PC.
+4. Otherwise, if any PC `can_act`, the loop returns: the host picks which PC. While a form change is pending nobody can act, so time runs on until a PC's countdown reaches 0 and step 2 casts the form element.
 5. Otherwise `time_advance` and repeat.
 
 `can_open_menu`: a PC, alive, stamina 10 or more, none of the `lo` bits 0x20304080 (KO 0x80, asleep 0x4000, confused 0x100000, 0x200000, defeated / frozen 0x20000000), and not defended. `can_act` also requires the fight to be on and no pending form change.
 
 ### 2.7 Flee
 
-Only `Command::Run` ends a fight as Fled; `validate` refuses it only when the battle is over or the actor cannot act (section 3.2). A scripted code 2 (section 7) ends it the same way.
+Only `Command::Run` ends a fight as Fled; `validate` refuses it only when the battle is over or the actor cannot act (section 3.2). A scripted code 2 (section 7) ends it the same way. A Run while pilfered loot is pending (`Rewards::stolen` not empty) drops it: the list is cleared and the Run event carries system message row 5 ('Dropped the stolen goods!'). The view then holds the escape 80 ticks longer and opens that window at (32, 144) 40 ticks into the hold; the battle loop ends with the hold, so the window closes then.
 
 ## 3. Targeting and validation
 
@@ -133,7 +134,7 @@ Refused, with the reason string, when: the battle is over; the actor is not a pa
 
 ### 3.3 All-target casts
 
-`cast_element` (record byte +4 bit 0x10) hits every qualifying unit of the target's side, or all nine units when both side bits are set (colour fields, Chrono Cross, the seal-all elements). A unit qualifies when it is present and alive (KO'd for a KO-only element or mode 4), and, for an enemy slot, bit `unit` of `cast_mask` is set; the party side is never masked. `cast_mask` starts as `~(scene byte 0x1B << 3) & 0x1FF`; script ops 34, 35 and 5B (argument 0) set a unit's bit. The cast stops when the fight ends. If nobody qualified, the cast is made once on the chosen target. The ring takes the cast colour once, after the last target (section 5).
+`cast_element` (record byte +4 bit 0x10) hits every qualifying unit of the target's side, or all nine units when both side bits are set (colour fields, Chrono Cross, the seal-all elements). A unit qualifies when it is present and alive (KO'd for a KO-only element or mode 4), and, for an enemy slot, bit `unit` of `cast_mask` is set; the party side is never masked. `cast_mask` starts as `~(scene byte 0x1B << 3) & 0x1FF`; script ops 34, 35 and 5B (argument 0) set a unit's bit. The cast stops when the fight ends. If nobody qualified, the cast is made once on the chosen target. An enemy's scripted element (op 67) aimed at several units is likewise one cast: each unit of its target mask that is alive (KO'd for a KO-only element) takes it once. The ring takes the cast colour once, after the last target (section 5).
 
 ### 3.4 The "defended" flag
 
@@ -145,15 +146,25 @@ See 2.2. It is a command-menu gate only; it does not affect targeting.
 * Gauge: starts as in 1.2. A landed weapon hit (the roll succeeded, whatever the damage code) by any unit adds `s + 1` (weak 1, medium 2, heavy 3), clamped to `[-1, gauge_max]`. A cast subtracts `row + 1`, floor -1 (not with the free-elements cheat).
 * An element is usable (`element_usable`) when all hold: the cell is not colour-sealed; the PC can open a menu and has stamina above 0; the cell is usable (unlocked, valid id) and not yet used this battle; `gauge >= row`.
 * Seals: the PC's `lo` bit `0x800 << (4 x colour)` seals every cell whose element has that single colour (green 0x800, white 0x8000, black 0x80000, red 0x800000, yellow 0x8000000, blue 0x80000000); rainbow and colourless elements are never sealed. Sealed cells stay on the menu and refuse the confirm.
-* Used cells stay used for the rest of the battle. Recharge: mode 12 (row 2 or higher) clears the used bit of the target's cells 0 to `10 x row - 1`; mode 3 (and a PC's mode 14) clear each used cell of the caster with chance `variance` percent.
+* Used cells stay used for the rest of the battle. Recharge: mode 12 (row 2 or higher) clears the used bit of the target's cells 0 to `10 x row - 1`; mode 3 (and mode 14 on a party slot) clears each used cell of the target with chance `variance` percent.
 * Slot term: the per-mille factor of `battle_data.md` section 10 for the cell's row and the element's level; it scales damage and healing.
+* Double / triple techs (`combo_at`, `cell_element`): see 4.1.
 * Consumable stacks (element record flag byte bit 0x10): the stack size is the save's count (at least 1). Each cast decrements it; the cell is marked used and emptied (`usable` false) only when the last copy goes; with more than one copy the cell stays usable. The count is written back to the party record. The free-elements cheat bypasses the stack, the used bit and the gauge.
 * Element traps (mode 5): the caster's side stores the element id of record word +0xE (a different id replaces it). Before any cast the other side's stored id is compared: on a match the cast fizzles (a miss event, no effect, no ring change), the trap is cleared, and the cast still costs its stamina, gauge and used bit. A fizzled PC cast also destroys the cell (`& 0xC000` in the battle grid and the party record, `Rewards::lost_cells`, written to the save by the host whatever the outcome). A fizzled enemy cast adds the element id to `Rewards::trapped`, which the host adds to the element stock whatever the outcome. `trap_hud()` reports the HUD block.
+
+### 4.1 Double and triple techs
+
+A tech cell of the PC whose menu is open turns into a double or triple tech while its partners can join; the menu then shows that tech (name, colour, description, target ring, the minimap plate) in the cell's place, and the confirm casts it. Nothing is stored: the substitution is worked out from the current state each time.
+
+* Partner test, for party slot P and partner tech T: the first open cell of P whose word is exactly T (no lock or flag bits); P qualifies when that cell is unused and not colour-sealed, `gauge >= its row`, stamina is 10 or more and none of the `lo` bits 0x203000C0 is set (KO 0x80, 0x40, confused 0x100000, 0x200000, defeated / frozen 0x20000000). Asleep does not keep a partner out.
+* The other two party slots are tried in slot order (the menu PC 0: slots 1, 2; PC 1: 0, 2; PC 2: 0, 1). Double (record +0x22 == 0, +0x20 != 0): the first of them that qualifies for +0x20 makes it the +0x26 tech. Triple (+0x22 != 0): each of the two slots must qualify for +0x22 or +0x24 (when both qualify the +0x24 cell is the one given up); the result is +0x28.
+* The cell's own state is not tested beyond the usual element rules (section 4): a used tech still shows the double tech, greyed. Seals are judged by the double tech's colour.
+* The cast: the menu PC is the actor (its stats for every formula without a participant list); the casters are the record's character bytes +0x14..+0x16 matched against the party (`ActionEvent::group`, entry k with clip variant k, so X-Strike lists Serge first whoever chose it); every caster's cell is marked used and every caster pays 70 stamina (it may go negative). Each caster entry k then takes party slot k's gauge minus its own cell's `row + 1`, clamped to `[-1, slot k's gauge_max]`, entries in order; a caster that does not sit in slot k therefore takes another PC's gauge (Serge and Glenn's X-Strike with Kid in slot 1: Glenn's gauge becomes Kid's `- 3`).
 
 ## 5. Field ring and colour
 
 * The ring has three slots, oldest first. `ring_push` drops slot 0, shifts, and puts the new colour in slot 2.
-* Colour multiplier (`colour_multiplier`): inputs are the attacker's innate colour, the attack colour (a weapon attacks in the attacker's innate colour, an element in its own), the ring, and the target's colour. The values are in `battle_data.md` section 10. A ring slot of 6 (all colours, the Chrono Cross) and an empty slot count as no colour. Mode 6's field state (`battle_data.md` section 5.2) scales the multiplier of every element cast; no timer is modelled, so the state lasts for the rest of the battle once set (it is only set while it is 0).
+* Colour multiplier (`colour_multiplier`): inputs are the attacker's innate colour, the attack colour (a weapon attacks in the colour of the attacker's colour status, hi bits 0..5 set by the Turn elements, else in its innate colour; every element command, weapon techs included, in the record's colour), the ring, and the target's colour. The values are in `battle_data.md` section 10. A ring slot of 6 (all colours, the Chrono Cross) and an empty slot count as no colour. Mode 6's field state (`battle_data.md` section 5.2) scales the multiplier of every element cast; no timer is modelled, so the state lasts for the rest of the battle once set (it is only set while it is 0).
 * Timing: during a cast the ring is not changed, so every target of the cast sees the ring as it stood before. When the cast has finished (once, after the last target of an all-target cast) the ring takes the new state:
   * a repaint replaces all three slots: mode 6 with a colour in record word +0xE `& 0xFC` (all three become it), mode 37 (slots from record bytes +0xA, +0xC, +0xE, each byte `<< 2` read as a colour mask), mode 47 (a random colour that some PC lacks);
   * otherwise the cast's colour is pushed: the effective element colour (below) `& 0xFC` as a single bit gives 0 to 5, all six bits (0xFC) gives 6, anything else (a colourless element) gives -1 (an empty slot, which still shifts the oldest colour out). A missed or no-damage cast pushes too.
@@ -204,6 +215,30 @@ Used by the colour curse (mode 36): `lo` bits only, no roll and no weakness doub
 3. `kill`: HP 0, KO bit (0x80), guard and "defended" cleared, and for an enemy its kill script starts (section 7).
 4. A unit is alive when it is present and its `lo` has neither KO (0x80) nor defeated / frozen (0x20000000). A status that sets one of those bits removes the unit from play without touching its HP.
 
+### 6.6 Status plates on the HUD
+
+The menu shows a unit's statuses as a column of name plates (`status_plates.h`, `BattleView::build_status_plates`): one plate per `lo` bit of mask 0x22166139, in bit order, each a 3 x 6 colour triangle (bottom row of `battle_34.png`) at (x, y + 1) and the status name (cmnmes, style 2, colour 0x757575) at (x + 4, y). Plate n sits at y = 50 + 12 (n % 9), column n / 9.
+
+| `lo` bit | Name | Triangle |
+|---|---|---|
+| 0x00000001 | Poison | green |
+| 0x00000008 | Burns | red |
+| 0x00000010 | Sprain | yellow |
+| 0x00000020 | Flu | blue |
+| 0x00000100 | Afraid | green |
+| 0x00002000 | Fatigued | white |
+| 0x00004000 | Asleep | white |
+| 0x00020000 | Darkness | black |
+| 0x00040000 | Cursed | black |
+| 0x00100000 | Confused | red |
+| 0x02000000 | Dizzy | yellow |
+| 0x20000000 | Frozen | blue |
+
+* Top menu: the active PC's plates on the right, columns x 248 and 210 (the original's 268 and 230, moved 20 px left for the wider translated names).
+* Target selection: the cursor unit's plates on the left, columns x 16 and 54. An element's target ring shows them only while it holds one unit; under the Dopplegang creature list they are not shown. The chain menu and the element list show none.
+* DYNAMIC target camera: the target cursor is not drawn unless the target mode is the whole range (an element whose record byte 4 has bit 0x10; mode 1 = a single-target Attack or element), and then element targeting shows no plates either; Attack targeting still shows them. The NORMAL camera draws both.
+* Each plate is one frame of the battle menu sprite sheet: the 3 x 6 triangle part at (0, +1) (cells u 212 / 215 / 218 / 221 / 224 / 227 = red / green / blue / yellow / white / black) and the name glyphs from (+4, 0); frame = 7 + the status's rank among the bits of 0x33377339. Captured on the PS1 (all twelve statuses in both columns): every triangle colour, the y rows and the left columns match; the right column is drawn at 268 there.
+
 ## 7. Battle end
 
 ### 7.1 `check_end`
@@ -220,7 +255,7 @@ Run before every scheduler step, after each hit of a chain, after each plan entr
 
 ### 7.2 Scripted deaths
 
-A killed enemy runs its kill script (slot 3) once, when its HP reaches 0 by damage or by a script write. Death casts it queues (op 67) are executed by the dying unit after the killing action. The unit blocks the victory test (`death_pending`) until the cast has run; the presentation additionally holds the unit's death while the script flag of op 5C is set (cleared by the script's A6). After each action the target list is walked and each living target runs its "attacked" script (slot 4); the attacks it queues are executed like any action (counter-attacks), looping up to 64 rounds, with death casts run before, between and after the rounds. A death-cast action is an ordinary `post_action` / `check_end` action.
+A killed enemy runs its kill script (slot 3) once, when its HP reaches 0 by damage or by a script write. Death casts it queues (op 67) are executed by the dying unit after the killing action, each op 67 as its own action (its targets share one: the Time Devourer's 341, then 526). A result the kill script forces (op 83) takes effect only once all its casts have run (the script sets it after its end-turn op A4). The unit blocks the victory test (`death_pending`) until the cast has run; the presentation additionally holds the unit's death while the script flag of op 5C is set (cleared by the script's A6). After each action the target list is walked and each living target runs its "attacked" script (slot 4); the attacks it queues are executed like any action (counter-attacks), looping up to 64 rounds, with death casts run before, between and after the rounds. A death-cast action is an ordinary `post_action` / `check_end` action.
 
 ### 7.3 What `finish` records
 
@@ -246,8 +281,8 @@ The party records: `hp = min(unit HP, record max HP)`, raised to 1 if 0; persist
 
 * Only enemies in the defeated mask pay: those that are not alive, plus those a script marked defeated (op 8C). A living, unmarked enemy (a forced win) pays nothing.
 * Gold: the sum of the paying enemies' record gold; `x 125 / 100` (truncating) when the start option says so or any PC in the fight has gear flag 0x02 (Profiteer Purse). The host adds it to the save's gold, cap 9,999,999.
-* Drops: no roll at all after script op 7C (the gold is still paid). Per paying enemy: `r = rnd(0, 99)`; `r < dropBase / 20` gives drop row slot 1 (rare), else `r < dropBase / 2` slot 0 (common), else nothing (`battle_data.md` section 7 for the rows). The word's bit 15 makes it an element (`id & 0x7FFF`, `Rewards::elements`), otherwise a non-zero item id (`Rewards::items`). The roll is consumed even when the row is outside the table.
-* The pilfer (mode 30) loot is separate: `Rewards::stolen`, added to the stock whatever the outcome.
+* Drops: no roll at all after script op 7C (the gold is still paid). Per paying enemy: `r = rnd(0, 99)`; `r < dropBase / 20` gives drop row slot 1 (rare), else `r < dropBase / 2` slot 0 (common), else nothing (`battle_data.md` section 7 for the rows; the row is the record's drop row `& 0x3FFF`, as for the pilfer). The word's bit 15 makes it an element (`id & 0x7FFF`, `Rewards::elements`, added to the stock with that id), otherwise a non-zero item id (`Rewards::items`). The roll is consumed even when the row is outside the table.
+* The pilfer (mode 30) loot is separate: `Rewards::stolen`, added to the stock on a victory only (a flight or a defeat loses it).
 
 ### 8.2 Growth (Victory, star below 99 and inside the star table)
 
@@ -258,7 +293,7 @@ Row `{battles, pendingTenths, step}` of the star table (`battle_data.md` section
 
 ### 8.3 What the host writes (`apply_battle_result`)
 
-For every outcome, per party member: the 7 stats (max HP clamped 1 to 999, the others 0 to 127), current HP `clamp(member HP, 1, max HP)`, persistent status `lo & 0x39`, the growth snapshot and pending words, Pip's form change (section 9), and the consumable stacks (a stack that ran out empties its grid cell, `& 0xC000`). Then the trap results and the stolen loot (section 4, 8.1): trapped elements and lost cells are written, stolen words go to the element stock (bit 15, `id & 0x7F`) or the item stock. The growth progress goes back to the host's session counter. Stamina is not carried; every battle starts at 70.
+For every outcome, per party member: the 7 stats (max HP clamped 1 to 999, the others 0 to 127), current HP `clamp(member HP, 1, max HP)`, persistent status `lo & 0x39`, the growth snapshot and pending words, Pip's form change (section 9), and the consumable stacks (a stack that ran out empties its grid cell, `& 0xC000`). Then the trap results (section 4): trapped elements and lost cells are written. On a victory only, the stolen loot (8.1): stolen words go to the element stock (bit 15, `id & 0xFF`, like a trapped element) or the item stock. The growth progress goes back to the host's session counter. Stamina is not carried; every battle starts at 70.
 
 For Victory only: gold, dropped items and elements (an element drop uses `id & 0x7F`), and after a boss fight the star byte (cap 99), the counter byte (cap 255), the party's new grid unlocks, and the bench's new stats, growth words and grid unlocks.
 
@@ -291,9 +326,16 @@ After the screen is done it returns, per party slot, the displayed HP `clamp(HP,
 
 * The pool is 256 bits in 16 words (`BattleOptions::dopple_mask`, the save's 16 words, script variables 0x60 to 0x7F). Bit `n` of word `w` is pool slot `w x 16 + n`. `dopple_pool` lists the set slots ascending.
 * Credit (`dopple_credit`), called by script op 65 on an enemy (the start of its kill script) with the last PC that commanded (script variable 0x50): it sets the enemy's pool slot (monster record byte +0x2B) when that PC is character 26 (Sprigg) or wears accessory 0xFC, and the enemy's record byte +0xA6 bit 0x80 is clear. It reports whether the bit was new.
-* `transform(unit, form)` (the unit swap the pick menu requests): `form >= 0` makes the PC take monster record `form`: stats, innate colour, gear, status words (with 0x400400 OR-ed into the permanent `lo`), the monster's grid and its name; HP and max HP stay, stamina stays, AP and countdown become 8, gauge -1; inflicted statuses and timers are gone; the character's unit is backed up the first time. `form < 0` restores the backup with the current HP and max HP, countdown 8 and the current stamina. It fails (returns false) for an unknown form, a non-PC unit, or `form < 0` on a unit that has no form.
+* `transform(unit, form)` (the unit swap the pick menu requests): `form >= 0` makes the PC take monster record `form`: stats, innate colour, gear, status words (with 0x400400 OR-ed into the permanent `lo`), the monster's grid (its cells lose the lock bit, `& 0x3FFF`) and its name; HP and max HP stay, stamina stays, AP and countdown become 8, gauge -1, and `gauge_max` becomes the deepest row of that grid holding an element (-1 for none); inflicted statuses and timers are gone; the character's unit is backed up the first time. `form < 0` restores the backup with the current HP and max HP, countdown 8 and the current stamina. It fails (returns false) for an unknown form, a non-PC unit, or `form < 0` on a unit that has no form.
 * Big Catch (mode 39) draws creatures from the same pool (`battle_data.md` section 5.2).
-* The host persists only the mask: `finish_field_battle` writes `dopple_mask()` back to the world after every fight. A creature form is never written to the party record; the PC's HP at the end is its unit HP.
+* The host persists only the mask: `finish_field_battle` writes `dopple_mask()` back to the world after every fight (not after a monster-party fight, 9.3). A creature form is never written to the party record; the PC's HP at the end is its unit HP.
+
+### 9.3 Monster-party scenes (the Grand Slam)
+
+* A scene whose record byte 0x0F has bit 0 set (`battle_data.md` section 6) is a monster-party fight when the host passes picks (`BattleOptions::monster_party`, the Grand Slam picker's three pool slots, `rules/menus.md`); without any pick (dev tools) the party fights as usual.
+* Party slot i becomes monster record `pick[i]` (`init_party_monster`; a slot without a pick stays empty) under the slot's character id: the whole record (stats, innate colour, status words with 0x400400 OR-ed into the permanent `lo`, skip masks, grid, gear, name, record gender word). Max HP = the record's (NG+ doubles it outside scene 0x1DD, cap 30000), then max and current HP are capped at 999; AP and the first countdown 8, stamina 70; gauge `-1 + gear start-gauge` clamped to `[-1, gauge_max]`, `gauge_max` the deepest row holding an element in an unlocked cell.
+* In such a fight every monster record's grid (the picks' and the enemies') loses the flag bits (0xC000) of the cells in rows 1 to 7 outside column 8, so their elements can be cast; row 0 and column 8 keep theirs.
+* The end writes nothing back: no rewards (gold, drops, growth), no party HP or status, no results screen, no Dopplegang pool.
 
 ## 10. Cheats as the rules see them
 
@@ -302,7 +344,7 @@ After the screen is done it returns, per party slot, the displayed HP `clamp(HP,
 | Flag | What it bypasses |
 |---|---|
 | `invincible` (debug party / enemies; for PCs also God mode and Battle boost) | `kill` leaves HP at least 1 (no KO, no kill script); damage never takes HP below 1 |
-| `god_mode` | every damaging hit on a PC becomes value 0, code 1 (heals untouched); each time advance and each `check_end` revives KO'd PCs, refills HP, clears the negative `lo` statuses (mask 0xAA9EE939) and their timers |
+| `god_mode` | every damaging hit on a PC becomes value 0, code 1 (heals untouched); each time advance and each `check_end` revives KO'd PCs, refills HP, clears the negative `lo` statuses (mask 0xAA9EE939, frozen included, so a frozen PC is freed) and their timers |
 | `boost` | everything God mode does, plus gauge to `gauge_max` and stamina 70 on every living PC |
 | `max_stamina` | living PCs' stamina 70 at each time advance and `check_end` |
 | `free_elements` | a cast does not mark the cell used, does not spend a consumable stack and does not spend gauge; stamina is still paid |

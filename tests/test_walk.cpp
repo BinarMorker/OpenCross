@@ -183,10 +183,45 @@ void test_anim_seq() {
   actor.step_visual(false, false);
   CHECK(actor.clip_name() == "s4_06" && !actor.anim_busy());
 }
+// D6 attachment: the attached model is drawn from the parent's joint at the drawn render fraction, so it sits on the parent's attach
+// point in every frame, also while the parent moves and its display is smoothed over ticks (a move every 2nd tick).
+void test_attached_rigid() {
+  auto handle = std::make_shared<game::ModelHandle>();
+  handle->asset.skeleton.joints.push_back(assets::Joint{});
+  handle->asset.attach.points[2].pos = {10.0f, -50.0f, 120.0f};
+  handle->asset.attach.points[2].used = true;
+  game::Actor parent;
+  parent.set_model(handle);
+  game::Actor rider;
+  render::Mat4 local;
+  local.at(0, 3) = 10.0f;
+  local.at(1, 3) = -50.0f;
+  local.at(2, 3) = 120.0f;
+  rider.set_attached(&parent, 2, local);
+  const game::WalkMesh empty;
+  float z = 0.0f;
+  for (int tick = 0; tick < 12; ++tick) {
+    parent.begin_tick();
+    if (tick % 2 == 0) z += 16.0f;
+    parent.set_position(empty, 0.0f, z, false, true);
+    parent.end_tick();
+    for (const float alpha : {0.0f, 0.5f, 1.0f}) {
+      const render::Mat4 joint = parent.model_matrix(alpha);
+      const render::Mat4 drawn = rider.model_matrix(alpha);
+      for (int row = 0; row < 3; ++row) {
+        const float expected = joint.at(row, 0) * 10.0f + joint.at(row, 1) * -50.0f + joint.at(row, 2) * 120.0f + joint.at(row, 3);
+        CHECK(near(drawn.at(row, 3), expected));
+      }
+    }
+  }
+  rider.clear_attached();
+  CHECK(!rider.attached());
+}
 }  // namespace
 
 int main() {
   test_actor_anim();
+  test_attached_rigid();
   test_anim_seq();
   game::WalkMesh wm;
   wm.init(build(), {0, game::kFlagBlockAll});
@@ -243,6 +278,16 @@ int main() {
   CHECK(step.blocked && step.slid && near(step.z, 54) && near(step.x, 96));
   step = wm.move_actor(0, 90, 50, 0, 4, 0);
   CHECK(!step.blocked && !step.slid && near(step.z, 54));
+
+  // Pad walk: S / 16 per tick (5 at the default speed), halved on a tile with flag 0x1000 (the pushed-actor step with it).
+  game::WalkMesh slow;
+  slow.init(build(), {0x1000, game::kFlagBlockAll});
+  game::Actor walker;
+  walker.place(slow, 1, 20, 50, 0x800);
+  walker.tick(slow, 0x800, false);
+  CHECK(near(walker.current().x, 25) && near(walker.pad_step_x(), 5));
+  walker.tick(slow, 0x800, false);
+  CHECK(near(walker.current().x, 27.5f) && near(walker.pad_step_x(), 2.5f));
 
   if (failures) return 1;
   std::printf("walk mesh checks passed\n");

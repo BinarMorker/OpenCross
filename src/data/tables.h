@@ -155,7 +155,8 @@ struct CharSet {
 // growth = el_mask.bin (100 x 8); scenes = scenedat.bin; symtbl = 384 x 8; btbgdat = 100 x 3; drops = ditem (256); star_rows = exdat
 // part 0 rows {n, b, s lo, s hi} (100); el_shop / waa_shop have trailing zeros trimmed; gear = 256 records (empty if player.dat part 4
 // is missing); item_info = 256; forge = menu/waa_tbl.bin, per item id the units needed of material id 0..31; keyitem_jp_rows = u16
-// offsets in keyitem.dat; rng_table = the 256-byte permutation read from the executable (empty if absent).
+// offsets in keyitem.dat; rng_table = the 256-byte permutation read from the executable (empty if absent); variant_bands = the 8
+// encounter-variant roll bands {lo, hi} of the battle loader btlinit.prg (empty if absent).
 struct GameTables {
   std::vector<StatRec> enemies;
   std::map<std::string, CharSet> char_sets;
@@ -176,6 +177,7 @@ struct GameTables {
   // Names (EN column of lang.dat sysmes.txt). Empty string when absent.
   std::vector<std::string> enemy_names, element_names, char_names, item_names, key_item_names;
   std::vector<u8> rng_table;
+  std::vector<std::array<u16, 2>> variant_bands;
 
   const CharSet& chars(const std::string& set = "char") const { return char_sets.at(set); }
   const std::string& enemy_name(int i) const;

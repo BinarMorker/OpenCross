@@ -9,6 +9,8 @@
 #include <fstream>
 #include <sstream>
 
+#include "core/log.h"
+
 #include <SDL3/SDL_locale.h>
 #include <SDL3/SDL_stdinc.h>
 
@@ -186,7 +188,12 @@ bool Config::load(const std::filesystem::path& file) {
   widescreen = parse_bool(ini.get("Video", "Widescreen"), widescreen);
   {
     const std::string mode = ini.get("Video", "ArtMode", "hd");
-    art_mode = mode == "original" ? ArtMode::Original : mode == "modded" ? ArtMode::Modded : ArtMode::Hd;
+    if (mode == "original" || mode == "classic") art_mode = ArtMode::Original;
+    else if (mode == "modded") art_mode = ArtMode::Modded;
+    else {
+      if (mode != "hd") log::warn("config: unknown [Video] ArtMode '{}', using hd", mode);
+      art_mode = ArtMode::Hd;
+    }
   }
   mods.clear();
   dump_stages = parse_bool(ini.get("Mods", "DumpStages"), dump_stages);

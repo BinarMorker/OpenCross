@@ -13,9 +13,9 @@ Output per element id: tmp/r34/<id>/ref/{states/state_NNNNNN.sav (every 5 run fr
 Run frame 0 = the state the capture stage starts from (the cast's target select up; the confirming Circle is the first input).
 --keys Button:frame = extra presses at that run frame (e.g. a creature list opened by the cast).
 
-Down-count rule: the character's grid row 0 is padded to its length N (cc_save_forge.py rowlen); the element list opens on entry 3
-(0-based) and Down walks with wrap, so the id at index k needs (k - 3) mod N Downs. If the cast selects another id the opening index is
-re-derived from the RAM reading (e05da) and the cast repeated once. Every step is read from RAM, never from the PNGs.
+Down-count rule: the character's grid row 0 is padded to its length N (cc_save_forge.py rowlen); the list cursor (RAM) reads the grid
+column of the entry (the row's level-mask bits, which do not start at the same column for every character) and Down walks with wrap
+until it reads the column of the wanted id. Every step is read from RAM, never from the PNGs.
 
 The emulator is a private copy (tmp/ds_cast, GDB port 2348), so other drivers can keep using tools/duckstation.
 --disc / --disc2: boot disc 2 (ps1ref.disc2()) for the scenes only disc 2 has (342-344, 458-471, 509). The base states are the
@@ -90,6 +90,13 @@ def apply_pokes(g, pokes):
     for addr, val, w in pokes:
         g.poke(addr, val, w)
         log("poke %08X = %d (%d bytes)" % (addr, val, w))
+
+
+def row_columns(char):
+    """Grid columns of row 0 of the character (the set bits of its level mask, ascending): the element list's cursor values."""
+    import cc_save_forge
+    mask = cc_save_forge.level_masks(char)[0]
+    return [b for b in range(16) if mask >> b & 1]
 
 
 def row_list(char, ids):
@@ -222,14 +229,15 @@ class CastError(RuntimeError):
     pass
 
 
-def drive_cast(g, cid, idx, n, extra_keys, steps, limit=3000):
+def drive_cast(g, cid, idx, cols, extra_keys, steps, limit=3000):
     """Menu driver from the first command menu to the confirmed cast, every step gated on RAM (no fixed frame numbers: the enemy's
     turn order differs between runs, so the HIT% box opens at different times).
 
     Command menu (tgt_064b 1 + menu_064a 1): Circle -> target select (tgt 2) -> Circle -> HIT% box (tgt 3). A box whose gauge is -1
     (u0_gauge) gets Circle on the weak row; once a command menu has been seen with gauge >= 0 the next box has the Element row
     (the box shown right after a hit is that hit's animation and is ignored). Element row = cursor 3 (cur_064e): Up until it is
-    there, Circle. The element list shows the cursor as cur_064e = 2 + list index; Down walks with wrap ((idx - open) mod n presses,
+    there, Circle. The element list shows the cursor as cur_064e = the grid column of the entry (cols: the set bits of the row's level
+    mask, ascending; Serge's row starts at column 2, Zappa's at 5); Down walks with wrap ((idx - open) mod n presses,
     each checked against cur_064e). Circle -> target select (tgt 3, e05da = the selected id, checked): that state is returned, the
     confirming Circle is the first input of the capture.
     A cursor move blocks the next press for ~13 frames, so presses are spaced 14 frames apart."""
@@ -245,18 +253,19 @@ def drive_cast(g, cid, idx, n, extra_keys, steps, limit=3000):
             cool -= 1
         elif in_list and w["tgt_064b"] == 3:
             if w["e05da"] != cid:
-                raise CastError("e05da %d at the target select, wanted %d (list index %d, n %d)" % (w["e05da"], cid, idx, n))
+                raise CastError("e05da %d at the target select, wanted %d (list index %d, columns %s)" % (w["e05da"], cid, idx, cols))
             steps["rows"].append("step: element %d selected (e05da), target select up, cast not yet confirmed, at frame %d" % (cid, g.frame))
             return k
         elif in_list and w["tgt_064b"] == 2:
             cur = w["cur_064e"]
             if downs is None:
-                downs = ((idx - (cur - 2)) % n + n) % n
-                steps["rows"].append("step: element list open at index %d (cur_064e %d), %d Downs to index %d" % (cur - 2, cur, downs, idx))
+                at = cols.index(cur) if cur in cols else -1
+                downs = (idx - at) % len(cols)
+                steps["rows"].append("step: element list open at index %d (cur_064e %d), %d Downs to index %d" % (at, cur, downs, idx))
                 cool = GAP
-            elif cur - 2 == idx:
+            elif cur == cols[idx]:
                 held, cool = B["Circle"], GAP
-            elif walked > n + 2:
+            elif walked > len(cols) + 2:
                 raise CastError("Down walked %d times without reaching list index %d (cur_064e %d)" % (walked, idx, cur))
             else:
                 held, cool = B["Down"], GAP
@@ -306,7 +315,7 @@ def capture_id(a, mode, cid, base, row, work):
         if a.menu_poke:
             apply_pokes(g, parse_pokes(a.menu_poke))
         f0 = g.frame
-        drive_cast(g, cid, idx, n, a.keys, steps)
+        drive_cast(g, cid, idx, row_columns(a.char), a.keys, steps)
         w = g.watch(["e05da", "party0", "act_kind"])
         log("id %d: target select reached (stage 1 took %d frames): e05da=%d act_kind=%d party0=%d" % (cid, g.frame - f0, w["e05da"], w["act_kind"], w["party0"]))
         if w["e05da"] != cid:

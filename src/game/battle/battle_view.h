@@ -89,6 +89,10 @@ class BattleView {
     std::vector<battle::PartyMember> bench;
     // The Dopplegang pool bits.
     std::array<u16, 16> dopple_mask{};
+    // Van's piggy-bank savings (script variable 0x176).
+    int piggy_bank = 0;
+    // The Grand Slam picks: monster records of the party slots in a monster-party scene (battle::BattleOptions::monster_party).
+    std::array<int, 3> monster_party{-1, -1, -1};
     // The battle id word: an encounter id < 0x200, or scene + 0x200 for a scene started directly; -1 = scene + 0x200.
     int battle_id = -1;
     // The battlefield operand (stage bg_NN); -1: the scene record's default.
@@ -141,7 +145,7 @@ class BattleView {
     bool effects = true;
     // cast_element: the first enemy casts it on the first PC (instead of PC 0 on the first enemy).
     bool enemy_cast = false;
-    // >= 0: skip the intro, PC 0 attacks the first enemy with this strength (0 weak, 1 medium, 2 heavy).
+    // >= 0: skip the intro, the lead PC attacks the first enemy with this strength (0 weak, 1 medium, 2 heavy).
     int weapon = -1;
     // Camera overlay: active shot, eye / target, axis gizmo at each unit (F9 toggles it at run time); overlay_key: F3 toggles it too
     // (ocbattleview only: in the game F3 is RDE's encounters-off key).
@@ -149,6 +153,8 @@ class BattleView {
     bool overlay_key = false;
     // Both >= 0 with cast_element: that unit casts it on that unit (Debug tab; an all-targets element hits that side).
     int cast_actor = -1, cast_target = -1;
+    // The PC unit that casts cast_element (without cast_actor) and makes the weapon attack.
+    int lead = 0;
     // The next start() runs without the scene's battle script (Debug tab: replaced enemies do not match the script's units).
     bool no_script = false;
     // Debug tab: Battle::set_invincible, applied at the start and every tick.
@@ -634,6 +640,8 @@ class BattleView {
       int clip = -1;
       // effects::FxModels::PackDrive: asset clip index of streamed motion file n once decoded (-1 = not loaded, -2 = failed).
       std::array<int, 4> motion_clip{{-1, -1, -1, -1}};
+      // Where its two texture pages are cut from the pack's VRAM (page x in halfwords, -1 = the textures are not the VRAM's: HD art).
+      int page_x = -1, page_y = 0, clut_x = 0, clut_y = 0;
     };
     std::map<std::string, std::unique_ptr<Model>> models;
     // A model was given its battle model's cdrom2 mesh + texture (fx_hd_counterpart): rebuilt on an art switch.
@@ -647,6 +655,8 @@ class BattleView {
   FxGpu* fx_gpu_resident(const std::shared_ptr<const FxPack>& pack);
   // Sprite type 20: the pack's type-0x0B models.
   void fx_load_models(FxGpu& gpu, const FxPack& pack);
+  // The two pages of a pack model cut from `vram` (fx_load_models; again after an overlay's VRAM copy into them: fx_vram_apply).
+  static std::vector<import::Image> fx_model_pages(const import::Vram& vram, int page_x, int page_y, int clut_x, int clut_y);
   // HD art: when the pack Mdl `mdl` is a byte copy of a battle model's disc mesh (S1) + skeleton (S2) and its texture page (8 bpp at halfword
   // (img_x, img_y), CLUT row (clut_x, clut_y)) holds that model's disc .ltd / .ltc main image + CLUT row 0, and the model has a cdrom2 (HD)
   // variant: `out_mdl` = mdl with the cdrom2 S1, `out_vram` = vram with the cdrom2 image + CLUT written at the same place. Returns the stem.
@@ -739,6 +749,8 @@ class BattleView {
   // The drawn ring has reached the presented ring: the next action group waits for the shift.
   bool ring_settled() const;
   void build_party_panels();
+  // The status plate column of one unit (status_plates.h): the right column for the active PC, the left one for the target cursor unit.
+  void build_status_plates(int unit_index, bool right);
   void build_field_ring();
   // The element-trap block under the field ring, for the presented action (like the ring).
   battle::TrapHud presented_trap() const;
@@ -845,6 +857,8 @@ class BattleView {
   // Running away: `bto0` starts ~62 ticks after the Run confirm (the party runs, then the 14 + 14 teardown frames); kFledFade = the fade of a stage
   // without `bto0`.
   static constexpr int kRunTicks = 34, kOutroDelay = 28, kFledFade = 60, kOutroCap = 600;
+  // Running away with pilfered loot: the escape waits kLootDropWait more ticks; the system window (btmes row 5) opens kLootDropMsg ticks into it.
+  static constexpr int kLootDropWait = 80, kLootDropMsg = 40;
   bool fled_outro_ = false;
   int finish_ticks_ = 0;
 
@@ -914,6 +928,9 @@ class BattleView {
   // the NORMAL glide to zen0 started for this target menu.
   int orbit_pc_ = -1, dyn_target_ = -1;
   bool menu_glide_ = false;
+  // A battle-script cutscene (op 2C) takes the orbit's PC away until a command menu opens again; the begin event takes effect after the
+  // next menu camera pass (the camera of the tick the action ended runs before the script resumes).
+  bool orbit_blocked_ = false, orbit_block_next_ = false;
   float time_ = 0;
   int auto_delay_ = 0;
   // BattleAuto rotation state.
@@ -1193,6 +1210,29 @@ class BattleView {
   render::RenderTarget fx_warp_rt_;
   render::TexRef fx_warp_set_;
   render::Frame fx_warp_frame_{};
+  // An overlay's camera cross-fade (effects::FxModels::CrossView): `cam` is the second camera task; while `on` the scene is drawn twice, the
+  // second time from `cam` into fx_cross_rt_, and composited (fx_cross_draw). `ticks` = ticks since its shot was cut to key 0.
+  struct Cross {
+    BattleCamera cam;
+    std::string shot;
+    int serial = 0, ticks = 0, alpha = 0, fill = 0;
+    bool on = false;
+  } fx_cross_;
+  void fx_cross_tick();
+  bool fx_cross_draw(const render::Frame& frame, const render::Letterbox& lb, bool sprites_resume);
+  // The full-screen tint of an overlay (effects::FxModels::Tint), over the finished picture.
+  void fx_tint_draw(const render::Frame& frame, const render::Letterbox& lb);
+  render::RenderTarget fx_cross_rt_;
+  render::TexRef fx_cross_set_;
+  render::Frame fx_cross_frame_{};
+  // The camera apply_camera() reads (null = camera_): the cross-fade's second pass.
+  const BattleCamera* draw_camera_ = nullptr;
+  // An overlay's frame copy (FxModels::capture): the picture as drawn up to the request's ordering-table slot, copied every frame while the
+  // request stands; the mesh faces on the copy's page sample it (fx_draw). Made at most kCopyPixelsPerPs1 pixels per PS1 pixel.
+  static constexpr float kCopyPixelsPerPs1 = 8.0f;
+  bool fx_copy_ensure(const render::Frame& frame, const render::Letterbox& lb);
+  render::RenderTarget fx_copy_rt_;
+  render::TexRef fx_copy_set_;
   // The strips sample the PREVIOUS output (RDE's 4x renderer reads the last presented frame, not this frame's pixels): out(n) = scene(n)
   // blended with the warped out(n - 1). Two persistent targets, one step per game tick.
   render::RenderTarget fx_acc_rt_[2];
@@ -1266,6 +1306,8 @@ class BattleView {
   bool sys_pending_ = false;
   // Ops 2C .. 38 (script cut scene): the party panels, ring and command box are not drawn.
   bool hud_off_ = false;
+  // Op 39 with 0: the per-frame HUD (panels, ring, command box) is not drawn until the script sets it again.
+  bool hud_script_off_ = false;
   bool select_held_ = false;
   bool autohide_cast_ = false;
   bool keep_intro_layer_ = false;

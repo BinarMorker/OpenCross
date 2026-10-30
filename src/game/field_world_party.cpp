@@ -419,8 +419,19 @@ void FieldWorld::change_status(int ref, int mask, bool set) {
   });
   log::debug("field: tick {} {} status {:#x} on {:#x}", tick_count_, set ? "SET" : "CURE", mask, ref);
 }
-void FieldWorld::learn_limit(int, int, int) { stub("learn_limit"); }
-void FieldWorld::set_limit_mode(int) { stub("set_limit_mode"); }
+// FE 79 / FE 74 / FE 73 (level 0 / 1 / 2): the tech `value - 0x200` goes into the cell that closes star level 3 / 5 / 7.
+void FieldWorld::learn_limit(int level, int char_id, int value) {
+  if (!gs_ || char_id < 0) return;
+  const int cell = gs_->learn_tech(char_id, 3 + 2 * level, value - 0x200);
+  log::debug("field: tick {} char {} learns tech {:#x} in cell {}", tick_count_, char_id, value - 0x200, cell);
+}
+// FE 7B: Serge's innate colour byte keeps bits 0..2 and gets the single colour bit 0x08 << mode (0 white, 1 black, 2 red, 3 yellow,
+// 4 blue; a larger mode leaves no colour bit).
+void FieldWorld::set_limit_mode(int mode) {
+  if (!gs_) return;
+  u8& colour = gs_->slot.chars[0].colour_bit;
+  colour = static_cast<u8>((colour & 7) | static_cast<u8>(1u << ((mode + 3) & 31)));
+}
 // D9 / DA / DB: the saved character record model byte selects the field model: obj file 2b + 2, tim
 // 2b + 3, normally the character id, 0x31 = Serge's Lynx body, 0x3B / 0x3C.. other bodies.
 int FieldWorld::model_byte(int char_id) const {
@@ -572,7 +583,7 @@ void FieldWorld::capture_state() {
   }
   sl.head[save::head::kPreviewStars] = sl.head[save::head::kStarsTotal];
   // Head 0x40 mirrors SCENARIO_FLAG.
-  sl.head[save::head::kProgression] = static_cast<u8>(vm_.var(0) & 0xFF);
+  sl.set_progression(static_cast<u16>(vm_.var(0)));
   if (custom_names_ && !party_chars_.empty()) {
     auto it = custom_names_->find(party_chars_[0]);
     if (it != custom_names_->end() && !it->second.empty()) {

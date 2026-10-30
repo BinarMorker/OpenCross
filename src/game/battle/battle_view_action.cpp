@@ -34,13 +34,20 @@ void BattleView::update(float dt, const platform::Input& in) {
   time_ += dt;
   // Dev: OC_DEV_VAR="0x448=1,..." writes script variables (byte offsets) once, after the slot-0 init pass: Fire Dragon
   // 453's damage budget (var 0x448, init = the unit's HP) at 1 makes the first hit start the henshin: `OC_DEV_VAR=0x448=1 opencross battleview 453`.
-  if (const char* dv = std::getenv("OC_DEV_VAR"); dv && !dev_var_done_ && brain_.vm()) {
+  if (const char* dv = std::getenv("OC_DEV_VAR"); (dv || std::getenv("OC_DEV_CHIST")) && !dev_var_done_ && brain_.vm()) {
     dev_var_done_ = true;
-    for (std::string rest(dv); !rest.empty();) {
+    for (std::string rest(dv ? dv : ""); !rest.empty();) {
       const size_t comma = rest.find(','), equals = rest.find('=');
       if (equals != std::string::npos && equals < comma) brain_.vm()->set_var(static_cast<int>(std::strtol(rest.c_str(), nullptr, 0)), std::atoi(rest.c_str() + equals + 1));
       rest = comma == std::string::npos ? std::string() : rest.substr(comma + 1);
     }
+    // OC_DEV_CHIST="5,4,1,6,3,2,7": the colour history entries (colour + 1) as if those casts had been made, oldest first (op AE's true-ending test).
+    if (const char* history = std::getenv("OC_DEV_CHIST"))
+      for (std::string rest(history); !rest.empty();) {
+        const size_t comma = rest.find(',');
+        brain_.vm()->note_cast_colour(std::atoi(rest.c_str()) - 1);
+        rest = comma == std::string::npos ? std::string() : rest.substr(comma + 1);
+      }
   }
   battle_->set_invincible(dbg_.inv_party, dbg_.inv_enemies);
   battle_->set_cheats(battle_cheats());
@@ -108,7 +115,7 @@ void BattleView::update(float dt, const platform::Input& in) {
           if (i != first && battle_->unit(i).present) battle_->unit_mut(i).hp = 0, battle_->unit_mut(i).lo |= battle::st::kKO;
     }
     if (weapon >= 0 && first >= 0) {
-      battle_->do_weapon_attack(0, first, weapon);
+      battle_->do_weapon_attack(dbg_.lead, first, weapon);
       // Reactions + the end test, as Battle::apply does after a command.
       battle_->finish_external_action();
       collect_events();
@@ -157,7 +164,7 @@ void BattleView::update(float dt, const platform::Input& in) {
       const int lo = ally ? 0 : first, hi = ally || !ts.enemies ? battle::kPcSlots : battle::kUnits;
       for (int i = lo; i < hi; ++i) {
         if (!battle_->unit(i).present || (ts.ko_only ? battle_->unit(i).alive() : !battle_->unit(i).alive()) || (!ts.all && i != lo)) continue;
-        battle_->do_element(0, el, 0, i, i == lo);
+        battle_->do_element(dbg_.lead, el, 0, i, i == lo);
       }
       battle_->finish_external_action();
       collect_events();

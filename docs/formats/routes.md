@@ -69,7 +69,7 @@ Exit codes of the process:
 
 Why a run is reproducible: input is synthetic, the step is fixed at 1/60 s regardless of wall time, the frame limiter is skipped while a script, replay or sweep runs, the audio device is not opened for a scripted run, and `[Debug] Seed` fixes the random sources (a non-zero seed seeds the field script RNG, the flow's RNG and, for each battle, `OC_BATTLE_SEED`; seed 0 takes a clock seed for the field RNG and leaves battles unseeded). Set `VSync=0` in the ini so frames are not paced by the display.
 
-A battle started from the field with `[Debug] Seed` set is seeded (`OC_BATTLE_SEED` is derived from the seed and a per-run battle counter). A standalone battle (`[Debug] Battle=<scene>`) is seeded from the clock unless the `.env` sets `OC_BATTLE_SEED`, so `battle_chain`, `battle_dash`, `battle_dash2`, `battle_defend`, `battle_run`, `results_heal` and `smoke_battle` are not deterministic. Deterministic baselines for refactor checks are `alu_chair`, `art_swap`, `battle_hud`.
+A battle started from the field with `[Debug] Seed` set is seeded (`OC_BATTLE_SEED` is derived from the seed and a per-run battle counter). A standalone battle (`[Debug] Battle=<scene>`) takes `[Debug] Seed` as its seed unless the `.env` sets `OC_BATTLE_SEED`; `battle_chain`, `battle_dash`, `battle_dash2`, `battle_defend`, `battle_run`, `results_heal` and `smoke_battle` all set a seed. Deterministic baselines for refactor checks are `alu_chair`, `art_swap`, `battle_hud`.
 
 ## 3. Verbs
 

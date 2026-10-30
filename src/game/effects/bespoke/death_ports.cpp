@@ -4,8 +4,9 @@
 //   drg_deth           eids 404 521 522 spheres between attach points break faces into rising spinning shards; 0x182 breaks all
 //   octdeth            eid 373          grey CLUT fade, then a plane sweeps down from y = -1500 and only the part below it is drawn
 //   daimou_d           eids 386 387     the body sinks and melts into a puddle along its normals, two passes
-//   F-B dissolves      sfin bossde dorublue skadeth kroto dorured objcrash darkfeit lasdes3 lasdes1 lasdes2: a growing hole (fade by the
+//   F-B dissolves      sfin bossde dorublue skadeth kroto dorured objcrash darkfeit lasdes3 lasdes1: a growing hole (fade by the
 //                      distance to a centre) with 'kie0' / 'kie1' fired at fading faces or the faces cloned into particles (shards)
+//   lasdes2            eid 532          the Time Devourer's end: the dissolve plus camera cross-fades, music changes, screen tint, eye frames
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -517,6 +518,10 @@ struct FbParams {
   bool lasdes3;
   // Ops 0x102 / 0x103: the env page's CLUT row fade (darkfeit, lasdes3; FxModels::env_clut).
   bool env_clut;
+  // lasdes2: corners take the model colour (FxSkinnedModel::rgb) times the fade, e < 0 ? max(0, e + B) colour / B : colour; a face whose last
+  // corner fades is one packet, semi-transparent with the part's ABR (flag bits 2-3); 'kie0' fires when corner 0's red byte < 0x30; a face is
+  // skipped when every red byte is 0.
+  bool model_colour = false;
 };
 
 class Dissolve : public MeshTech {
@@ -594,7 +599,7 @@ class Dissolve : public MeshTech {
         if (!project_poly(ctx_.view, poly.corners, poly.count, 2, pp)) continue;
         const int slot = static_cast<int>(pp.z[poly.count - 1]) >> 4;
         if (poly.mode == 0) {
-          push_poly(pp, poly.corners, model->unit, poly.tex, poly.rgb, poly.semi ? 2 : 0, 0, slot, order, out);
+          push_poly(pp, poly.corners, model->unit, poly.tex, poly.rgb, poly.semi ? poly.semi_blend : 0, 0, slot, order, out);
         } else {
           push_poly(pp, poly.corners, model->unit, poly.tex, poly.rgb, poly.mode == 1 ? 2 : 0, 0, slot, order, out);
           // The copy: ABR 2 white CLUT, drawn first.
@@ -616,6 +621,7 @@ class Dissolve : public MeshTech {
     // mode: 0 one opaque packet (semi with lasdes3's part bit 1), 1 two packets, 2 one packet (skadeth).
     int count = 3, tex = 0, mode = 0;
     bool semi = false;
+    int semi_blend = 2;
     u8 rgb[4][3] = {};
   };
   struct ShardPoly {
@@ -660,6 +666,32 @@ class Dissolve : public MeshTech {
       const u8 part_flags = sk.shading[static_cast<size_t>(face.part)][3];
       Poly poly;
       poly.count = face.n, poly.tex = face.tex;
+      if (params_.model_colour) {
+        bool fading = false, any_red = false;
+        for (int k = 0; k < face.n; ++k) {
+          poly.corners[k] = draw_vert(sk, face, k);
+          const int excess = dist3(poly.corners[k].x - centre[0], poly.corners[k].y - centre[1], poly.corners[k].z - centre[2]) - reach;
+          fading = excess < 0;
+          for (int ch = 0; ch < 3; ++ch)
+            poly.rgb[k][ch] = static_cast<u8>(fading ? trunc_div(std::max(0, excess + band) * sk.rgb[ch], band) : sk.rgb[ch]);
+          any_red = any_red || poly.rgb[k][0] != 0;
+        }
+        if (!any_red) continue;
+        ProjPoly pp;
+        if (!project_poly(ctx_.view, poly.corners, poly.count, 2, pp)) continue;
+        poly.mode = 0;
+        poly.semi = fading || (part_flags & 2);
+        poly.semi_blend = ((part_flags >> 2) & 3) + 1;
+        if (fading && poly.rgb[0][0] < 0x30) {
+          int sum[3] = {0, 0, 0};
+          for (int k = 0; k < face.n; ++k) sum[0] += poly.corners[k].x, sum[1] += poly.corners[k].y, sum[2] += poly.corners[k].z;
+          std::array<int, 3> centroid{};
+          for (int k = 0; k < 3; ++k) centroid[static_cast<size_t>(k)] = face.n == 3 ? static_cast<s16>(sum[k]) / 3 : trunc_div(sum[k], 4);
+          cents.push_back(centroid);
+        }
+        polys_.push_back(poly);
+        continue;
+      }
       bool any = false;
       for (int k = 0; k < face.n; ++k) {
         poly.corners[k] = draw_vert(sk, face, k);
@@ -816,6 +848,126 @@ constexpr FbParams kFb[] = {
     {"lasdes3", Fade::Out, true, true, Centre::RelYOff, Emit::E2, true, true, false, true, true},
 };
 
+// ---- lasdes2 (the Time Devourer's end) -------------------------------------------------------------------------------------------------
+// The F-B dissolve of lasdes3 (op 0x100) drawn in the model colour (FbParams::model_colour) with the cnt-per-tick emission ('kie0' / 'kie1'), its
+// private ops renumbered: 0x107 / 0x108 part hide /
+// show on target 0, 0x109 / 0x10A the env CLUT fade / restore, op 0x59 replaced. The scene ops (D = s16 @+4; every task runs once in the tick that
+// starts it, then once per tick, and ends once t > D):
+//   0x101 / 0x103  the music changes to song 0x3B / to song s16 @+8 (0x102 restores the sound channels: nothing to do)
+//   0x104          a second camera plays the pack's shot named @+8 and its view fades in: alpha = 0x80 t / D (the fill is reset)
+//   0x105          the second view fades out (alpha = 0x80 - 0x80 t / D), then the second camera ends
+//   0x106          the battle camera's view fades out (fill = 0xFF t / D, subtracted), then the battle camera ends and the second takes over
+//   0x10B          target 0 is drawn by the stock pass again
+//   0x10C          rectangle s16 @+8 of a seven-entry table (16 x 32 halfwords in the pack's VRAM) is copied to (0x3C4, 0x32): the pack model's eyes
+//   0x10D          the screen tint (rgb bytes @+9..@+11, mode byte @+8) moves from the current colour to the new one: c = c0 + (c1 - c0) t / D
+//                  with t before the step; a tint already moving is dropped; nothing starts when colour and mode are unchanged
+constexpr FbParams kLasdes2Fb = {"lasdes2", Fade::Out, true, true, Centre::RelYOff, Emit::E1Cnt, true, true, false, true, true, true};
+
+class Lasdes2 : public Dissolve {
+ public:
+  Lasdes2() : Dissolve(kLasdes2Fb) {}
+
+ protected:
+  void command(int op, const int* args, int count) override {
+    const int duration = arg(args, count, 4);
+    switch (op) {
+      case 0x100: Dissolve::command(0x100, args, count); break;
+      case 0x107: Dissolve::command(0x104, args, count); break;
+      case 0x108: Dissolve::command(0x105, args, count); break;
+      case 0x109: Dissolve::command(0x102, args, count); break;
+      case 0x10A: Dissolve::command(0x103, args, count); break;
+      case 0x101: song(0x3B); break;
+      case 0x103: song(arg(args, count, 8)); break;
+      case 0x104: cross_in(args, count, duration); break;
+      case 0x105: cross_ramp(duration, true); break;
+      case 0x106: cross_ramp(duration, false); break;
+      case 0x10B:
+        if (FxModel* model = target(0)) model->hidden = model->custom_draw = false;
+        break;
+      case 0x10C: eyes(arg(args, count, 8)); break;
+      case 0x10D: {
+        const int w8 = arg(args, count, 8), w10 = arg(args, count, 10);
+        tint(static_cast<u8>(w8 >> 8), static_cast<u8>(w10), static_cast<u8>(w10 >> 8), w8 & 0xFF, duration);
+        break;
+      }
+      default: break;
+    }
+  }
+  bool done() const override { return Dissolve::done() && tasks_.empty(); }
+
+ private:
+  void song(int id) const {
+    if (ctx_.hooks.play_song) ctx_.hooks.play_song(id);
+  }
+  void cross_in(const int* args, int count, int duration) {
+    if (!ctx_.models) return;
+    const int w8 = arg(args, count, 8), w10 = arg(args, count, 10);
+    const char name[5] = {static_cast<char>(w8 & 0xFF), static_cast<char>((w8 >> 8) & 0xFF), static_cast<char>(w10 & 0xFF), static_cast<char>((w10 >> 8) & 0xFF), 0};
+    FxModels::CrossView& cross = ctx_.models->cross;
+    cross.shot = name;
+    ++cross.serial;
+    cross.alpha = cross.fill = 0;
+    const int serial = cross.serial;
+    ++alpha_task_;
+    const int task = alpha_task_;
+    add_task([this, serial, task, duration, elapsed = 0]() mutable {
+      FxModels::CrossView& view = ctx_.models->cross;
+      if (task != alpha_task_ || view.serial != serial) return false;
+      if (duration < ++elapsed) {
+        view.alpha = 0x80;
+        return false;
+      }
+      view.alpha = (elapsed << 7) / duration;
+      return true;
+    });
+  }
+  // fade_out: 0x105 (the second view leaves); else 0x106 (the battle camera's view leaves).
+  void cross_ramp(int duration, bool fade_out) {
+    if (!ctx_.models) return;
+    const int serial = ctx_.models->cross.serial;
+    add_task([this, serial, duration, fade_out, elapsed = 0]() mutable {
+      FxModels::CrossView& view = ctx_.models->cross;
+      if (view.serial != serial) return false;
+      if (duration < ++elapsed) {
+        if (fade_out) view.alpha = 0, view.stop = true;
+        else view.fill = 0xFF, view.promote = true;
+        return false;
+      }
+      if (fade_out) view.alpha = 0x80 - (elapsed << 7) / duration;
+      else view.fill = elapsed * 0xFF / duration;
+      return true;
+    });
+  }
+  void eyes(int index) const {
+    // The overlay's table: x, y, w, h in halfwords; entry 7 is empty.
+    static constexpr int kEyes[7][2] = {{320, 256}, {336, 256}, {352, 256}, {368, 256}, {320, 288}, {304, 256}, {288, 256}};
+    if (!ctx_.models || index < 0 || index >= 7) return;
+    ctx_.models->vram_moves.push_back({kEyes[index][0], kEyes[index][1], 16, 32, 0x3C4, 0x32, false});
+  }
+  void tint(u8 r, u8 g, u8 b, int mode, int duration) {
+    if (!ctx_.models) return;
+    FxModels::Tint& now = ctx_.models->tint;
+    if (now.rgb[0] == r && now.rgb[1] == g && now.rgb[2] == b && now.mode == mode) return;
+    now.mode = mode;
+    ++tint_task_;
+    const int task = tint_task_;
+    const std::array<u8, 3> from{now.rgb[0], now.rgb[1], now.rgb[2]}, to{r, g, b};
+    add_task([this, task, from, to, duration, elapsed = 0]() mutable {
+      if (task != tint_task_) return false;
+      FxModels::Tint& colour = ctx_.models->tint;
+      std::array<u8, 3> rgb = from;
+      if (duration != 0)
+        for (size_t k = 0; k < 3; ++k) rgb[k] = static_cast<u8>(from[k] + (to[k] - from[k]) * elapsed / duration);
+      const bool over = duration < ++elapsed;
+      if (over) rgb = to;
+      for (size_t k = 0; k < 3; ++k) colour.rgb[k] = rgb[k];
+      return !over;
+    });
+  }
+
+  int alpha_task_ = 0, tint_task_ = 0;
+};
+
 // ---- lasdes1 (NEGAPOSI) ---------------------------------------------------------------------------------------------------------------
 // M = target 0, drawn by the overlay every frame (no shadow, the stock pass hidden): the skinned vertices are waved (rates != 0):
 // x += A rsin(px + (x << 1)) >> 12, y += A rsin(py + (z << 1)) >> 12, z += A rsin(pz + (x << 1)) >> 12, the phases advancing by the rates per
@@ -965,6 +1117,7 @@ void register_death_ports(BespokeRegistry& registry) {
   for (const FbParams& params : kFb)
     registry.add({params.name, "death-dissolve", "Dissolve", [params] { return std::make_unique<Dissolve>(params); }});
   registry.add({"lasdes1", "death-dissolve", "Lasdes1", [] { return std::make_unique<Lasdes1>(); }});
+  registry.add({"lasdes2", "death-dissolve", "Lasdes2", [] { return std::make_unique<Lasdes2>(); }});
 }
 
 }  // namespace oc::effects

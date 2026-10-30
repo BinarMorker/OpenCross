@@ -1344,10 +1344,13 @@ struct ShopScreen::Impl {
     if (nav.ok && trade.confirm_frames > 0x1E) {
       if (trade.yes_no == 0) {
         const int goods = trade_goods(), before = shop::item_stock(*gs, goods);
-        shop::trade_commit(*gs, trade.elements, trade.offered, goods);
-        sfx(0x1B);
-        log::info("trade: traded {} levels for goods {} (stock {} -> {})", sum, goods, before, shop::item_stock(*gs, goods));
-        trade_log_stock("after");
+        if (!shop::trade_commit(*gs, trade.elements, trade.offered, goods)) {
+          sfx(0x18);
+        } else {
+          sfx(0x1B);
+          log::info("trade: traded {} levels for goods {} (stock {} -> {})", sum, goods, before, shop::item_stock(*gs, goods));
+          trade_log_stock("after");
+        }
       } else {
         sfx(8);
       }

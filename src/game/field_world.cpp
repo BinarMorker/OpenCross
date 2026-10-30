@@ -297,7 +297,6 @@ void FieldWorld::clear_room() {
   dialogue_face_ = -1;
   auto_target_ = -1;
   auto_teleported_ = false;
-  yaw_from_script_ = false;
   party_follow_ = true;
   follow_hold_ = false;
   input_.reset();
@@ -408,6 +407,8 @@ bool FieldWorld::load_room(std::string_view name, int param) {
   flag_writes_seen_ = 0;
   sync_flag_table();
   in_init_ = false;
+  // Continue / Load, debug and route loads come in like a room change of kind 0 (step_transition picks the kind of a room change).
+  begin_entry_fade(0);
 
   // The leader goes first: the followers' V spots are relative to it.
   for (int pass = 0; pass < 2; ++pass)

@@ -131,6 +131,8 @@ struct Unit {
   // Copies left of a consumable stack cell (PartyMember::qty); 0 = single / none.
   std::array<u8, data::kGridCells> qty{};
   Equip eq;
+  // The PC wore the hero set at battle start (Hero's Blade + two Hero's Shield / Medal); a Dopplegang form keeps it.
+  bool hero_set = false;
   bool guard = false;
   // PC "defended" flag: the PC's own menu stays closed until another PC has used a menu or time has advanced; cleared by the PC's next
   // menu and on KO.
@@ -144,7 +146,7 @@ struct Unit {
   int ctrl12 = 0;
   // Already pilfered (mode 30, one steal per enemy).
   bool stolen = false;
-  // Enemy name suffix 1..3 = A..C (0 = none).
+  // Enemy name suffix 1..6 = A..F (0 = none).
   u8 letter = 0;
   // Dopplegang: the monster record (= pool slot) the PC has become; -1 = the character's own form.
   int form = -1;
@@ -158,7 +160,7 @@ struct Rewards {
   int gold = 0;
   std::vector<u16> items;
   std::vector<u16> elements;
-  // Pilfered words (bit 15 = element id, else item id; mode 30): added to the stock at battle end whatever the outcome.
+  // Pilfered words (bit 15 = element id, else item id; mode 30): added to the stock at battle end, on a victory only.
   std::vector<u16> stolen;
   // Enemy casts caught by the party's element trap (mode 5): added to the element stock whatever the outcome.
   std::vector<u16> trapped;
@@ -213,7 +215,7 @@ struct ActionEvent {
   // The stolen word (bit 15 = element id, else item id); steal_msg 0 / 1.
   int steal_word = 0;
   // The message row of the action-end system window: the element record's row of an element whose mode landed on this target, or 6 ("Frozen -- can't move!")
-  // when Frozen newly landed on a target left alive.
+  // when Frozen newly landed on a target left alive; on a Run event, 5 ('Dropped the stolen goods!') when pilfered loot was pending.
   int sys_msg = -1;
   int hp_before = 0, hp_after = 0;
   // The field ring before this event's cast changed it (the view shows the ring of the action it presents).
@@ -267,6 +269,14 @@ struct Command {
   int target = -1;
 };
 
+// A double / triple tech a PC's tech cell turns into (Battle::combo_at): the casting PCs in the order of the tech record's
+// character bytes (+0x14..+0x16) and the grid cell each of them gives up, -1 = no entry.
+struct ComboTech {
+  int element = 0;
+  std::array<int, 3> units{-1, -1, -1};
+  std::array<int, 3> cells{-1, -1, -1};
+};
+
 struct EnemyAction {
   enum class Kind { Weapon, Element, None } kind = Kind::Weapon;
   int strength = 0;
@@ -274,6 +284,8 @@ struct EnemyAction {
   int element = 0;
   // Unit index.
   int target = 3;
+  // An element action's target units as a bit mask (bit = unit index): one cast aimed at all of them. 0 = `target` alone.
+  u32 targets = 0;
   // Scripted plans: pac::Event::seq of the op 67 that queued it (ActionEvent::script_seq), -1 = not from a script.
   int seq = -1;
   // Op 67's group list (QueuedAttack::group).
@@ -345,6 +357,11 @@ struct BattleOptions {
   std::vector<PartyMember> bench;
   // The Dopplegang pool (the save's 16 words, also battle script vars 0x60..0x7F): 256 bits, bit n of word w = pool slot w * 16 + n.
   std::array<u16, 16> dopple_mask{};
+  // Script variable 0x176: Van's piggy-bank savings in hundreds of G (element mode 46 adds it to the power).
+  int piggy_bank = 0;
+  // A monster-party scene (scene record byte 0x0F bit 0, the Grand Slam): party slot i fights as monster record monster_party[i] (the
+  // Grand Slam picker's pool slots); -1 leaves the slot empty.
+  std::array<int, kPcSlots> monster_party{-1, -1, -1};
 };
 
 class Battle {
@@ -353,7 +370,7 @@ class Battle {
   bool menu_locked() const { return brain_.menu_locked(); }
   Battle(const data::GameTables& tables, Rng& rng, EnemyBrain& brain) : tables_(tables), rng_(rng), brain_(brain) {}
 
-  // Builds the 3 party units (sorted by char id) and the scene's enemies, then runs enemy turns / time until a PC can
+  // Builds the 3 party units (party slot i = unit i) and the scene's enemies, then runs enemy turns / time until a PC can
   // act. Returns false if the scene id is invalid.
   bool start(std::vector<PartyMember> party, int scene, const BattleOptions& opt = {});
 
@@ -361,6 +378,8 @@ class Battle {
   const Unit& unit(int index) const { return units_[static_cast<size_t>(index)]; }
   Unit& unit_mut(int index) { return units_[static_cast<size_t>(index)]; }
   const std::array<int, 3>& ring() const { return ring_; }
+  // Dev: replaces the field ring (colour indices 0..5, kRingAllColours or -1 per slot).
+  void set_ring(const std::array<int, 3>& ring) { ring_ = ring; }
   // The element-trap block once the running action has ended: a trap set by it shows, a trap that sprang during it hides the whole block
   // (even while the other side's trap stays armed).
   TrapHud trap_hud() const { return {trap_state_ == 1 || trap_state_ == 2, trap_[0], trap_[1]}; }
@@ -373,6 +392,8 @@ class Battle {
   // After a star-up: stats / snap / pending updated.
   const std::vector<PartyMember>& bench() const { return bench_; }
   int scene() const { return scene_; }
+  // The party slots fight as monsters (BattleOptions::monster_party): nothing of the fight goes back to the party records.
+  bool monster_party() const { return monster_party_; }
   int actions() const { return actions_; }
   // Hidden / off-stage units (script ops 34 / 35 / 5B): never on the cursor ring, rejected by `validate`, drawn by nothing.
   bool hidden(int unit) const { return brain_.hidden(unit); }
@@ -432,6 +453,10 @@ class Battle {
   // Colour-sealed cell: the PC's merged lo has the seal bit of the cell's colour (green 0x800, white 0x8000, black 0x80000, red 0x800000,
   // yellow 0x8000000, blue 0x80000000). Sealed cells stay on the menu, greyed, and refuse the confirm.
   bool element_sealed(int pc, int cell) const;
+  // A double / triple tech the cell offers now (`ComboTech`, element 0 = none).
+  ComboTech combo_at(int pc, int cell) const;
+  // The element the cell casts now: the double / triple tech combo_at offers, else the cell's own id.
+  int cell_element(int pc, int cell) const;
   int chain_cost(int strength, const Unit& unit) const { return weapon_stamina_cost(strength, (unit.lo & st::kFatigued) != 0); }
   bool validate(const Command& cmd, std::string* why = nullptr) const;
   // Percent, using the current chain counter.
@@ -449,7 +474,8 @@ class Battle {
   void do_weapon_attack(int actor, int target, int strength);
   // `push_ring` = false for the 2nd..nth target of an all-targets cast (the colour enters the field ring once per cast).
   void do_element(int actor, int element_id, int row, int target, bool push_ring = true);
-  void step_after_pc_action(int actor, int steps, bool weapon, int excluded = -1);
+  // The PCs other than `actor` and those in `excluded` (a mask of PC slots) recover stamina; the enemy countdowns run `steps`.
+  void step_after_pc_action(int actor, int steps, bool weapon, u32 excluded = 0);
   void post_action(int actor, int poison_amount, int timer_steps);
   void time_advance();
   // Enemy turns + time advance until a PC can act or the battle ends.
@@ -497,9 +523,14 @@ class Battle {
     events_.push_back(event);
   }
   WeaponIn weapon_in(const Unit& attacker, const Unit& target_unit, int mult, int strength) const;
+  // The element's colour is sealed on the PC.
+  bool colour_sealed(int pc, int id) const;
+  // The cell of `pc` that can join a double / triple tech with partner tech `tech`, -1 = none.
+  int combo_partner_cell(int pc, int tech) const;
   void load_monster_record(Unit& unit, const data::StatRec& rec, u32 perm_lo_bits) const;
-  // Single target or the whole side (element record byte 4 bit 0x10).
-  void cast_element(int actor, int element_id, int row, int target);
+  // Single target, the whole side (element record byte 4 bit 0x10), or the units of `targets` (EnemyAction::targets) when it names more
+  // than one: one cast in every case, so the field ring takes its colour once.
+  void cast_element(int actor, int element_id, int row, int target, u32 targets = 0);
   void damage_unit(int actor, int target, int value, int code);
   void kill(int unit);
   // Runs the kill script (slot 3) of a dead enemy once and parks the death cast it queued.
@@ -527,11 +558,16 @@ class Battle {
   void compute_rewards();
   // The innate byte's colour mask is bits 2..7; bit 1 makes the unit absorb elements of its own colour.
   int colour_of(const Unit& unit) const { return data::colour_index_of_bit(static_cast<u8>(unit.innate & 0xFC)); }
+  // A multi-caster tech's participants, unit numbers, -1 = none: a PC's double / triple tech lists the party slots holding the
+  // character ids of element record +0x14..+0x16 (in that order); a monster's group tech (+0x17 = the count) the caster group.
+  std::array<int, 6> tech_participants(int actor, const data::ElemRec& element) const;
   // The field ring at the end of a cast: a repaint (modes 6 / 37 / 47) replaces all three slots, else the cast's colour enters as the newest
   // slot; an element with record byte 0 bit 0x80 and an element trap (mode 5) leave the ring as it was.
   void finish_ring(const data::ElemRec& element, int colour);
   void init_pc(int slot, const PartyMember& member);
   void init_enemy(int slot, int monster_id, const BattleOptions& opt);
+  void init_party_monster(int slot, int monster_id, const BattleOptions& opt);
+  void unlock_monster_grid(Unit& unit) const;
   int next_ready_enemy();
   void god_filter(int target, DamageOut& dmg) const;
   // Max stamina / battle boost refills, run after every action and hit.
@@ -571,7 +607,7 @@ class Battle {
   GrowthState growth_;
   BattleOptions opt_;
   int scene_ = 0, actions_ = 0, cursor_ = 0;
-  bool boss_ = false;
+  bool boss_ = false, monster_party_ = false;
   std::array<u16, 16> dopple_mask_{};
   // The PC's record before its first Dopplegang form.
   std::array<Unit, kPcSlots> form_backup_{};

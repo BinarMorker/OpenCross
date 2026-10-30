@@ -565,7 +565,7 @@ class Hensin : public MeshTech {
 // ---- miki -----------------------------------------------------------------------------------------------------------------------------
 // Init: caster 0 plays entry 0 of the pack's 0x1A table. Frame: the displayed frame is copied to VRAM
 // (0x1C0, 0x100) at OT entry 50 - the page the haze meshes grid / gnr0 / gnr1 of sexy2.prd sample. Draws nothing.
-// The capture request is posted every frame (FxModels::capture); the battle host does not yet substitute the frame for that page.
+// The capture request is posted every frame (FxModels::capture); the battle host copies the picture and the meshes on that page sample it.
 class Miki : public MeshTech {
  protected:
   void init() override { start_caster_anim(caster(0)); }

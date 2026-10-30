@@ -377,6 +377,37 @@ int main() {
     std::printf("FAIL: element 348 does not take its hit from the caster script's React\n");
     ++failures;
   }
+  // Script-only packs (a type-0x1A 'main', no 'main' sequence, no emitter: kill, comebigi, konsin, bre_roza) play: the host runs the table.
+  for (const int eid : {307, 493, 452, 144}) {
+    const auto pack = lib.get(eid);
+    if (!pack || !pack->tables.count("main")) {
+      std::printf("FAIL: script-only pack eid %d not played\n", eid);
+      ++failures;
+    }
+  }
+  // Rumble and the music fade are carried out; the continuation hold ops and the bttim reload have nothing to do.
+  for (const int op : {0x28, 0x29, 0x54})
+    if (!BattleFxRun::presented(op, 12)) {
+      std::printf("FAIL: op %02X not carried out\n", op);
+      ++failures;
+    }
+  // lasdes3 (eid 537, 'main' 2240 ticks) ends by its sequences, not by the safety cap.
+  if (const auto pack = lib.get(537)) {
+    BattleFxRun run(pack, lib.particle_lib(), 1);
+    run.start(scene, view);
+    int ticks = 0;
+    while (!run.done() && ticks < BattleFxRun::kTickCap + 2) {
+      run.tick(scene);
+      ++ticks;
+    }
+    if (run.capped() || ticks < 2240) {
+      std::printf("FAIL: lasdes3 ended at tick %d (capped %d)\n", ticks, run.capped());
+      ++failures;
+    }
+  } else {
+    std::printf("FAIL: lasdes3 (eid 537) missing\n");
+    ++failures;
+  }
   if (ran < 400) {
     std::printf("FAIL: only %d packs ran\n", ran);
     ++failures;

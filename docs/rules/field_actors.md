@@ -13,6 +13,7 @@ The behaviour rules of the field game mode as `src/game/` implements them: how a
 - Odd ticks alone run the scripted-turn bookkeeping (2.5) and the water wake cadence: `mz01` rings spawn when `wake_count & 3 == 0` while a walk or run clip plays, `& 15` otherwise (`wake_count` counts odd ticks spent in water). Culling (6.7), the shadow easing (7) and the lighting smoothing run every tick.
 - Lighting smoothing: each actor's light colour eases toward the zone colour of its triangle (`table[flags & 15]`; 128 on all channels when the room has no table or the actor has flag 0x80000000 in its 0x270 word) by `kStepPerTick` = 8 per channel per tick. The first tick of an actor snaps.
 - Room-entry cut: for the first 4 ticks after a load (`entry_cut_`) every running clip cross-fade is finished at the end of the tick, so the first script clip replaces the stand clip with no visible blend.
+- Room-entry fade: every entry fades in from black once INIT has run, whatever INIT's own FADE asked for (`begin_entry_fade`): a room change of kind 2 additively from white over 0x20 ticks, every other entry (room change, Continue or Load, battle return, a debug `Room=` start, a route `load`) subtractively from black over 0x30, a captured kind then setting its own length (`formats/fieldscript.md`, FE 02). Room changes, A8 and the return from a menu all use this one fade (slot 0), drawn subtractively toward black (additively toward white for kind 2). The direction of the last screen fade is kept as a flag: a room exit and A8 mode 1 set it, every fade-in clears it, and A8 acts only when it flips the flag, starting from the far end. So a FADE 0 during the entry fade-in does not cut it short, and a FADE 1 while the screen is already going black neither restarts nor speeds it, nor does the exit fade that follows.
 - Controls are free (`controls_free()`) when no room change or jump is pending, the fade is not darker than `kLockFade` = 0.3, no modal window is open, the global input-lock flag is clear and no actor has the action-running flag. An actor's input-lock flag raises the global one unless the actor is inactive (`update_input_lock`, at the end of every script tick).
 
 ## 2. Player movement
@@ -24,7 +25,7 @@ The player is the controlled entity (the party leader unless a script chose anot
 - The raw speed `S` is the entity's 0x10C value (set by the speed ops, `fieldscript.md`). 0 means `kDefaultSpeed` = 0x50.
 - The velocity is 16.16, so a step is `S / 16` units. Walk: `S / 16` (5 at the default, `kWalkUnitsPerTick`). Run: `(2 * S + S / 2) / 16` (12.5, `kRunUnitsPerTick`). No acceleration, no analog speed scaling. The cheat "run speed" doubles `S`.
 - Scripted walks step `S / 16`, or 5 when `S` is 0.
-- Tiles with flag 0xC800 (stairs, ladders, forced slide) take the run away. Flag 0x1000 halves the terrain push only (5.5), not a pad walk.
+- Tiles with flag 0xC800 (stairs, ladders, forced slide) take the run away. Flag 0x1000 on the tile the actor stands on halves its velocity: the pad step (walk or run, and the step a pushed actor takes from it) as well as the terrain push (5.5).
 
 ### 2.2 Walk or run
 
@@ -81,12 +82,13 @@ With the controls free and a pad heading active, a leader that stands outside th
 - A script tween (set-position, to-actor, follow) moves the scroll linearly over `frames` ticks (rounded each tick, exact at the end; `frames <= 0` jumps at once); `frames = 0x7FFF` means `max(1, distance)` ticks. When it ends the mode becomes Fixed (after set-position), Auto (to-actor) or FollowEnt (follow). Set-position targets are clamped like any other.
 - Room entry: the scroll starts at (0, 0), the mode is Auto and the ease runs `kEntryEaseIterations` = 64 times against the player's spot; the view takes the result without interpolation.
 - Shake (FE 21 x, y, ticks): `count = max(1, (ticks & 0xFFFF) + 1)`. The 16.16 amplitudes step by `(target - current) / count` for `count` ticks, then equal the target and stay there until the next FE 21. Every tick, on each axis whose integer amplitude `a` is above 0, the scroll gets `((rand15 * a + 1) >> 15) - a / 2` (range `[-a/2, a - a/2]`; `rand15` = bits 16..30 of a congruential generator `x * 1664525 + 1013904223`) and is clamped again to the pan limits (unless FE 04). The offset is not fed back into the eased scroll. The shake state is cleared at room load.
+- Sequence shake (room sequence op 2E, `formats/room_effects.md` 5.2): the display itself moves. Every tick, on each axis whose rounded amplitude `a` is above 0, the scroll is lowered by `((rand15 * a) >> 16) + a / 2` (the picture moves right / down by `[a/2, a)` pixels; same generator), after the FE 21 shake and without the pan-limit clamp. On the PS1 the whole display (windows included) moves; OpenCross moves the room picture.
 - One scroll per frame: the integer scroll is the only camera state. `RoomView::scroll_at(alpha)` interpolates it from the previous tick to the current one (`room.md` 5.3); layers, actors, shadows and effects take that single value. While a captured-kind exit fade runs, `alpha` is 1.
 - Every tick the scroll is published in script variables 0x330 / 0x332.
 
 ## 4. Followers
 
-Followers are party slots 1 and 2. A non-party actor whose script runs the follow op and that is not player-controlled (flag 0x1) is treated as a third follower on ring 1. Follower logic runs only on a tick on which the member's own script ran the update-character op (`updating`); a member whose script is busy does not follow. Rule 3 never uses the walk-mesh mover (4.3).
+Followers are party slots 1 and 2. "The leader" in the rules below is the controlled entity (party slot 0 unless a script handed the pad to another entity): ring 0 records its walk, rule 1 measures against it, follower 1 follows it, and it never takes the follower branch itself. A non-party actor whose script runs the follow op and that is not player-controlled (flag 0x1) is treated as a third follower on ring 1. Follower logic runs only on a tick on which the member's own script ran the update-character op (`updating`); a member whose script is busy does not follow. Rule 3 never uses the walk-mesh mover (4.3).
 
 ### 4.1 Trail rings
 
@@ -100,7 +102,7 @@ Followers are party slots 1 and 2. A non-party actor whose script runs the follo
 
 1. `dL < 80` and no follow wait (op BE) running: back off. Target = `(lx - cos(ar) * 128, lz - sin(ar) * 128)`, the point 128 units from the leader (`l`) on engine angle `ar = angle +- 0x80`, with `angle = -bearing(member - leader)` (0 when the two coincide), `lfe` = the leader's facing minus 0x800, and the sign `+` when `((lfe + angle) & 0xFFF) > 0x7FF + ring`, else `-` (at the exact tie the two followers swing to opposite sides). The step is `base / 16` units along the 3D line to the target taken at the leader's height; facing = the bearing of the move; walk clip.
 2. else `dP <= 200`: stand; facing unchanged.
-3. else replay the ring. Scan from the newest entry backwards for the first entry nearer than 50 units (100 when the member's tile or the entry's tile has flags 0xC800); none: the newest entry. Speed `spd = base - (ring + 1) * 16`; `dP > 230`: `spd += base / 2 + 32`, run clip; `dP >= 351`: `spd = 3 * base`, run clip; else if `dP < 250`: walk clip. The step is the 3D unit vector to the entry times `spd / 16`, the full step even past the entry. Facing = the bearing of the move.
+3. else replay the ring. Scan from the newest entry backwards for the first entry nearer than 50 units (100 for the whole scan when the member's tile or the newest entry's tile has flags 0xC800); none: the newest entry. Speed `spd = base - (ring + 1) * 16`; `dP > 230`: `spd += base / 2 + 32`, run clip; `dP >= 351`: `spd = 3 * base`, run clip; else if `dP < 250`: walk clip. The step is the 3D unit vector to the entry times `spd / 16`, the full step even past the entry. Facing = the bearing of the move.
 
 Broken-chain guard: if the chosen entry is not the newest and is already within one step, the newest entry is used.
 
@@ -185,8 +187,8 @@ SETUP_NPC and D1 on a model without an animation-sequence table set the stand sl
 
 ### 6.7 Inactive and culled actors
 
-- Inactive (flag 0x10): no turn, no new clip; the sequence and the clip already playing keep running. It is not drawn only if it is an empty party slot, or has flag 0x20 or 0x4000 (`ent_not_drawn`).
-- Culled (`step_cull`, every tick): the clip is chosen, but the animation sequence, the clip time and the head turn do not run. Exemptions, the box and the screen test: `fieldscript.md` 8.1. The test is skipped for the first 4 ticks after a load; the actor's height offset is added to the box's y; if a box point cannot be projected the actor is kept. `OC_NO_CULL` disables the test.
+- Inactive (flag 0x10): no turn, no new clip; the sequence and the clip already playing keep running. It is not drawn only if it is an empty party slot, or has flag 0x20, 0x4000 or 0x8000 (`ent_not_drawn`).
+- Culled (`step_cull`, every tick): the entity flag 0x8000 is set (cleared again once the box is on screen), so the actor is not drawn and casts no shadow, and op B3 sees it; the clip is chosen, but the animation sequence, the clip time and the head turn do not run. Exemptions, the box and the screen test: `fieldscript.md` 8.1. The test is skipped for the first 4 ticks after a load; the actor's height offset is added to the box's y; if a box point cannot be projected the actor is kept. `OC_NO_CULL` disables the test.
 
 ### 6.8 Head turn
 

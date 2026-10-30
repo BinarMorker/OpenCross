@@ -349,7 +349,7 @@ void SlotList::draw(DrawList& dl, UiKit& kit) const {
 
   // Location caption of a save: the savetbl row of its scenario key, split at the first newline.
   auto location_lines = [&](const save::SaveSlot& data) -> std::pair<std::u32string, std::u32string> {
-    const int scenario = data.head[0x40] | (data.head[0x41] << 8);
+    const int scenario = data.progression();
     std::string row;
     if (const import::TextTable* table = tables_->table("savetbl"))
       if (const std::string* found = table->get(static_cast<u64>(sl::location_key(scenario)), lang_)) row = *found;

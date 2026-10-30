@@ -2,7 +2,7 @@
 
 Enemy AI, scripted fights and battle cut-scenes are bytecode stored in `battle/event/evtNNN.pac` (one file per encounter scene, `NNN` = scene id; scenes without logic share the template `evt0000.pac`). This document covers the file layout, the interpreter model, the scheduler that decides when each script slot runs, the variable model, target codes, and every opcode with its length and meaning. The corpus is 440 files, 14183 unique scripts, all of which decode exactly with the length table below; all 47,594 goto / cond-jump targets land on an instruction start. Counts in parentheses are corpus occurrences. Related: `battle_data.md` (scene records).
 
-Confidence column: **C** = behaviour clear, **I** = behaviour known, purpose or name inferred, **?** = effect on game state unknown.
+Confidence column: **C** = behaviour clear, **I** = behaviour known, purpose or name inferred, **U** = no shipped script contains the opcode (its handler is not modelled; the interpreter advances by the table length).
 
 ## 1. File layout
 
@@ -148,7 +148,7 @@ Operands: `d` raw destination var; `A B C` S-mode values (spec byte last); `W` W
 | op | len | operands | name | semantics | conf |
 |---|---|---|---|---|---|
 | 2B | 6 | d B spec | select_target | d = target mask of code B (3.3) (6042) | C |
-| 67 | 8 | A B C spec | queue_attack | A type, B power/element, C target mask (spec 0x80/0xC0/0xE0 = which are immediate). Mask is intersected with the alive mask (OpenCross: with the roster mask, i.e. the PCs, the living enemies and the enemies owing a scripted death); empty -> self (types 1,2,3,6) or unit 0 (types 0,5). OpenCross keeps at most 4 entries per unit; a fifth is dropped. Type **0/5** weapon (B > 2 -> 0; 0 weak, 1 medium, 2 heavy); **1,2,3,6** element/tech id B (6 also sets a flag; type 2 also copies vars 0x10-0x1A as the colour slots); **4** reset own countdown `AP + rnd(0, AP>>2)` and clear the slot-2 flag. For PCs it also records the last-attack info. Corpus types 0:8277 1:6116 2:43 3:3 6:1 | C |
+| 67 | 8 | A B C spec | queue_attack | A type, B power/element, C target mask (spec 0x80/0xC0/0xE0 = which are immediate). Mask is intersected with the alive mask (OpenCross: with the roster mask, i.e. the PCs, the living enemies and the enemies owing a scripted death); empty -> self (types 1,2,3,6) or unit 0 (types 0,5). OpenCross keeps at most 4 entries per unit; a fifth is dropped. Type **0/5** weapon (B > 2 -> 0; 0 weak, 1 medium, 2 heavy); **1,2,3,6** element/tech id B (6 also sets a flag; type 2 also copies vars 0x10-0x1A as the colour slots); **4** reset own countdown `AP + rnd(0, AP>>2)` and clear the slot-2 flag. Each entry is one executor action whose target list is the units of the mask: an element entry is one cast at all of them (each listed unit hit once, the field ring and the cast-colour history take the colour once; an element hitting its whole side still walks the side); OpenCross runs a weapon entry as one attack per listed unit. For PCs it also records the last-attack info. Corpus types 0:8277 1:6116 2:43 3:3 6:1 | C |
 | 75 | 8 | d B C spec | read_unit | d = field C of unit B (3.2); spec 0x60 typical (7723) | C |
 | 76 | 8 | A B C spec | write_unit | field C of unit B = A, no clamp (1054) | C |
 | 55 | 5 | d1 d2 | pick_random_element | self: random usable element cell of levels 0..gauge (3.3); mark it used; d1 = element id (0 none), d2 = target mask (all-targets flag -> whole side, else random alive unit != self) or 0xFFFF | I |
@@ -169,7 +169,7 @@ Operands: `d` raw destination var; `A B C` S-mode values (spec byte last); `W` W
 | 7B | 3 | W v | reset_menu_cursor | units 0-2: remembered command-menu cursor = v. OpenCross: `Unit::menu_cursor` | I |
 | 7D | 2 | b | set_menu_entry100 | b = 1 shows the enemy letter suffix in the target-name label (glyph 100 and the one after it are zeroed when 0). Only the target label honours it. Cleared at battle init. Letters: enemies spawn group by group; in a group of more than one the instances get A, B, C in slot order (a group of one: none), restarting per group. RDE draws "-A" (non-JP) / "・Ａ" (JP). The op sets the flag the target label reads (`menu_entry100()`), `Unit::letter` holds the letters | C |
 | 81 | 2 | b | set_end_check | end-of-battle test enabled = b (set to 1 at battle start). 81 0 suspends the victory/defeat check (scripted boss finales). OpenCross: `end_check_enabled()`, consulted by `Battle::check_end` | C |
-| 39 | 2 | b | set_ui_enable | b = 0 freezes the per-frame battle HUD / command-window update. OpenCross: `ui_enabled()` | I |
+| 39 | 2 | b | set_ui_enable | b = 0: the per-frame battle HUD (party panels, field ring, command box) is not drawn until b != 0; the Time Devourer's death script (evt472) clears it before its last casts. OpenCross: `ui_enabled()`, `BattleView::hud_script_off_` | C |
 | AF | 2 | b | set_menu_lock | while b is nonzero the player command-phase driver does nothing (no menu opens). OpenCross: `menu_locked()` | I |
 | AE | 5 | d W | colour_seq_match | d = 1 if the cast-colour history (every element action, PC or enemy; last 7 entries) equals `5 4 1 6 3 2 7` (colour+1: yellow red green blue black white, then a colourless cast: the finale's "Chrono Cross" order), else 0; on a match the battle sound call is muted | C |
 | AB | 5 | d W | colour_seq_next | d = the colour (0-5; 6 = sequence complete) still needed next: find the last `5` in the history at p and check the following entries against the pattern; a wrong entry or no start -> 4 (yellow); an empty slot -> that slot's pattern colour - 1; p = 6 -> 3. If W == 0 the result is mapped through `5 3 2 6 1 4 7` (`table[r]-1`, the hint colour in the alternate order) | C |
@@ -186,21 +186,21 @@ Operands: `d` raw destination var; `A B C` S-mode values (spec byte last); `W` W
 | 2A | 1 | | end_attacked | if no action is in progress: clears the slot-4 flag and releases the lock; else blocks (2481) | C |
 | 2C | 1 | | begin_cutscene | when allowed: UI hidden, then as 66 | I |
 | 38 | 1 | | end_cutscene | UI shown, action state cleared, lock released | I |
-| 97 | 1 | | begin_sequence2 | as 66 gated by another flag (unused) | ? |
+| 97 | 1 | | begin_sequence2 | as 66 gated by another flag (unused) | U |
 | 34 | 2 | b | ghost_self | self off-stage and untargetable = (b != 0); the model's hidden bit follows. b == 0 also sets the unit's bit in the all-target cast mask (seeded at battle start from scene byte +0x1B, `battle_data.md` 6); b != 0 leaves it alone | C |
 | 35 | 3 | b e | ghost_entity | as 34 for entity e | C |
 | 5B | 4 | f W u | ghost_unit | **not 34 for another unit**: writes only the untargetable flag (f != 0) and the cast mask bit (f == 0 sets, f != 0 clears). The off-stage flag (what count_enemies / read_flag / victory read) and the model's hidden bit stay, so a unit the spawn seed put off-stage stays off-stage under `5B 0` (scene 266's Bomber). OpenCross: `Battle::untargetable`, `Host::reveal` / `Host::conceal` | C |
 | 5C | 4 | f W u | set_scripted_death | per-unit flag = (f == 0). When a unit is defeated, if the flag is 0 the standard death presentation runs; A6 clears the flag. So `5C 0` = the script performs the death itself. An owed unit in the alive mask blocks victory, hidden or not. OpenCross: `scripted_death(u)`, `ScriptedBrain::death_owed` | C |
-| 3C | 3 | W a | model_call | model call on self (unused) | ? |
+| 3C | 3 | W a | model_call | model call on self (unused) | U |
 | 3D | 3 | W a | set_anim | self model pose request = a (event `Pose`; the idle script reads it back; 8 = dead, 1 = stand-by) | I |
 | 58 | 3 | W a | play_anim | start animation `a & 0xFF7F` on self; bit 0x80 means "only if no animation stream is currently running". Event `Anim`; `BattleView::script_event` starts the model's S5 entry | C |
 | 5A | 4 | e W a | play_anim_of | same for entity e's unit (skipped if unbound); the word as is (>= 0x80 = the external attack table), no gate | C |
 | 85 | 5 | W v W u | set_shade | unit colour shade = v (presentation only). OpenCross: `Unit::shade` | I |
 | 86 | 3 | W u | camera_target | camera/acting list = the unit of entity slot `(u + 0x21) & 0xFF` (arg `0xE9` = the script's own unit, `0xE0 + k` = slot `k+1`). The list is read by camera ref 1 / 9, `GetPos` list 0 (effect op 0x74) and list-0 attaches of scripts it starts, until the next writer (command setup, element menu, hit setup). OpenCross: `BattleView::script_actor_` outranks the last action's caster for those refs | C |
 | 7A | 1 | | camera_self | camera list = self unit | C |
-| 90 | 5 | W u W s | move_to | model of u := position of unit `table[s]-1` with x - 0x200000 | ? |
+| 90 | 5 | W u W s | move_to | model of u := position of unit `table[s]-1` with x - 0x200000 (unused) | U |
 | 91 | 3 | W u | sync_pos | copies the model position (>> 12) of u (E9 self) into the unit position cache; presentation only (event `SyncPos`) | I |
-| A9 | 4 | e a | model_call2 | model call on entity e (unused) | ? |
+| A9 | 4 | e a | model_call2 | model call on entity e (unused) | U |
 | B0 / B1 | 4 | A | lift / land | 10-frame ease of the model's height by `(A/10)*0x1000` (B1 undoes it); blocks until done | I |
 | E0 | 4 | idx | dialogue | opens dialogue window 4 with record `idx` of the pac's part 1; blocks only while window 4 is still open/closing (state != 0). **It does not wait for the button**; `E2` does. The battle goes on; only the entity (and, holding the lock, the turn) waits (section 4). Record `idx*8` = `{u16 text offset, u16 width in cells, s16 lines (max 4), u16}`; text runs to the next record's offset, game charset (codes 00 mend, 01 LF, 02 bpage, 04 wait n, 06 wend n, 07 item, 09 enemy name, 0E colour, 15 playwork, 1A variable). Frame grows from the centre; width `cells*12 & ~3`, height `lines*16`, text x = `32 + (22 - cells)*6`, rect y 0x2C, text y 0x2E (op 62 overrides x/y, text y + 1). RDE replaces the text with `btel_<lang>.csv[(remapped id << 16) + idx]` (14 battle ids read another battle's rows) and fits the window to it: cells = clamp((widest line in PS1 px + 11) / 12, 1, 26), lines = clamp(most lines of any `{bpage}` page, 1, 5) (`text.md`). OpenCross: `BattleView::script_pump` + `smsg_*` (section 7) | I |
 | E2 | 1 | | wait_dialogue | returns 0 (retry) while the text is not yet fully shown or the window is not fully open, and for page-break states until the page button (button class 5/6) arrives; from `{mend}` state it continues once the button (or `{wend}`) starts the close. So the script resumes when the window starts to close, but the next `E0` blocks until it is fully closed. An open window owns the pad | I |
@@ -211,8 +211,8 @@ Operands: `d` raw destination var; `A B C` S-mode values (spec byte last); `W` W
 
 ### 5.4 Not executed
 
-* Stub opcodes (no effect): 07 08 09 22-29 2E 30-33 36 37 3A 3B 3E-54 5D-61 63 64 68-74 78 79 7E 82 88 8A 8B 92-95 98-A3 A5 A8 AA AC AD B4 B6-BD E1 E3 E4. E3 has table length 6 and its single occurrence is padding after a terminator; 77 is also a stub, used as padding.
-* No-ops of table length: 0A 0B 0F B2 B3 B5. Length 0 (stall): 03 04 06 0C 7F BE BF C6-DF E5-FF. OpenCross drops an entity that reaches a length-0 opcode.
+* Opcodes with a table length that no shipped script contains (confidence U; OpenCross advances them by their length and `ocbattle pac-soak` lists any that runs): 07 08 09 0A 0B 0F 22-29 2E 30-33 36 37 3A-3C 3E-54 5D-61 63 64 68-74 78 79 7E 82 88 8A 8B 90 92-95 97-A3 A5 A8-AA AC AD B2-BD E1 E4. Their handlers are not modelled because no battle can reach them.
+* E3 has table length 6 and its single occurrence is padding after a terminator; 77 is a stub, used as padding. Length 0 (stall): 03 04 06 0C 7F BE BF C6-DF E5-FF. OpenCross drops an entity that reaches a length-0 opcode.
 
 ### 5.5 Length table
 
@@ -231,8 +231,8 @@ Other opcodes below 0xE5 with a nonzero table length never occur. `python -I too
 * Blocking ops in the VM: 66 65 A4 2A 2D 2C C4 C5 (A4 and 2A also wait for the unit's own queue to drain). A6, E0 and E2 only emit events (the view does the waiting, section 7); B0 and B1 are no-ops. 67 appends to a per-unit queue consumed by the action executor; A4 completes when the executor is idle. Debug: `OC_PAC_TRACE=1` prints every executed op.
 * Tools: `ocbattle pac-disasm <scene>` prints the disassembly (the text of `cc_tables.py bscript dump`). `ocbattle pac-soak [turns] [-v] [--scene N | --from A --to B]` starts every scene's battle in a dummy party, runs every unit's slots 2 / 3 / 4 twice on a second battle, then plays `turns` automatic commands (default 40), and prints scene / battle / command / exception counts, outcomes, executed ops, scripted-turn statistics and the sets of stubbed opcodes, invalid opcodes and undecoded unit fields; `OC_SOAK_LIST=1` lists the per-scene outcomes.
 * RNG: `1F` uses libc `rand()` (`Host::libc_rand`); 2B / 55 picks use `rnd(lo, hi)`.
-* Engine flags set by ops 81, 39, AF are exposed as `end_check_enabled()`, `ui_enabled()`, `menu_locked()`; `Battle::check_end` honours the first, the battle view honours the others.
-* Unknown: the exact identity of the two effect pools behind C0-C5 (a resource lookup by tag; they hold face/portrait and 3D effect objects) and the effect of 90, 97, 3C, A9.
+* Engine flags set by ops 81, 39, AF are exposed as `end_check_enabled()`, `ui_enabled()`, `menu_locked()`; `Battle::check_end` honours the first, the battle view the others (39 through its `EngineFlag` event).
+* Unknown: the exact identity of the two effect pools behind C0-C5 (a resource lookup by tag; they hold face/portrait and 3D effect objects).
 
 ## 7. OpenCross: script stream on virtual time
 

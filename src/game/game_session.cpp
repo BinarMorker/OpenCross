@@ -221,18 +221,18 @@ BattleSummary apply_battle_result(ui::GameState& gs, const data::GameTables& tab
     ++lost;
   }
   if (trapped || lost) log::info("session: element traps: {} element(s) taken into the stock, {} grid cell(s) lost", trapped, lost);
-  // Pilfered loot (mode 30, added at the end of the loop, whatever the outcome): bit 15 = element stock, else the item stock.
+  if (!victory) return sum;
+  // Pilfered loot (mode 30) is kept only on a victory: bit 15 = element stock (id & 0xFF, as a trapped element), else the item stock.
   for (u16 loot : rewards.stolen) {
-    if (loot & 0x8000) gs.add_element(loot & 0x7F);
+    if (loot & 0x8000) gs.add_element(loot & 0xFF);
     else if (loot) gs.add_item(loot);
   }
-  if (!victory) return sum;
   sum.gold = rewards.gold;
   gs.set_gold(static_cast<u32>(std::min<u64>(9999999ull, static_cast<u64>(gs.gold()) + static_cast<u64>(std::max(0, rewards.gold)))));
   for (u16 id : rewards.items)
     if (gs.add_item(id)) ++sum.items;
   for (u16 id : rewards.elements)
-    if (gs.add_element(id & 0x7F)) ++sum.elements;
+    if (gs.add_element(id)) ++sum.elements;
   if (rewards.star_up) {
     sum.star_up = true;
     // The core ran from the real star: its growth state is the new one (stars 0..99, counter wraps with the byte).

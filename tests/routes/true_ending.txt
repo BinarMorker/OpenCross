@@ -1,0 +1,69 @@
+# The true ending: Continue file 04 (opa_a04f, scenario 209, party Kid / Grobyc / Serge) -> the Time Egg on Opassa Beach -> the
+# Time Devourer -> PC 0 casts the Chrono Cross after the six colours (true_ending.env) -> lasdes2 -> end_a01e.
+0 wait flow title 300
+- wait movie start 300
+- tap confirm
+- wait movie end 300
+- wait 150
+- tap confirm
+- wait 60
+- tap down                            # Continue
+- wait 10
+- tap confirm
+- wait flow slots 300
+- wait 20
+- tap confirm                         # Slot 1 (no page files)
+- wait 20
+- tap right                           # file 04
+- wait 6
+- tap right
+- wait 6
+- tap right
+- wait 6
+- tap right
+- wait 6
+- screenshot te_01_files.png
+- tap confirm
+- wait flow field 600
+- wait room opa_a04f 600
+- wait idle 900
+- assert party 1,40,0
+- screenshot te_02_beach.png
+- walk -178 -870 24 900
+- walk -705 -870 24 900                # entity 17, the Time Egg spot (below the kids, not through them)
+- pos
+- tap f                                # the field key-item list
+- wait 40
+- screenshot te_03_keylist.png
+- tap down
+- wait 6
+- tap down
+- wait 6
+- tap confirm                         # Time Egg (row 1, left)
+- wait 30
+- screenshot te_04_choice.png
+- choose 0 900                        # "To the darkness of time!"
+- wait dialogue open 900               # the party's lines
+- skip 1200
+- wait dialogue open 900
+- skip 1200
+- wait dialogue open 900
+- skip 1200
+- wait battle start 1800
+- wait 1500                            # boss intro, party intro: Kid's command menu
+- screenshot te_05_battle.png
+- tap down                            # Element
+- wait 10
+- tap confirm
+- wait 30
+- screenshot te_06_grid.png
+- tap confirm
+- wait 30
+- screenshot te_07_target.png
+- tap confirm                         # the Time Devourer: 341, then lasdes2 (about 125 s)
+- autoshot 300 30 te_cin_
+- wait room end_a01e 12000
+- assert result 4
+- wait 600
+- screenshot te_90_end.png
+- quit

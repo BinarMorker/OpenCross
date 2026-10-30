@@ -67,11 +67,12 @@ void App::fill_route_state() {
   rstate.battle = battle_in_field || battle_ok;
   // The results screen is up (route: wait battle results).
   rstate.battle_finished = results_ok && results.active();
-  rstate.field_idle = field_visible() && world.idle() && world.fade_level() < 0.05f && !movie_open && !(menu_ok && !menu.closed()) && !shop_open && !(key_popup_ok && key_popup.active()) && !(pause_ok && pause_screen.active()) && !(party_ok && party_screen.active());
+  rstate.field_idle = field_visible() && world.idle() && world.fade_level() < 0.05f && !movie_open && !(menu_ok && !menu.closed()) && !shop_open && !(key_popup_ok && key_popup.active()) && !(pause_ok && pause_screen.active()) && !(party_ok && party_screen.active()) && !(monster_picker_ok && monster_picker.active());
   rstate.battle_result = field_visible() ? world.battle_result() : 0;
   rstate.flow = flow_ready && flow_enabled ? game::flow_state_name(flow.state()) : "field";
   rstate.movie = movie_open;
-  rstate.menu = (menu_ok && !menu.closed()) || (flow_ready && (flow.rename_active() || flow.party_active() || flow.ng_plus_active())) || (party_ok && party_screen.active());
+  rstate.menu = (menu_ok && !menu.closed()) || (flow_ready && (flow.rename_active() || flow.party_active() || flow.ng_plus_active())) || (party_ok && party_screen.active()) ||
+               (monster_picker_ok && monster_picker.active());
   rstate.shop = shop_open;
   rstate.guide_page = flow_ready ? flow.guide_page() : 0;
   rstate.pause = pause_ok && pause_screen.active();
@@ -92,21 +93,13 @@ void App::fill_route_state() {
 void App::route_request(const game::RouteOut& out) {
   using MK = script::MenuKind;
   const std::string& rk = out.request;
-  if (rk == "rename") {
-    world.request_menu(MK::NameEntry, out.request_arg);
-    world.request_menu(MK::MainMenu, 0);
-  }
+  if (rk == "rename") world.request_menu(MK::NameEntry, out.request_arg);
   else if (rk == "party") world.request_menu(MK::PartyScreen, 0);
   else if (rk == "party_add") { world.party_add(out.request_arg); world.state_edited(); }
   else if (rk == "money") world.set_money(out.request_arg);
   else if (rk == "keyitem") { world.take_item(0x400 + out.request_arg); world.give_item(0x400 + out.request_arg); }
-  else if (rk == "save") {
-    world.request_menu(MK::Save, 0);
-    world.request_menu(MK::MainMenu, 0);
-  } else if (rk == "ngplus") {
-    world.request_menu(MK::NewGamePlus, 0);
-    world.request_menu(MK::MainMenu, 0);
-  }
+  else if (rk == "save") world.request_menu(MK::Save, 0);
+  else if (rk == "ngplus") world.request_menu(MK::NewGamePlus, 0);
   else if (rk == "slotdump") {
     world.capture_state();
     const char* dump_prefix = std::getenv("OC_SLOT_DUMP");
@@ -125,10 +118,8 @@ void App::route_request(const game::RouteOut& out) {
   else if (rk == "movie") world.play_movie(out.request_arg, 0, true);
   else if (rk == "battle") world.request_battle(out.request_arg, 0, 0);
   else if (rk == "battle_disguise") world.request_battle(out.request_arg, 0, 4);
-  else if (rk == "trading") {
-    world.request_menu(MK::TradingPost, out.request_arg);
-    world.request_menu(MK::MainMenu, 0);
-  } else {
+  else if (rk == "trading") world.request_menu(MK::TradingPost, out.request_arg);
+  else {
     log::error("route: unknown request {}", rk);
     exit_code = 1;
     route_finished = true;

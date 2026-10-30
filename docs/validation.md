@@ -158,7 +158,7 @@ with Session(disc, state="tmp/ref/states/bg00_menu.sav") as g:  # state is optio
 ### 3.5 The compare loop
 
 1. Capture the reference (`ps1_capture.py cast ...`, or `ps1_audio.py` for sound).
-2. Run the OpenCross side: `tools\ours_cast34.ps1 <id>` runs `ocbattleview` headless with deterministic ticks, writes `tmp\r34\<id>\ours\` and then runs `tools\py\fx_diff.py`, which extracts the reference states into `ref\tables.json` and writes `diff.md` (a verdict block, per-frame differences) and `shots.png` beside them. `tools\ours_cast.ps1 -Out tmp\x2c\heal -Cast 88` is the audio counterpart, writing `ours.log` and `ours.csv`.
+2. Run the OpenCross side: `tools\ours_cast34.ps1 <id>` runs `ocbattleview` headless with deterministic ticks for the length of the capture in refreshes, writes `tmp\r34\<id>\ours\` and then runs `tools\py\fx_diff.py`, which extracts the reference states into `ref\tables.json` and writes `diff.md` (a verdict block, per-frame differences) and `shots.png` beside them. The PS1 battle advances one game frame (one capture frame) per 2-3 refreshes, so every reference state carries the battle refresh counter (`bf` in `tables.json`) and `fx_diff.py` aligns on it: PS1 time = counter minus the first state's counter, compared 1:1 with our ticks (our tick = PS1 time + offset); `diff.md` lists times as `R<refresh>`. `tools\ours_cast.ps1 -Out tmp\x2c\heal -Cast 88` is the audio counterpart, writing `ours.log` and `ours.csv`.
 3. For sound, build the reference event list with `python -X utf8 tools\py\sfx_cmp2.py ps1 <dir>`, then `sfx_cmp2.py cmp <ps1 events.csv> <ours events.csv>` lists missing, extra and mistimed sounds.
 4. Fix the engine, rerun step 2, and read the verdict tables; a screenshot only proves what was on screen.
 
@@ -168,6 +168,19 @@ with Session(disc, state="tmp/ref/states/bg00_menu.sav") as g:  # state is optio
 - One emulator per portable folder and port. For parallel runs copy `tools\duckstation\` (without the contents of `savestates\`, `screenshots\`, `videos\`) to another folder, change `GDBServerPort` in its `settings.ini`, and pass `Session(ds_dir=..., port=...)` (the drivers take `--ds-dir` and `--port`). Kill only your own emulator process, never by image name; `Session` closes the one it started.
 - Guest RAM is 2 MiB; the audio capture is wall-clock, so audio needs a free run from a saved state.
 - HD-art comparisons are not covered by these tools: they use the Steam RDE itself and the `tools\rde_*.py` scripts.
+
+### 3.7 Driving RDE with a forged or copied save
+
+RDE reads and writes the save archive through one path string and keeps memory card 1 as an in-memory image (`rde_internals.md` section 6). `tools\py\rde_save_redirect.py` launches `CHRONOCROSS.exe`, waits for the title screen, rewrites that string to a file you name and can swap the card 1 image, so Continue lists the slots of your file and every write (auto-save, save point) goes to your file:
+
+```
+python -X utf8 tools\py\rde_save_redirect.py --save tmp\work\save.dat --title-wait 30 ^
+    --keys "enter,w7,hold:down:0.3,w1.5,hold:down:0.3,w1.5,hold:enter:0.3,w4,hold:enter:0.3,w6" --shot slots.png
+```
+
+The sequence presses "any button", moves the cursor to Continue and confirms, then confirms the vibration prompt and ends on the slot list. Key taps are shorter than the game's input poll, so use `hold:KEY:SECONDS`; the first cursor key after the window gets focus is dropped, hence the two Down presses. Without `--keep-open` the tool kills the process it started and only that one.
+
+Safety rule: the tool refuses a `--save` inside `Documents\My Games`. Always pass a copy (or a file made with `tools\py\cc_save_forge.py`) and compare its hash afterwards if it must stay untouched; never save from RDE over a real file. Run only one RDE at a time. `tools\rde_snap.py`, `rde_key.py` and `rde_capture.py` then work on the running window as usual.
 
 ## 4. Ghidra for the RDE exe
 

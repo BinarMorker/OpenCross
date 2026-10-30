@@ -53,8 +53,8 @@
 //   set hp <char> <value> | set status <char> <hexbits>   debug write of a character's current HP / status bits (1 poison, 8 burn,
 //                                 10 sprain, 20 flu)
 //   assert hp <char> <min> <max>  current HP of a character in [min, max]     assert status <char> <hexmask> set|clear
-//   request <kind> [arg]          debug: ask the host for what a field opcode would (money <n> = set the gold, battle <encounter> = A3 (battlefield 0), rename <char> = FE 4A + FE 61, party = FE 5B,
-//                                 save = FE 85 + FE 61 (cleared-save prompt), ngplus = FE 84 + FE 61 (New Game+ list), menu = FE 61, disc <n> = FE 65 (n = disc - 1), movie <n> = 7E / D4 (on the disc in use), trading <row> = FE 67 + FE 61,
+//   request <kind> [arg]          debug: ask the host for what a field opcode would (money <n> = set the gold, battle <encounter> = A3 (battlefield 0), rename <char> = FE 4A, party = FE 5B,
+//                                 save = FE 85 (cleared-save prompt), ngplus = FE 84 (New Game+ list), menu = FE 72 (save-point main menu), disc <n> = FE 65 (n = disc - 1), movie <n> = 7E / D4 (on the disc in use), trading <row> = FE 67,
 //                                 party_add <char> = add a character to the party, keyitem <n> = give key item n, slotdump <n> = write the game as one save
 //                                 block to $OC_SLOT_DUMP<n>.bin, battle_disguise <encounter> = the disguised-fight variant of `battle`);
 //                                 issued once, finishes 4 ticks later (wait for the screen with `wait menu|shop`)

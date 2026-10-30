@@ -526,7 +526,7 @@ def preview(blk):
         "playtime": _hms(u32(blk, 0x37) // 60),
         "gold": u32(blk, 0x3B),
         "stars": blk[0x3F],
-        "progression": blk[0x40],
+        "progression": u16(blk, 0x40),
         "new_game_plus": bool(blk[0x42] & 2),
         "location": u16(blk, 0x18E),
         "formation_ids": list(blk[0x59C:0x59F]),

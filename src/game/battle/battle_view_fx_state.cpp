@@ -177,6 +177,8 @@ void BattleView::fx_other(const assets::SeqCmd& cmd) {
     case 0x66:
       for (auto& slot : fx_lights_.slot) slot.intensity = 0;
       break;
+    // Music volume fade: to s16 @+8 over s16 @+4 ticks (the cast's own duck and restore use the same fade).
+    case 0x54: audio_.fade_music(s16_at(8), s16_at(4)); break;
     // Slow motion: with s16 @+10 == 0 the slow-motion period = byte @+8, else as 0x79.
     case 0x56:
       if (cmd.data.size() >= 8 && s16_at(10) == 0) {
@@ -389,6 +391,116 @@ bool BattleView::fx_warp_ensure(u32 w, u32 h) {
     return false;
   }
   return true;
+}
+
+// The overlay's camera cross-fade: a new serial cuts the second camera to key 0 of its shot (in the battle camera's bank); it then steps once per
+// tick. `promote` hands the shot to the battle camera at the second camera's progress (the first camera task ends, the second is the head of the
+// list now), `stop` ends the second camera.
+void BattleView::fx_cross_tick() {
+  effects::FxModels* ms = fx_ ? fx_->bespoke_models() : nullptr;
+  if (!ms) {
+    fx_cross_.on = false;
+    return;
+  }
+  effects::FxModels::CrossView& view = ms->cross;
+  if (view.serial != fx_cross_.serial) {
+    fx_cross_.serial = view.serial;
+    fx_cross_.cam = BattleCamera{};
+    fx_cross_.cam.set_bank(camera_.bank());
+    fx_cross_.cam.set_anchor([this](int unit, int point) { return anchor_frame(unit, point); });
+    fx_cross_.on = fx_cross_.cam.select(view.shot);
+    fx_cross_.shot = view.shot;
+    fx_cross_.ticks = 0;
+    log::debug("battle fx: cross-fade shot '{}' {} at tick {}", view.shot, fx_cross_.on ? "selected" : "missing", tick_count_);
+  } else if (fx_cross_.on) {
+    CamEvents events;
+    fx_cross_.cam.tick(events);
+    ++fx_cross_.ticks;
+  }
+  if (view.promote) {
+    view.promote = false;
+    if (fx_cross_.on) {
+      camera_.kill_shot();
+      if (camera_.select(fx_cross_.shot)) camera_.credit_ticks(fx_cross_.ticks);
+    }
+    fx_cross_.on = false;
+  }
+  if (view.stop) {
+    view.stop = false;
+    fx_cross_.on = false;
+  }
+  fx_cross_.alpha = view.alpha;
+  fx_cross_.fill = view.fill;
+}
+
+// The picture of a cross-fade: the battle camera's view with `fill` subtracted from every channel, then the second camera's view (its own pass
+// into fx_cross_rt_ over black) added times alpha / 128, over the 320 x 224 draw area.
+bool BattleView::fx_cross_draw(const render::Frame& frame, const render::Letterbox& lb, bool sprites_resume) {
+  if (!fx_cross_.on || !ctx_ || !white_.set || frame.extent.width == 0 || frame.extent.height == 0) return false;
+  const u32 w = frame.extent.width, h = frame.extent.height;
+  if (!fx_cross_rt_.valid() || fx_cross_rt_.width() != w || fx_cross_rt_.height() != h) {
+    fx_cross_set_ = {};
+    fx_cross_rt_.destroy();
+    if (!fx_cross_rt_.create(*ctx_, w, h)) return false;
+    fx_cross_set_ = fx_cross_rt_.ref(nearest_);
+    if (!fx_cross_set_) {
+      fx_cross_rt_.destroy();
+      return false;
+    }
+  }
+  draw_scene_3d(frame, lb, sprites_resume);
+  ctx_->begin_target(fx_cross_rt_, frame, fx_cross_frame_);
+  draw_camera_ = &fx_cross_.cam;
+  draw_scene_3d(fx_cross_frame_, lb, true);
+  draw_camera_ = nullptr;
+  ctx_->end_target(fx_cross_rt_);
+  apply_camera(alpha_);
+  const float fw = static_cast<float>(w), fh = static_cast<float>(h);
+  const float x0 = std::clamp(std::round(lb.left()), 0.0f, fw), y0 = std::clamp(std::round(lb.oy), 0.0f, fh);
+  const render::Rect scissor{static_cast<int32_t>(x0), static_cast<int32_t>(y0), static_cast<u32>(std::min(fw - x0, std::round(lb.width()))),
+                             static_cast<u32>(std::min(fh - y0, std::round(kBufferRows * lb.scale_y)))};
+  const float qx[4] = {0, fw, 0, fw}, qy[4] = {0, 0, fh, fh}, qu[4] = {0, 1, 0, 1}, qv[4] = {0, 0, 1, 1};
+  frame.set_scissor(scissor);
+  particles_.begin(frame, fw, fh, true);
+  // Untextured PS1 colour c is c / 255 of full; the batch's modulation is 0x80 = 1.0.
+  const u8 fill = static_cast<u8>(fx_cross_.fill * 128 / 255);
+  if (fill > 0) particles_.quad(white_.set, 3, qx, qy, qu, qv, fill, fill, fill, 0.0f);
+  const u8 alpha = static_cast<u8>(std::clamp(fx_cross_.alpha, 0, 128));
+  if (alpha > 0) particles_.quad(fx_cross_set_, 2, qx, qy, qu, qv, alpha, alpha, alpha, 0.0f);
+  particles_.end();
+  frame.set_scissor(frame.full());
+  fx_particle_pass_ = true;
+  return true;
+}
+
+// Nothing is drawn while the colour is black. Mode 0 = opaque, 1..4 = ABR mode - 1 (the batch's blend numbering is ABR + 1); the PS1 quad is 352 x 272 from the
+// draw area's corner, i.e. the whole visible picture.
+void BattleView::fx_tint_draw(const render::Frame& frame, const render::Letterbox& lb) {
+  const effects::FxModels* ms = fx_ ? fx_->bespoke_models() : nullptr;
+  if (!ms || !white_.set) return;
+  const effects::FxModels::Tint& tint = ms->tint;
+  if (tint.rgb[0] == 0 && tint.rgb[1] == 0 && tint.rgb[2] == 0) return;
+  const float fw = static_cast<float>(frame.extent.width), fh = static_cast<float>(frame.extent.height);
+  const float x0 = std::clamp(std::round(lb.left()), 0.0f, fw), y0 = std::clamp(std::round(lb.oy), 0.0f, fh);
+  const float x1 = std::min(fw, x0 + 352.0f * lb.scale), y1 = std::min(fh, y0 + 272.0f * lb.scale_y);
+  const float qx[4] = {x0, x1, x0, x1}, qy[4] = {y0, y0, y1, y1}, qu[4] = {0, 1, 0, 1}, qv[4] = {0, 0, 1, 1};
+  auto channel = [](u8 value) { return static_cast<u8>(value * 128 / 255); };
+  particles_.begin(frame, fw, fh, true);
+  particles_.quad(white_.set, std::clamp(tint.mode, 0, 4), qx, qy, qu, qv, channel(tint.rgb[0]), channel(tint.rgb[1]), channel(tint.rgb[2]), 0.0f);
+  particles_.end();
+}
+
+// The frame copy's target: the frame's size divided by the whole factor that keeps at most kCopyPixelsPerPs1 pixels per PS1 pixel.
+bool BattleView::fx_copy_ensure(const render::Frame& frame, const render::Letterbox& lb) {
+  if (!ctx_ || frame.extent.width == 0 || frame.extent.height == 0) return false;
+  const u32 divisor = static_cast<u32>(std::max(1.0f, std::floor(lb.scale / kCopyPixelsPerPs1)));
+  const u32 w = (frame.extent.width + divisor - 1) / divisor, h = (frame.extent.height + divisor - 1) / divisor;
+  if (fx_copy_rt_.valid() && fx_copy_rt_.width() == w && fx_copy_rt_.height() == h && fx_copy_set_) return true;
+  fx_copy_set_ = {};
+  fx_copy_rt_.destroy();
+  if (!fx_copy_rt_.create(*ctx_, w, h)) return false;
+  fx_copy_set_ = fx_copy_rt_.ref(linear_);
+  return static_cast<bool>(fx_copy_set_);
 }
 
 // The two feed-back targets (frame size, bilinear: the zoom resamples the previous output). False = no feed-back (the strips then sample the scene).
@@ -742,6 +854,7 @@ void BattleView::fx_tick() {
     ms->pseudo_hide = -1;
   }
   fx_vram_apply();
+  fx_cross_tick();
   // darkfeit / lasdes3 0x102 / 0x103.
   if (effects::FxModels* ms = fx_->bespoke_models(); ms && ms->env_clut_set) fx_textures_.stock_env_k = ms->env_clut, ms->env_clut_set = false;
   fx_grey_apply(false);

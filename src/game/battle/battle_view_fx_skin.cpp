@@ -346,8 +346,12 @@ bool BattleView::fx_skin_unit(int unit, effects::FxSkinnedModel& out) {
   fx_skin_asset(visual.model->asset, model, om, out);
   // PS1 y down, as the overlays' own block fields.
   out.pos = {om ? om->pos[0] : visual.x, om ? om->pos[1] : -visual.y, om ? om->pos[2] : visual.z};
-  if (om)
-    for (int k = 0; k < 3; ++k) out.rgb[k] = om->rgb[k];
+  // The model colour: the overlay's write and the pack's op 0x58 ramp (one colour field on the PS1, kept apart here).
+  const FxUnitState& state = fx_unit_[static_cast<size_t>(unit)];
+  for (int k = 0; k < 3; ++k) {
+    const float colour = (om ? static_cast<float>(om->rgb[k]) : 128.0f) * (state.tinted ? state.rgb[k] / 128.0f : 1.0f);
+    out.rgb[k] = static_cast<int>(std::clamp(colour, 0.0f, 255.0f));
+  }
   return true;
 }
 
@@ -513,11 +517,32 @@ bool BattleView::fx_vram_ready() {
   return ready;
 }
 
-// FxModels::vram_moves: applied to the pack's VRAM after each overlay tick.
+// FxModels::vram_moves: applied to the pack's VRAM after each overlay tick. A pack model whose pages a copy lands in is cut again (lasdes2's
+// eye frames on the 'ef8f' page).
 void BattleView::fx_vram_apply() {
   effects::FxModels* ms = fx_ ? fx_->bespoke_models() : nullptr;
   if (!ms || ms->vram_moves.empty()) return;
-  fx_textures_.apply_vram_moves(*ms, fx_vram_ready());
+  const std::vector<effects::FxModels::VramMove> moves = ms->vram_moves;
+  const bool ready = fx_vram_ready();
+  fx_textures_.apply_vram_moves(*ms, ready);
+  FxGpu* gpu = ready ? fx_gpu_for(fx_pack_) : nullptr;
+  if (!gpu || !ctx_) return;
+  for (auto& [name, model] : gpu->models) {
+    if (model->page_x < 0 || !model->gpu) continue;
+    // The page and its neighbour column (the faces' page bit): 192 halfwords x 256 rows.
+    const bool hit = std::any_of(moves.begin(), moves.end(), [&](const effects::FxModels::VramMove& move) {
+      const int x = move.scroll ? move.x : move.dx, y = move.scroll ? move.y : move.dy;
+      return x < model->page_x + 192 && x + move.w > model->page_x && y < model->page_y + 256 && y + move.h > model->page_y;
+    });
+    if (!hit) continue;
+    std::vector<import::Image> pages = fx_model_pages(fx_textures_.vram, model->page_x, model->page_y, model->clut_x, model->clut_y);
+    for (size_t row = 0; row < pages.size() && row < model->gpu->textures.size(); ++row)
+      if (model->gpu->textures[row] && row < model->asset.textures.size() && model->asset.textures[row].width == pages[row].width &&
+          model->asset.textures[row].height == pages[row].height) {
+        model->gpu->textures[row]->update(*ctx_, pages[row].pixels.data());
+        model->asset.textures[row].pixels = std::move(pages[row].pixels);
+      }
+  }
 }
 
 render::TexRef BattleView::fx_vram_page_set(u16 tpage, u16 clut) {

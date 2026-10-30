@@ -10,6 +10,7 @@
 #include "game/battle/battle_numbers.h"
 #include "game/battle/battle_seq.h"
 #include "game/battle/cast_header.h"
+#include "game/battle/status_plates.h"
 
 using namespace oc;
 using namespace oc::game;
@@ -742,7 +743,23 @@ void test_damage_numbers() {
   CHECK(ov.rects.empty());
 }
 
+// Status plates: the shown statuses in the fixed order, nine per column, the hidden bits skipped.
+void test_status_plates() {
+  CHECK(bstat::place(0, false).empty());
+  // KO (0x80), 0x2 and 0x200 have no plate.
+  CHECK(bstat::place(0x282u, true).empty());
+  // Frozen + poison: poison first, at the top of the left column.
+  auto placed = bstat::place(0x20000001u, false);
+  CHECK(placed.size() == 2 && placed[0].plate == 0 && placed[0].x == 16 && placed[0].y == 50);
+  CHECK(placed[1].plate == 11 && placed[1].x == 16 && placed[1].y == 62);
+  // Every plate: the tenth starts the second column; the right column is 248 then 210.
+  placed = bstat::place(0xFFFFFFFFu, true);
+  CHECK(placed.size() == 12 && placed[8].x == 248 && placed[8].y == 146 && placed[9].x == 210 && placed[9].y == 50 && placed[11].y == 74);
+  CHECK(bstat::kPlates[static_cast<size_t>(placed[9].plate)].bit == 0x100000u);
+}
+
 int main() {
+  test_status_plates();
   test_damage_numbers();
   test_cast_header_float();
   test_vm_eye_light();

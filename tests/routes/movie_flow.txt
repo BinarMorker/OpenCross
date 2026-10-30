@@ -16,6 +16,10 @@
 - tap confirm
 - wait 90
 - tap start
+- wait movie start 300
+- wait 60
+- tap confirm
+- wait movie end 300
 - wait room opn_a01i 900
 - wait 200
 - load opn_a05i 1

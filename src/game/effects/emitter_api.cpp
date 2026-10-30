@@ -112,10 +112,6 @@ const assets::Emitter& EmitterSystem::header_def(size_t i) const { return *impl_
 bool EmitterSystem::header_running(size_t i) const { return i < impl_->headers.size() && impl_->headers[i].linked; }
 
 bool EmitterSystem::start(std::string_view name) {
-  if (name == "0000") {
-    for (size_t i = 0; i < impl_->headers.size(); ++i) impl_->start_index(i);
-    return true;
-  }
   const int i = impl_->find_header(name);
   // Dev trace: every sequence / overlay emitter start by name.
   static const bool trace = std::getenv("OC_FX_START") != nullptr;

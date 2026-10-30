@@ -1,4 +1,4 @@
-# Continue from the file the save route wrote (tmp\save_route.dat, file 2): title -> Continue -> the only file -> Arni with the saved state.
+# Continue from the file the save route wrote (tmp\save_route.dat, file 1): title -> Continue -> the only file -> Arni with the saved state.
 0 wait flow title 300
 - wait movie start 300                # cold boot: the title room plays its logo FMV first
 - tap confirm                         # skip it

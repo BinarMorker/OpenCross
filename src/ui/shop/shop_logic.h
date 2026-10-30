@@ -17,7 +17,7 @@ enum class Kind { Element, Smith, Trading };
 enum class Res {
   Ok,
   NoGold,
-  Full,            // bag slot / 99 cap
+  Full,            // no bag slot / 99 cap
   NoStock,
   ShortMaterials,
   NotSellable,
@@ -71,7 +71,8 @@ std::vector<int> forge_list_all(const GameState& gs, const ShopData& shop_data, 
 std::vector<Mat> recipe(const GameState& gs, int item);
 int forge_cost(const GameState& gs, int item);
 // `free` = the Cheats tab's "No crafting cost": the material and gold checks pass and nothing is consumed.
-// Result: Ok / ShortMaterials / NoGold / NoRecipe.
+// Result: Ok / ShortMaterials / NoGold / NoRecipe. forge also returns Full, before taking anything, when the bag has neither a stack
+// of the piece nor a free slot; at 99 held it takes the materials and the gold and the count stays 99.
 Res can_forge(const GameState& gs, int item, bool free = false);
 Res forge(GameState& gs, int item, bool free = false);
 
@@ -111,7 +112,8 @@ int colour_index(int mask);
 bool trade_accepts(const GameState& gs, int mask, int element);
 // Sum of element level x offered count over the list.
 int offer_levels(const GameState& gs, const std::vector<int>& els, const std::vector<int>& offered);
-// "Yes": every offered copy is taken, then the goods are added once (stack cap 99).
-void trade_commit(GameState& gs, const std::vector<int>& els, const std::vector<int>& offered, int goods);
+// "Yes": every offered copy is taken, then the goods are added once; at 99 held the add is accepted without raising the count.
+// False (nothing taken) when the bag has neither a stack of the goods nor a free slot.
+bool trade_commit(GameState& gs, const std::vector<int>& els, const std::vector<int>& offered, int goods);
 
 }  // namespace oc::ui::shop

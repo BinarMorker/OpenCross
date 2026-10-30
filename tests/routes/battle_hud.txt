@@ -28,8 +28,7 @@
 - request battle 1
 - wait battle start 600
 - wait 240                            # warp transition + white fade, then the intro shots
-- tap confirm                         # skip the intro shots
-- wait 120
+- wait 120                            # the intro shots have ended by now: the top menu is up
 - screenshot bh_01_top.png
 - tap confirm                         # Attack -> target selection
 - wait 60

@@ -20,7 +20,7 @@
 - wait 30
 - wait idle 3000
 - screenshot g2_05_clam_open.png
-- walk_ent 8 10 1500                  # the visible monster (ent 8, LOAD_MODEL_D1): touching it runs its ON_COLLISION = BATTLE_A3
+- walk_ent 8 10 1500                  # the visible monster (ent 8, SPAWN_MONSTER): touching it runs its ON_COLLISION = BATTLE
 - wait battle start 600
 - screenshot g2_06_battle.png
 - fight 1800

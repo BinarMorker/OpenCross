@@ -2,8 +2,13 @@
 // The retail battle formulas (hit chance, damage, heal, statuses, stamina, growth, loot) as pure functions. Integer arithmetic is C int with truncating division;
 // every random term goes through the injected Rng so a test can script the rolls.
 #include <array>
+#include <vector>
 
 #include "battle/rng.h"
+
+namespace oc::data {
+struct GameTables;
+}
 
 namespace oc::battle {
 
@@ -64,6 +69,8 @@ struct ChanceIn {
   int hit_mod = 100;
   int evd = 0;
   int evd_mod = 100;
+  // The attacker wears the hero set: the target's evade x125/100.
+  bool attacker_hero_set = false;
   bool target_dizzy = false;
   // The chain bonus is PC-only.
   bool pc_attacker = true;
@@ -92,7 +99,7 @@ constexpr std::array<int, 3> kPcStrMul = {10, 25, 40};
 constexpr std::array<int, 3> kEnemyStrMul = {10, 12, 15};
 
 struct WeaponIn {
-  // wp is already ceil100(weapon * Att%); arm is already ceil100(armour * Def%).
+  // wp is the attacker's weapon term (weapon through Att%, doubled by the hero set); arm is already ceil100(armour * Def%).
   int atk = 0, wp = 0, wp_var = 0;
   int def = 0, arm = 4, arm_var = 0;
   // Target lo & 0x4008: arm x300/400.
@@ -103,6 +110,8 @@ struct WeaponIn {
   // 0 weak, 1 medium, 2 heavy.
   int strength = 0;
   int weapon_class = 0;
+  // The attacker wears the hero set: the crit roll needs 7 instead of 15.
+  bool hero_set = false;
   bool target_afraid = false, slayer = false;
   // Attack colour == kOpp[target colour].
   bool opposite_colour = false;
@@ -193,5 +202,12 @@ inline int progress_cap(const StarRow& row) { return static_cast<short>(row.step
 int gold_reward(int base_total, bool bonus);
 // Drop roll for one defeated enemy: returns the chosen row slot index (1 rare, 0 common) or -1.
 int drop_roll(Rng& rng, int drop_base);
+
+// ---- encounters
+// Enemy-group variant of an encounter: one rnd(0, 2549); band i ({lo, hi}: the rolls in [lo, hi)) gives variant 7 - i, no band 0.
+int encounter_variant(Rng& rng, const std::vector<std::array<u16, 2>>& bands);
+// Scene of a field battle: an encounter id (< 0x200, field op A3) rolls its variant into symtbl; a fixed scene (id >= 0x200, op C9)
+// draws nothing.
+int encounter_scene(Rng& rng, const data::GameTables& tables, int battle_id);
 
 }  // namespace oc::battle

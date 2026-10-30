@@ -216,26 +216,8 @@ void BattleView::fx_load_models(FxGpu& gpu, const FxPack& pack) {
     }
     const int clut_y = hexval(bind[0]) * 16 + hexval(bind[1]), nib = hexval(bind[2]);
     const int tpage_y = (nib & 1) ? 256 : 0, clut_x = (nib & 8) ? 256 : 0, tpx = hexval(bind[3]) * 64;
-    // The faces' CLUT bit selects the next palette row (textures[1] = row clut_y + 1; Sonja's wings 'ee97' use row 239
-    // for the lime), so two pages are baked, one per row.
-    // A GPU texture page is 256 x 256 TEXELS whatever the depth (an 8 bpp page = 128 halfwords from tpage x * 64): the faces' u bytes run
-    // 0..255 over it, and a face's page bit (+1 tpage column = 64 halfwords = +128 texels at 8 bpp) reaches 383, so the page is cut
-    // 384 texels wide.
+    std::vector<import::Image> pages = fx_model_pages(vram, tpx, tpage_y, clut_x, clut_y);
     constexpr int kPageW = 384;
-    std::vector<import::Image> pages;
-    for (int row = 0; row < 2; ++row) {
-      const std::vector<u16> clut = vram.read_clut(clut_x, std::min(clut_y + row, 255), 256);
-      import::Image page;
-      page.width = kPageW;
-      page.height = 256;
-      page.pixels.assign(static_cast<size_t>(kPageW) * 256 * 4, 0);
-      for (int y = 0; y < 256; ++y)
-        for (int x = 0; x < kPageW; ++x) {
-          const u32 texel = import::bgr555_to_rgba_stp(vram.texel(tpx * 2 + x, tpage_y + y, 8, clut));
-          std::memcpy(&page.pixels[(static_cast<size_t>(y) * kPageW + static_cast<size_t>(x)) * 4], &texel, 4);
-        }
-      pages.push_back(std::move(page));
-    }
     // HD art: sky's act0 is a byte copy of battle/player/selju2/selju.obj (S1 mesh + S2 skeleton; S3 shading and the clips are the
     // pack's own) on a page that holds selju.ltc's image + CLUT, so in HD it gets the mesh + texture the HD Serge unit is drawn with (cdrom2).
     Bytes hd_mdl;
@@ -269,6 +251,7 @@ void BattleView::fx_load_models(FxGpu& gpu, const FxPack& pack) {
     model->gpu = meshes_->create_model(model->asset);
     if (!model->gpu) continue;
     model->pose.set_model(&model->asset);
+    if (stem.empty()) model->page_x = tpx, model->page_y = tpage_y, model->clut_x = clut_x, model->clut_y = clut_y;
     // Motion of a model object no op 49 started: the clip with the most keyframes; op 49's own choice is the object's
     // clip byte (fx_draw_models).
     for (size_t i = 0; i < model->asset.clips.size(); ++i)
@@ -277,6 +260,29 @@ void BattleView::fx_load_models(FxGpu& gpu, const FxPack& pack) {
                tpage_y, clut_x, clut_y);
     gpu.models.emplace(entry.name, std::move(model));
   }
+}
+
+// The faces' CLUT bit selects the next palette row (textures[1] = row clut_y + 1; Sonja's wings 'ee97' use row 239 for the lime), so two pages
+// are baked, one per row. A GPU texture page is 256 x 256 TEXELS whatever the depth (an 8 bpp page = 128 halfwords from tpage x * 64): the faces'
+// u bytes run 0..255 over it, and a face's page bit (+1 tpage column = 64 halfwords = +128 texels at 8 bpp) reaches 383, so the page is cut 384
+// texels wide.
+std::vector<import::Image> BattleView::fx_model_pages(const import::Vram& vram, int page_x, int page_y, int clut_x, int clut_y) {
+  constexpr int kPageW = 384;
+  std::vector<import::Image> pages;
+  for (int row = 0; row < 2; ++row) {
+    const std::vector<u16> clut = vram.read_clut(clut_x, std::min(clut_y + row, 255), 256);
+    import::Image page;
+    page.width = kPageW;
+    page.height = 256;
+    page.pixels.assign(static_cast<size_t>(kPageW) * 256 * 4, 0);
+    for (int y = 0; y < 256; ++y)
+      for (int x = 0; x < kPageW; ++x) {
+        const u32 texel = import::bgr555_to_rgba_stp(vram.texel(page_x * 2 + x, page_y + y, 8, clut));
+        std::memcpy(&page.pixels[(static_cast<size_t>(y) * kPageW + static_cast<size_t>(x)) * 4], &texel, 4);
+      }
+    pages.push_back(std::move(page));
+  }
+  return pages;
 }
 
 std::string BattleView::fx_hd_counterpart(ByteSpan mdl, const import::Vram& vram, int img_x, int img_y, int clut_x, int clut_y, Bytes& out_mdl,
@@ -354,8 +360,9 @@ void BattleView::fx_draw_models(const render::Frame& frame, const render::Letter
   const assets::StageAsset* mount_asset = fx_pack_ ? fx_pack_->meshes.get() : nullptr;
   FxGpu* mount_gpu = fms && !fms->mount_mesh.empty() && gpu.stage && mount_asset ? &gpu : nullptr;
   std::vector<render::StageInstance> mounted;
+  const effects::ViewParams fx_params = fx_view();
   for (const auto& mi : inst) {
-    if (mi.sprite_type != 20 || !mi.name) continue;
+    if (mi.sprite_type != 20 || !mi.name || mi.off_screen(fx_params)) continue;
     // A model the overlay hid is skipped.
     if (fms && fms->pack_model_hidden && *mi.name == fms->pack_model) continue;
     // The driven model, hidden.

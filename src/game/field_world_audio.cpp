@@ -198,6 +198,29 @@ void FieldWorld::play_movie(int index, int variant, bool skippable) {
 
 bool FieldWorld::movie_playing() { return movie_state_ != MovieState::None; }
 
+FieldWorld::MovieRequest FieldWorld::take_movie() {
+  movie_state_ = MovieState::Playing;
+  movie_sequence_.clear();
+  if (sequences_ && movie_req_.index >= 0) {
+    const std::string name = std::string("mo") + (disc_ == 1 ? '1' : '2') + static_cast<char>('a' + movie_req_.index);
+    if (sequences_->start(name)) {
+      movie_sequence_ = name;
+      log::info("field: tick {} movie {} starts room sequence {}", tick_count_, movie_req_.index, name);
+    }
+  }
+  return movie_req_;
+}
+
+void FieldWorld::movie_tick() {
+  if (sequences_ && !movie_sequence_.empty()) sequences_->tick();
+}
+
+void FieldWorld::movie_finished() {
+  movie_state_ = MovieState::None;
+  if (sequences_ && !movie_sequence_.empty()) sequences_->stop(movie_sequence_);
+  movie_sequence_.clear();
+}
+
 // Room init defaults of the footstep registers: master volume 0x7F, distance band 0x7FFF / 0x7FFF, listener 0. The floor types keep
 // their value.
 void FieldWorld::reset_room_sound_regs() {

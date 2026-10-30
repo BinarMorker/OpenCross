@@ -39,6 +39,10 @@ int main() {
   Config legacy_classic = load_text("[Video]\nFilterHD=bilinear\nArtMode=original\nPs1Res3D=1\n");
   CHECK(legacy_classic.filter == TexFilter::Bilinear);
   CHECK(legacy_classic.ps1_res);
+  // `classic` is an alias of `original`; unknown values read as hd.
+  CHECK(load_text("[Video]\nArtMode=classic\n").art_mode == ArtMode::Original);
+  CHECK(load_text("[Video]\nArtMode=original\n").art_mode == ArtMode::Original);
+  CHECK(load_text("[Video]\nArtMode=bogus\n").art_mode == ArtMode::Hd);
   // New key wins and is written; old keys are dropped on save.
   Config new_key = load_text("[Video]\nFilter=nearest\nFilterHD=bilinear\nPs1Res3D=1\nArtMode=modded\n");
   CHECK(new_key.filter == TexFilter::Nearest);

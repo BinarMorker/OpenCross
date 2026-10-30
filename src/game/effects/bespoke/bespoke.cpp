@@ -207,7 +207,6 @@ BespokeRegistry& BespokeRegistry::instance() {
     auto* reg = new BespokeRegistry();
     register_band_wipes(*reg);
     register_line_rings(*reg);
-    register_death_dissolves(*reg);
     register_mesh_deforms(*reg);
     register_motion_tasks(*reg);
     register_actor_scripts(*reg);

@@ -18,6 +18,10 @@
 - wait 90
 - wait 20
 - tap start                             # Start: accept "Serge"
+- wait movie start 300                # the title script's D4 #2: a02koryu plays first (skippable)
+- wait 60
+- tap confirm
+- wait movie end 300
 - wait room opn_a01i 900
 - load alu_a01f 0
 - wait room alu_a01f 300

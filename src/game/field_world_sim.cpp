@@ -459,7 +459,7 @@ void FieldWorld::step_player() {
   const Actor::Spot before = pe.actor.spot();
   lead_start_ = trail_entry_of(pe.actor);
   lead_start_facing_ = pe.actor.facing();
-  lead_start_valid_ = player == party_ent_[0];
+  lead_start_valid_ = true;
   // Pad control re-selects the clip every tick.
   if (controls_free() && !pe.motion.active) pe.actor.clear_play();
   // Right stick: turn on the spot.
@@ -478,7 +478,7 @@ void FieldWorld::step_player() {
       if (other.pend) apply_push(other);
     }
   }
-  // The trail only grows on ticks with a pad heading, and records the spot the leader stood on before this tick's move.
+  // The trail only grows on ticks with a pad heading, and records the spot the controlled entity stood on before this tick's move.
   if (heading != kNoHeading) {
     trail_push(0, lead_start_);
     lead_start_pushed_ = true;
@@ -521,7 +521,7 @@ void FieldWorld::reset_trails() {
 // blocked one by standing - at a cramped entrance the engine's rule parks the member in the wall / water until the leader walks
 // away. Rule 3 (the trail replay) stays free.
 void FieldWorld::follower_back_off(int slot, bool other_side, int ent_override) {
-  const int lead = party_ent_[0];
+  const int lead = player_entity();
   const int ent = ent_override >= 0 ? ent_override : party_ent_[static_cast<size_t>(slot)];
   if (lead < 0 || ent < 0) return;
   Ent& ent_state = ents_[static_cast<size_t>(ent)];
@@ -616,8 +616,10 @@ void FieldWorld::settle_spawned_followers() {
 // tile / flags / normal are copied); followers never go through the mover's probe / slide. The ring is the leader's own walk,
 // so the replay stays on the mesh except for the straight cut between two entries at a corner. A mesh-constrained step would
 // wedge followers on corners and edges and leave them behind.
+// "The leader" is the controlled entity: when a script hands the pad to another entity, ring 0 records that entity's walk, rule 1
+// keeps the followers off it and follower 1 follows it; the controlled entity itself never takes the follower branch.
 void FieldWorld::step_followers() {
-  const int lead = party_ent_[0];
+  const int lead = player_entity();
   if (lead < 0) return;
   const ActorPose& lp = ents_[static_cast<size_t>(lead)].actor.current();
   // The follow rules measure against the leader's spot before this tick's pad move.
@@ -649,7 +651,7 @@ void FieldWorld::step_followers() {
   // frozen by the script (lift ride, formation lock, dialogue) would keep "walking on the spot".
   for (int slot = 1; slot < 3; ++slot) {
     const int ent = party_ent_[static_cast<size_t>(slot)];
-    if (ent < 0) continue;
+    if (ent < 0 || ent == lead) continue;
     // A member under script motion (WALK_TO / MOVE of a cutscene) keeps its flag: it plays the walk clip while the script moves it.
     if (ents_[static_cast<size_t>(ent)].motion.active) continue;
     ents_[static_cast<size_t>(ent)].motion.walking = false;
@@ -668,7 +670,7 @@ void FieldWorld::step_followers() {
   auto follow_member = [&](int ent, int slot, int prev) {
     Ent& ent_state = ents_[static_cast<size_t>(ent)];
     // A scripted move in progress: the script owns the member (walk clip, position).
-    if (ent_state.motion.active) return;
+    if (ent == lead || ent_state.motion.active) return;
     ent_state.motion.walking = false;
     ent_state.motion.running = false;
     if (!ent_state.updating) return;
@@ -689,14 +691,15 @@ void FieldWorld::step_followers() {
     }
     // Within 200 units of the followed member: stand.
     if (d_prev <= 200.0f) return;
-    // Newest ring entry within 50 units of this member (100 when that entry's tile or its own has flags 0xC800); none -> the newest entry.
+    // Newest ring entry within 50 units of this member (100 for the whole scan when the newest entry's tile or the member's own has
+    // flags 0xC800); none -> the newest entry.
     const Trail& tr = trails_[static_cast<size_t>(ring)];
     const int idx = (tr.head - 1) & 0x7F;
     int found = idx;
-    const float near = (ent_state.actor.tile_flags() & 0xC800u) ? 100.0f : 50.0f;
+    const float near = ((ent_state.actor.tile_flags() | tr.entries[static_cast<size_t>(idx)].flags) & 0xC800u) ? 100.0f : 50.0f;
     for (int i = 0; i < 0x80; ++i) {
       const TrailEntry& candidate = tr.entries[static_cast<size_t>((tr.head - 1 - i) & 0x7F)];
-      if (dist3(pose, candidate.x, candidate.y, candidate.z) < ((candidate.flags & 0xC800u) ? 100.0f : near)) {
+      if (dist3(pose, candidate.x, candidate.y, candidate.z) < near) {
         found = (tr.head - 1 - i) & 0x7F;
         break;
       }
@@ -741,7 +744,7 @@ void FieldWorld::step_followers() {
   for (int slot = 1; slot < 3; ++slot) {
     const int ent = party_ent_[static_cast<size_t>(slot)];
     if (ent < 0 || slot >= static_cast<int>(party_chars_.size())) continue;
-    follow_member(ent, slot, party_ent_[static_cast<size_t>(slot - 1)]);
+    follow_member(ent, slot, slot == 1 ? lead : party_ent_[1]);
   }
   // Op 0A / 0B applies to ANY entity, not only the three party members. A non-party entity whose script runs it
   // (and is not player-controlled) takes the follower branch with ring index 1: it trails follower 1's path like a third

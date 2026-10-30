@@ -773,9 +773,44 @@ void test_skipped_battle() {
   }
 }
 
+// The screen ops (FE 5B party screen, FE 72 save-point main menu) open their screen and step on; the FE 61 after each only waits
+// while it is pending or open, and a bare FE 61 opens nothing.
+void test_screen_ops_and_fe61() {
+  struct MenuHost : TestHost {
+    std::vector<MenuKind> requests;
+    bool open = false;
+    void request_menu(MenuKind kind, int) override {
+      requests.push_back(kind);
+      open = true;
+    }
+    bool menu_active() override { return open; }
+  };
+  for (const int screen_op : {0x5B, 0x72}) {
+    Asm script;
+    const u16 init = script.here();
+    script.raw({0xFE, screen_op, 0xFE, 0x61});
+    script.set(V(0), 1);
+    script.raw({0xFE, 0x61});
+    script.set(V(1), 1).park();
+    MenuHost host;
+    FieldVM vm(host);
+    vm.load(make_module(script, {{{{1, init}}}}));
+    for (int tick = 0; tick < 10; ++tick) vm.tick();
+    CHECK_EQ(host.requests.size(), 1);
+    CHECK(host.requests[0] == (screen_op == 0x5B ? MenuKind::PartyScreen : MenuKind::MainMenu));
+    CHECK_EQ(vm.var(V(0)), 0);
+    host.open = false;
+    for (int tick = 0; tick < 10; ++tick) vm.tick();
+    CHECK_EQ(host.requests.size(), 1);
+    CHECK_EQ(vm.var(V(0)), 1);
+    CHECK_EQ(vm.var(V(1)), 1);
+  }
+}
+
 int main() {
   test_arithmetic();
   test_skipped_battle();
+  test_screen_ops_and_fe61();
   test_variables_and_signedness();
   test_bit_ops();
   test_if_jump_polarity();

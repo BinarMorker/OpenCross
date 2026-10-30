@@ -162,12 +162,12 @@ u32 FieldWorld::walk_flags(int i) const {
   return view_.walk().flags(tri);
 }
 
-// Not DRAWN: the draw passes skip an actor with flag bit 0x20 (TOGGLE_COLLISION b != 0), 0x4000 or 0x8000 - never bit 0x10.
-// SET_VISIBLE 0 only sets 0x10 = inactive (no script, no anim update, no collision / talk), so the model stays on screen
-// frozen. An empty party slot (no model) stays out via slot_inactive.
+// Not DRAWN: the draw passes skip an actor with flag bit 0x20 (TOGGLE_COLLISION b != 0), 0x4000 or 0x8000 (off screen, step_cull) -
+// never bit 0x10. SET_VISIBLE 0 only sets 0x10 = inactive (no script, no anim update, no collision / talk), so the model stays on
+// screen frozen. An empty party slot (no model) stays out via slot_inactive.
 bool FieldWorld::ent_not_drawn(int i) const {
   const u32 flags = vm_.entity(i).flags38;
-  if (flags & (0x20 | script::flag38::kNo3dObject)) return true;
+  if (flags & (0x20 | script::flag38::kNo3dObject | script::flag38::kOffScreen)) return true;
   return (flags & script::flag38::kInactive) && ents_[static_cast<size_t>(i)].slot_inactive;
 }
 
@@ -317,8 +317,6 @@ void FieldWorld::step_triggers() {
   const ActorPose& pp = pe.actor.current();
   const float rp = ent_radius(player);
   const bool can_talk = input_.action_pending && controls_free();
-  int best = -1;
-  float best_d2 = 1e30f;
   std::vector<std::pair<float, int>> cands;
   for (int i = 1; i < static_cast<int>(ents_.size()); ++i) {
     if (i == player) continue;
@@ -354,10 +352,6 @@ void FieldWorld::step_triggers() {
     }
     if (talk && can_talk && !(script_ent.flags38 & script::flag38::kNoAction)) {
       cands.emplace_back(d2, i);
-      if (d2 < best_d2) {
-        best_d2 = d2;
-        best = i;
-      }
       continue;
     }
     if (touch && !(script_ent.flags38 & script::flag38::kNoCollision)) vm_.trigger_collision(i);
@@ -373,10 +367,9 @@ void FieldWorld::step_triggers() {
       break;
     }
   }
-  (void)best;
 }
 
-// Off-screen culling (once per rendered frame, before the animation steps): the cull flag is cleared for every entity and set again for a
+// Off-screen culling (every tick, before the animation steps): the cull flag is cleared for every entity and set again for a
 // model entity whose bounding box misses the 320 x 224 screen, unless the entity is exempt: the FE 01 flag or the
 // first two frames after a room load skip the test, and entities with the never-cull flags are always kept. The test projects
 // four points of the box (scale applied, camera rotation, no yaw: the entity's own pitch / roll are ignored here):
@@ -393,7 +386,7 @@ void FieldWorld::step_cull() {
   const float scx = static_cast<float>(view_.scroll_x()), scy = static_cast<float>(view_.scroll_y());
   for (size_t i = 0; i < ents_.size(); ++i) {
     Ent& ent_state = ents_[i];
-    const script::Entity& script_ent = vm_.entity(static_cast<int>(i));
+    script::Entity& script_ent = vm_.entity(static_cast<int>(i));
     bool culled = false;
     if (ent_state.actor.loaded() && !(script_ent.flags38 & 0x4020u) && !grace && !(script_ent.flags270 & 0x200u) && !(script_ent.flags38 & 0x400000u) &&
         !(script_ent.flags270 & 0x1000000u)) {
@@ -413,6 +406,7 @@ void FieldWorld::step_cull() {
       }
     }
     ent_state.actor.set_culled(culled);
+    script_ent.flags38 = culled ? (script_ent.flags38 | script::flag38::kOffScreen) : (script_ent.flags38 & ~script::flag38::kOffScreen);
   }
 }
 

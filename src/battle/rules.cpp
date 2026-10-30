@@ -69,6 +69,7 @@ int ring_count(const std::array<int, 3>& ring, int colour) {
 // kChainPct per hit; cap 99, then the always-hit / dark / sleeping-target overrides.
 int hit_chance(const ChanceIn& in) {
   int evade = ceil100(in.evd, in.evd_mod);
+  if (in.attacker_hero_set) evade = evade * 125 / 100;
   if (in.target_dizzy) evade /= 2;
   int chance = in.base * in.hit_mod / 100 - evade;
   if (chance < 0) chance = 0;
@@ -93,7 +94,7 @@ bool roll_hit(Rng& rng, int chance) { return !(chance * 10 < rng.rnd(0, 1000)); 
 
 // ------------------------------------------------------------------------------------------------ damage
 // raw = (Sum(ATK+1, wp, wpVar) - Sum(DEF+1, arm, armVar)) * mult / 20000, floor (wp - arm) / 2, negative -> rnd(0,3),
-// x3/4 when resisted, then the colour multiplier; the crit roll rnd(afraid ? 5 : 0, heavy ? 15 : 14) >= 15 (or the slayer
+// x3/4 when resisted, then the colour multiplier; the crit roll rnd(afraid ? 5 : 0, heavy ? 15 : 14) >= 15 (7 with the hero set; or the slayer
 // mask) adds the weapon class' kCritBonus percent; finally the opposite-colour x3/2, guard /2 and gear x125 / x75 steps.
 DamageOut weapon_damage(Rng& rng, const WeaponIn& in) {
   DamageOut out;
@@ -109,7 +110,7 @@ DamageOut weapon_damage(Rng& rng, const WeaponIn& in) {
   const int lo = in.target_afraid ? 5 : 0;
   const int hi = in.strength == 2 ? 15 : 14;
   const int crit_roll = rng.rnd(lo, hi);
-  out.crit = crit_roll >= 15 || in.slayer;
+  out.crit = crit_roll >= (in.hero_set ? 7 : 15) || in.slayer;
   const int bonus = out.crit ? kCritBonus[static_cast<size_t>(in.weapon_class & 15)] : 0;
   int dmg = coloured * (100 + bonus) / 100;
   if (in.opposite_colour) dmg = dmg * 300 / 200;
@@ -249,6 +250,19 @@ int drop_roll(Rng& rng, int drop_base) {
   if (roll < drop_base / 20) return 1;
   if (roll < drop_base / 2) return 0;
   return -1;
+}
+
+// ------------------------------------------------------------------------------------------------ encounters
+int encounter_variant(Rng& rng, const std::vector<std::array<u16, 2>>& bands) {
+  const int roll = rng.rnd(0, 2549);
+  for (size_t i = 0; i < bands.size() && i < 8; ++i)
+    if (bands[i][0] <= roll && roll < bands[i][1]) return 7 - static_cast<int>(i);
+  return 0;
+}
+
+int encounter_scene(Rng& rng, const data::GameTables& tables, int battle_id) {
+  const int variant = battle_id < 0x200 ? encounter_variant(rng, tables.variant_bands) : 0;
+  return tables.scene_for(battle_id, variant);
 }
 
 }  // namespace oc::battle

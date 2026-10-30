@@ -26,6 +26,22 @@ void FieldWorld::bg_layer(int layer, bool on) {
   view_.set_layer_mask(mask);
 }
 
+void FieldWorld::set_picker_backdrop(bool on) {
+  const u32 mask = view_.layer_mask();
+  if (on) {
+    picker_scroll_x_ = view_.scroll_x(), picker_scroll_y_ = view_.scroll_y();
+    view_.set_layer_mask((mask | 2u) & ~1u);
+    view_.set_scroll(0, 0, true);
+  } else {
+    view_.set_layer_mask((mask | 1u) & ~2u);
+    view_.set_scroll(picker_scroll_x_, picker_scroll_y_, true);
+  }
+}
+
+void FieldWorld::draw_room(render::SpriteBatch& sprites, float vw, float vh) {
+  if (view_.loaded()) view_.draw(sprites, vw, vh, 1.0f);
+}
+
 // C2: the poly colour (RGB, 128 = neutral) the background group's tiles are modulated with.
 void FieldWorld::set_layer_opacity(int layer, int r, int g, int b) {
   if (layer < 0) return;
@@ -136,7 +152,7 @@ void FieldWorld::set_entity_rgb(int ent, int r, int g, int b) {
 bool FieldWorld::tint_active() const { return fog_.cur[0] > 0.5f || fog_.cur[1] > 0.5f || fog_.cur[2] > 0.5f; }
 
 // ------------------------------------------------------------------------------------------------ shadows and background
-// Per actor, twice per tick in effect: the shadow strength eases by 2 toward (R + G + B) / 6 of the entity colour (128 each -> 64),
+// Per actor, once per tick: the shadow strength eases by 2 toward (R + G + B) / 6 of the entity colour (128 each -> 64),
 // toward 0 on a triangle with any of the flags 0x6E000 (stairs, water); an actor that is not drawn has none.
 void FieldWorld::step_shadows() {
   for (size_t index = 0; index < ents_.size(); ++index) {
@@ -378,23 +394,15 @@ void FieldWorld::draw_veil_transition(render::SpriteBatch& sprites, float vw, fl
   sprites.draw(white_set_, x, y, width, height, 0, 0, 1, 1, render::pack_rgba(255, 255, 255, 255));
 }
 
-// The room fade over the screen in use (the 4:3 fit, or the whole widened frame in widescreen): kind 2 adds toward white, the slot-0
-// room fade subtracts toward black, the script FADE / failed-jump fade is alpha black.
+// The slot-0 screen fade over the screen in use (the 4:3 fit, or the whole widened frame in widescreen): it adds toward white for a
+// kind 2 room change and subtracts toward black otherwise (room changes, A8, menu returns).
 void FieldWorld::draw_veil_fade(render::SpriteBatch& sprites, float vw, float vh) {
   if (fade_ <= 0.001f || !white_set_) return;
   const u8 level = static_cast<u8>(std::lround(std::min(1.0f, fade_) * 255.0f));
   const render::Letterbox::Rect rect = render::Letterbox::veil_rect(vw, vh);
-  if (fade_kind_ == 2) {
-    sprites.set_blend(render::BlendMode::Add);
-    sprites.draw(white_set_, rect.x, rect.y, rect.w, rect.h, 0, 0, 1, 1, render::pack_rgba(level, level, level, 255));
-    sprites.set_blend(render::BlendMode::Alpha);
-  } else if (fade_sub_) {
-    sprites.set_blend(render::BlendMode::Subtract);
-    sprites.draw(white_set_, rect.x, rect.y, rect.w, rect.h, 0, 0, 1, 1, render::pack_rgba(level, level, level, 255));
-    sprites.set_blend(render::BlendMode::Alpha);
-  } else {
-    sprites.draw(white_set_, rect.x, rect.y, rect.w, rect.h, 0, 0, 1, 1, render::pack_rgba(0, 0, 0, level));
-  }
+  sprites.set_blend(fade_add_ ? render::BlendMode::Add : render::BlendMode::Subtract);
+  sprites.draw(white_set_, rect.x, rect.y, rect.w, rect.h, 0, 0, 1, 1, render::pack_rgba(level, level, level, 255));
+  sprites.set_blend(render::BlendMode::Alpha);
 }
 
 void FieldWorld::draw_windows(render::SpriteBatch& sprites, float vw, float vh, bool ps1) {

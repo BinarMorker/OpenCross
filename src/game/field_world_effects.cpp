@@ -18,22 +18,34 @@ using namespace field_internal;
 
 // ------------------------------------------------------------------------------------------------ named effects (script ops)
 // 9B / 9C / B6 / E7 drive the room's emitters by name, D3 / D7 its sequences. The host may tap an op first (the title scene's global
-// sequences the room has no entry for).
+// sequences the room has no entry for). The name "0000" means every emitter for 9C and E7 alike (all stopped, all their objects
+// freed) and every sequence for D7 (the 'loop' one too; the screen shake and the picture post pass end with them); B6 and D3 look
+// it up as an ordinary name, which no pack has.
 void FieldWorld::named_effect(script::NamedOp op, std::string_view name, int ent) {
   std::string effect_name(name.substr(0, 4));
   while (!effect_name.empty() && effect_name.back() == 0) effect_name.pop_back();
   if (effect_tap_ && effect_tap_(op, effect_name)) return;
   if (!emitters_) return;
+  const bool every = effect_name == "0000";
   switch (op) {
     case script::NamedOp::AttachToEntity5: emitters_->attach(effect_name, ent); break;
-    case script::NamedOp::ModeZero: emitters_->stop(effect_name); break;
+    case script::NamedOp::ModeZero:
+      if (every) emitters_->kill(effect_name);
+      else emitters_->stop(effect_name);
+      break;
     case script::NamedOp::ModeOne: emitters_->kill(effect_name); break;
     case script::NamedOp::Activate: emitters_->start(effect_name); break;
     case script::NamedOp::PlayEffect:
       if (sequences_) sequences_->start(effect_name);
       break;
     case script::NamedOp::StopEffect:
-      if (sequences_) sequences_->stop(effect_name);
+      if (!sequences_) break;
+      if (every) {
+        sequences_->stop_all();
+        seq_post_.on = false;
+      } else {
+        sequences_->stop(effect_name);
+      }
       break;
   }
 }
@@ -47,7 +59,7 @@ bool FieldWorld::bone_basis(BoneFollower& follower) {
   const Actor& actor = ents_[static_cast<size_t>(follower.ent)].actor;
   render::Mat4 joint_world;
   float offset[3];
-  if (!actor.attach_joint(follower.point, joint_world, offset)) return false;
+  if (!actor.attach_joint(follower.point, 1.0f, joint_world, offset)) return false;
   effects::Basis basis;
   const script::Entity& vm_ent = vm_.entity(follower.ent);
   int ax = follower.ang[0], ay = follower.ang[1], az = follower.ang[2];
@@ -365,6 +377,8 @@ void FieldWorld::build_effects() {
                   static_cast<s16>(static_cast<u16>(cmd.data[0] | (cmd.data[1] << 8))));
   };
   sequences_->set_hooks(std::move(seq_hooks));
+  // Every room entry starts the pack's repeating sequence 'loop' when it has one (ambient birds, smoke, bubbles).
+  sequences_->start("loop");
   if (particles_ok_ && effects_gpu_) gpu_fx_.load(bank_);
   log::info("field: {} effects: {} emitters, {} sequences, {} sheets", scene->name, scene->effects.emitters.size(),
             scene->effects.sequences.size(), scene->effects.sheets.size());
@@ -488,7 +502,7 @@ void FieldWorld::draw_effects(const render::Frame& frame, float vw, float vh, fl
       const assets::StagePart* part = nullptr;
       for (const auto& candidate : fenc_meshes_->parts)
         if (candidate.name == *instance.name) part = &candidate;
-      if (!part) continue;
+      if (!part || instance.off_screen(part->cull_points, vp)) continue;
       std::vector<effects::SmoothVert> verts;
       for (u32 k = 0; k + 2 < part->indices.size(); k += 3)
         for (u32 corner = 0; corner < 3; ++corner) {

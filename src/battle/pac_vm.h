@@ -22,11 +22,11 @@ constexpr int kMaxFrames = 32;
 constexpr int kNoUnit = 0xFF;
 
 // ---- opcode table (pac_opcodes.inc). len 0 = invalid / default-stall handler.
-// conf: C = handler read, I = purpose inferred, ? = touched state unknown.
+// conf: C = handler read, I = purpose inferred, U = in no shipped script (not modelled).
 struct OpInfo {
   u8 code = 0, len = 0;
   const char* name = "";
-  char conf = '?';
+  char conf = 'U';
 };
 const OpInfo& op_info(u8 code);
 
@@ -221,7 +221,7 @@ class Vm {
   // Records a Mark event (a slot run starts).
   void mark() { emit(Event::Kind::Mark); }
 
-  // diagnostics: '?' ops executed (advanced by length), and opcodes with no length that were reached.
+  // diagnostics: 'U' ops executed (advanced by length), and opcodes with no length that were reached.
   const std::set<int>& unimplemented() const { return unimplemented_; }
   const std::set<int>& invalid() const { return invalid_; }
   u64 ops_executed() const { return ops_; }
@@ -378,10 +378,11 @@ class ScriptedBrain final : public EnemyBrain {
   };
   const Stats& stats() const { return stats_; }
   const std::set<int>& unknown_fields() const;
+  // The executor actions of a turn's queue entries (op 67).
+  static void to_actions(const Battle& battle, const std::vector<QueuedAttack>& queued, std::vector<EnemyAction>& out);
 
  private:
   class BattleHost;
-  static void to_actions(const Battle& battle, const std::vector<QueuedAttack>& queued, std::vector<EnemyAction>& out);
   bool run(int unit, int slot, std::vector<QueuedAttack>& queued);
   Loader loader_;
   bool enabled_ = true;

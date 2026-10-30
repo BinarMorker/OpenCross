@@ -261,11 +261,8 @@ class FieldWorld final : public script::FieldHost {
   // Room file stem of a script room id on the current disc; falls back to the lang.dat table.
   std::string room_stem_for_id(int room_id) const;
   const DiscIndex& disc_index() const { return discs_; }
-  // FE 61 / the menu key save gate: variable 0x3C == 1.
-  // Debug tab tools (game/debug_tools.h) lock saving for the rest of the session: the gate stays closed whatever the room script sets.
-  bool can_save() const { return vm_.var(0x3C) == 1 && !saving_locked_; }
-  void set_saving_locked(bool on) { saving_locked_ = on; }
-  bool saving_locked() const { return saving_locked_; }
+  // The save gate of the main menu (FE 72 save points and the menu key): variable 0x3C == 1.
+  bool can_save() const { return vm_.var(0x3C) == 1; }
   // FE 18 / FE 7F set global flag bit 12: the main menu does not open from the pad (opening, ending, gal_b06i's bed scene...).
   bool menu_key_allowed() const { return !(vm_.global_flags() & (1u << 12)); }
 
@@ -281,6 +278,17 @@ class FieldWorld final : public script::FieldHost {
   }
   // The host closed the menu / shop / save screen: the blocked script resumes; var 0x4C = result (1 = saved).
   void menu_closed(int result = 0);
+  // ---- Grand Slam (FE 75 opens the monster picker, the FE 61 after it waits for it; ui::MonsterPicker) -------------------------------------
+  // The session's round table (3 list positions per round, 0xFF = none) and the pool slots of the last picks (the party of a
+  // monster-party battle, -1 = none).
+  std::array<u8, 9>& grand_slam_table() { return grand_slam_table_; }
+  const std::array<int, 3>& monster_party() const { return monster_party_; }
+  void set_monster_party(const std::array<int, 3>& picks) { monster_party_ = picks; }
+  // While the picker is up the room shows only background group 1 (the picker's frames; group 0 hidden) at scroll (0, 0); closing
+  // shows group 0 again, hides group 1 and restores the scroll.
+  void set_picker_backdrop(bool on);
+  // The room's background layers alone (the picker's backdrop), between SpriteBatch begin() and end().
+  void draw_room(render::SpriteBatch& sprites, float vw, float vh);
   struct MovieRequest {
     int index = 0, variant = 0;
     bool skippable = false;
@@ -299,11 +307,12 @@ class FieldWorld final : public script::FieldHost {
   void use_key_item(int item);
   void set_effect_tap(std::function<bool(script::NamedOp, std::string_view)> tap) { effect_tap_ = std::move(tap); }
   bool movie_pending() const { return movie_state_ == MovieState::Requested; }
-  MovieRequest take_movie() {
-    movie_state_ = MovieState::Playing;
-    return movie_req_;
-  }
-  void movie_finished() { movie_state_ = MovieState::None; }
+  // The host starts the requested movie: the room sequence named after it ("mo1" / "mo2" by the disc, then 'a' + the movie number:
+  // controller rumble timed to the movie) starts with it and is stopped when it ends; movie_tick runs the room's sequences one 60 Hz
+  // tick while the movie plays.
+  MovieRequest take_movie();
+  void movie_tick();
+  void movie_finished();
   bool movie_active() const { return movie_state_ != MovieState::None; }
 
   // ---- room effects (.prd emitters / sequences) -------------------------------------------------
@@ -401,7 +410,8 @@ class FieldWorld final : public script::FieldHost {
     fade_ = 1.0f;
     fade_target_ = 0.0f;
     fade_step_ = 1.0f / static_cast<float>(ticks);
-    fade_sub_ = true;
+    fade_add_ = false;
+    fade_black_ = false;
     fade_kind_ = 0;
   }
   const std::string& status() const { return status_; }
@@ -667,6 +677,9 @@ class FieldWorld final : public script::FieldHost {
   // per-actor shadow strength
   void step_shadows();
   void step_fade();
+  // Every field entry fades in from black after INIT, whatever INIT's own A8 asked for: kind 2 over 0x20 ticks from white, else
+  // over 0x30 from black (a captured kind then sets its own length).
+  void begin_entry_fade(int kind);
   void step_transition();
   void update_input_lock();
   bool controls_free() const;
@@ -707,7 +720,6 @@ class FieldWorld final : public script::FieldHost {
   std::string describe_ent(int i) const;
   int map_id_for(std::string_view stem);
   void sync_flag_table();
-  int last_rename_char_ = 0;
   u32 flag_writes_seen_ = 0;
   // room stem -> script room id on the current disc (lazy)
   std::map<std::string, int> stem_ids_;
@@ -756,8 +768,6 @@ class FieldWorld final : public script::FieldHost {
   // used until the host passes the shared state
   ui::GameState own_state_;
   ui::GameState* gs_ = &own_state_;
-  // Debug tab: no saving until the next start
-  bool saving_locked_ = false;
   const std::map<int, std::u32string>* custom_names_ = nullptr;
   // party_chars_ <- the state's party
   void sync_party();
@@ -793,7 +803,6 @@ class FieldWorld final : public script::FieldHost {
 
   // player / control
   int control_yaw_ = 0;
-  bool yaw_from_script_ = false;
   // FE 21 SETUP_SHAKE: amplitudes in 16.16 screen pixels ramp to the target over ticks + 1 steps; each
   // tick the scroll gets a uniform random offset in [-a/2, a/2].
   struct Shake {
@@ -802,6 +811,8 @@ class FieldWorld final : public script::FieldHost {
     u32 rng = 0x2545F491u;
   } shake_;
   int shake_offset(s32 amp);
+  // Sequence op 2E: the display offset of one frame for the integer amplitude `amp`, in [amp / 2, amp).
+  int display_shake_offset(int amp);
   bool party_follow_ = true;
   // op BE in progress: follow rule 1 is skipped
   bool follow_hold_ = false;
@@ -845,8 +856,11 @@ class FieldWorld final : public script::FieldHost {
   float fade_target_ = 0;
   // per tick
   float fade_step_ = 1;
-  // fade_ is the slot-0 room fade (ABR 2, B - F); false = A8 (drawn as alpha black)
-  bool fade_sub_ = false;
+  // fade_ is the slot-0 screen fade (room changes, A8, menu returns): subtractive toward black (ABR 2, B - F), or additive toward
+  // white (ABR 1, B + F) for a kind 2 room change.
+  bool fade_add_ = false;
+  // The last slot-0 fade went to black (a room exit, A8 mode 1); a fade-in clears it. A8 only acts when it flips this.
+  bool fade_black_ = false;
   // Effect-sequence screen colour (sequence ops 2B / 2C):
   // a full-screen flat quad of colour `cur`, mode m (0 opaque, else ABR m - 1), linear from the start
   // colour to the target over the given ticks. Only drawn while the colour is not black. 'enct' dims the field with it (mode 3 = B - F).
@@ -932,13 +946,18 @@ class FieldWorld final : public script::FieldHost {
   // scripted menus / movies
   MenuState menu_state_ = MenuState::None;
   MenuRequest menu_req_;
-  // FE 5E / FE 68 selection waiting for the FE 61 that opens it
-  MenuRequest shop_req_;
-  bool shop_selected_ = false;
+  // FE 75's round (the stored byte register) and the Grand Slam state.
+  int picker_round_ = 0;
+  std::array<u8, 9> grand_slam_table_{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  std::array<int, 3> monster_party_{-1, -1, -1};
+  // Scroll in effect before the picker opened.
+  int picker_scroll_x_ = 0, picker_scroll_y_ = 0;
   MovieState movie_state_ = MovieState::None;
   std::function<bool(script::NamedOp, std::string_view)> effect_tap_;
   std::function<void(int)> on_key_item_;
   MovieRequest movie_req_;
+  // the sequence the playing movie started ("" = none)
+  std::string movie_sequence_;
 
   // room effects
   void build_effects();
@@ -1028,6 +1047,8 @@ class FieldWorld final : public script::FieldHost {
   void step_wave();
   // D6-attached entities on their parent's joint (FE 46 / FE 47)
   void step_attached();
+  // OC_ATTACH_DRIFT: logs attached models drawn away from their parent's attach point
+  void check_attach_drift() const;
   // walk-flag 0x800 terrain push, strength set by B5
   void step_push();
   // anim-sequence op 1D followers

@@ -190,12 +190,17 @@ class AkaoPlayer {
     int vol_mod = 0x7F;
     int pan_mod = 0x80;
     int vol_slide_left = 0, vol_slide_step = 0;
+    // FE 19: the volume slide every note key-on starts (start volume, length in ticks, step per tick); length 0 = none.
+    s32 keyon_volume = 0;
+    int keyon_slide_len = 0, keyon_slide_step = 0;
     int bal_slide_left = 0, bal_slide_step = 0;
     int pan_slide_left = 0, pan_slide_step = 0;
     int drum_pan = -1;  // keymap pan override for the current note
     int zone_scale = 0;  // instrument volume scale (v * scale >> 7), 0 = none
     // pitch
     int fine_tune = 0;
+    // E1 / E2: random pitch depth (0 = off).
+    int random_pitch = 0;
     int pitch_base = 0, fine_delta = 0;
     int last_note = -1;
     int porta_steps = 0, porta_left = 0;
@@ -276,6 +281,8 @@ class AkaoPlayer {
   // 240 Hz updates; every 4th runs the 60 Hz tasks.
   u32 upd_count_ = 0;
   void tick_60hz();
+  // 60 Hz frame counter: the index into kAkaoRandom.
+  u8 random_index_ = 0;
   double upd_left_ = 0;  // SPU samples until the next 240 Hz update
   u64 rendered_ = 0;
   u64 serial_ = 1;

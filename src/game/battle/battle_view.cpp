@@ -110,6 +110,7 @@ void BattleView::unload_scene() {
   ghost_view_.fill(false);
   fx_conceal_.fill(false);
   hud_off_ = false;
+  hud_script_off_ = false;
   colour_row_ = {};
   // Everything the script presentation keeps between frames starts clean in a new battle (a fight left by running away mid-window
   // must not leave a half-open window / pending position / engaged PC / menu-facing memory in the next scripted fight).
@@ -168,6 +169,8 @@ void BattleView::shutdown() {
     fx_acc_set_[i] = {};
     fx_acc_rt_[i].destroy();
   }
+  fx_copy_set_ = {};
+  fx_copy_rt_.destroy();
   particles_.destroy();
   stage_pipe_.destroy();
   linear_.destroy();
@@ -289,7 +292,7 @@ void BattleView::prefetch_fonts() {
 void BattleView::run_load_step(LoadJob& job) {
   const int scene_id = job.scene;
   const StartOptions& opt = job.opt;
-  // The start flags are read by the theme (flag 1) and the victory song (flag 0x10).
+  // The start flags are read by the theme (flags 1 and 0x40) and the victory song (flag 0x10).
   start_flags_ = opt.flags;
   auto fail = [&] {
     job.failed = true;
@@ -330,6 +333,8 @@ void BattleView::run_load_step(LoadJob& job) {
   bopt.growth = opt.growth;
   bopt.bench = opt.bench;
   bopt.dopple_mask = opt.dopple_mask;
+  bopt.piggy_bank = opt.piggy_bank;
+  bopt.monster_party = opt.monster_party;
   // Dev: OC_DOPPLE_SLOTS sets the Dopplegang pool slots Big Catch picks from ("26,106"; "all" = all 256 bits, every save var 0x3E0..0x3FE 0xFFFF,
   // Big Catch skips bits past the 220-row table; "debug" = the debug list: every table row whose second halfword (`val`) is non-zero, pool bits ignored).
   if (const char* env = std::getenv("OC_DOPPLE_SLOTS")) {
@@ -635,6 +640,7 @@ bool BattleView::finish_start() {
   intro_layer_cut_ = false;
   orbit_pc_ = dyn_target_ = -1;
   menu_glide_ = false;
+  orbit_blocked_ = orbit_block_next_ = false;
   auto_delay_ = 0;
   auto_pc_ = auto_target_ = -1;
   auto_step_ = 0;
@@ -671,7 +677,7 @@ bool BattleView::finish_start() {
     pli_after_load_ = true;
     for (int i = 0; i < battle::kPcSlots; ++i) unplaced_[static_cast<size_t>(i)] = battle_->unit(i).present;
   }
-  audio_.start_battle_theme(field_battle_ && (start_flags_ & 1));
+  audio_.start_battle_theme(start_flags_, field_battle_ && (start_flags_ & 1));
 
   for (const std::string& line : battle_->drain_log()) log::debug("battle: {}", line);
   // Enemies that act first.

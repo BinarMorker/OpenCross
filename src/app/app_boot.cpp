@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -351,6 +352,12 @@ void App::init_menus() {
       party_screen.set_portrait_set(config.portraits);
       party_screen.set_custom_names(&flow.machine().custom_names());
     }
+    // The Grand Slam monster picker: its frames are the room's background group 1.
+    monster_picker_ok = monster_picker.init(ctx, files, sprites, menu_text, lang);
+    if (monster_picker_ok) {
+      monster_picker.set_model_view(&picker_models);
+      monster_picker.set_backdrop([this](render::SpriteBatch& batch, float vw, float vh) { world.draw_room(batch, vw, vh); });
+    }
   }
   if (!menu_ok || !shop_ok) log::warn("menu {} / shop {} unavailable", menu_ok ? "ok" : "failed", shop_ok ? "ok" : "failed");
 }
@@ -406,6 +413,8 @@ void App::init_battle() {
       game::BattleView::StartOptions options;
       options.battlefield = config.debug_showcase_stage;
       battle.set_showcase(config.debug_showcase);
+      // [Debug] Seed makes the standalone fight repeatable unless the environment already pins OC_BATTLE_SEED.
+      if (config.debug_seed && !std::getenv("OC_BATTLE_SEED")) _putenv_s("OC_BATTLE_SEED", std::to_string(config.debug_seed).c_str());
       battle_ok = battle_ready && battle.start(config.debug_battle, {}, options);
       if (battle_ok && config.debug_showcase) {
         // Front-on overview of the line-up (the characters face -x).

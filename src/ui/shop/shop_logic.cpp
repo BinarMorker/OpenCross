@@ -187,12 +187,12 @@ Res can_forge(const GameState& gs, int item, bool free) {
 Res forge(GameState& gs, int item, bool free) {
   const Res check = can_forge(gs, item, free);
   if (check != Res::Ok) return check;
-  if (gs.item_count(item) >= kStackCap) return Res::Full;
+  if (!gs.item_fits(item)) return Res::Full;
   const int cost = free ? 0 : forge_cost(gs, item);
   if (!free)
     for (const Mat& material : recipe(gs, item))
       for (int i = 0; i < material.qty; ++i) gs.take_item(material.id);
-  if (!gs.add_item(item)) return Res::Full;
+  gs.add_item(item);
   add_gold(gs, -cost);
   return Res::Ok;
 }
@@ -328,10 +328,12 @@ int offer_levels(const GameState& gs, const std::vector<int>& els, const std::ve
   return total;
 }
 
-void trade_commit(GameState& gs, const std::vector<int>& els, const std::vector<int>& offered, int goods) {
+bool trade_commit(GameState& gs, const std::vector<int>& els, const std::vector<int>& offered, int goods) {
+  if (goods > 0 && !gs.item_fits(goods)) return false;
   for (size_t i = 0; i < els.size() && i < offered.size(); ++i)
     for (int k = 0; els[i] > 0 && k < offered[i]; ++k) gs.take_element(els[i]);
   if (goods > 0) gs.add_item(goods);
+  return true;
 }
 
 }  // namespace oc::ui::shop

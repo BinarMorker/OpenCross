@@ -3,9 +3,12 @@
 #include <memory>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 #include "battle/battle.h"
 #include "battle/pac_vm.h"
+#include "game/game_session.h"
+#include "ui/menu/game_state.h"
 
 using namespace oc;
 using namespace oc::battle;
@@ -178,6 +181,31 @@ void test_formulas() {
   CHECK_EQ(drop_roll(d7, 150), 0);
   CHECK_EQ(drop_roll(d74, 150), 0);
   CHECK_EQ(drop_roll(d75, 150), -1);
+}
+
+// The encounter variant roll: rnd(0, 2549) against the retail bands (variant 0 = 1270..2549, 7 = 0..9), and a C9 scene draws nothing.
+void test_encounter_variant() {
+  data::GameTables tables;
+  tables.variant_bands = {{0, 10}, {10, 30}, {30, 70}, {70, 150}, {150, 310}, {310, 630}, {630, 1270}, {1270, 2550}};
+  tables.symtbl.assign(16, 0);
+  for (int k = 0; k < 8; ++k) tables.symtbl[static_cast<size_t>(8 + k)] = static_cast<u16>(100 + k);
+  const std::pair<int, int> cases[] = {{0, 7}, {9, 7}, {10, 6}, {69, 5}, {70, 4}, {309, 3}, {310, 2}, {1269, 1}, {1270, 0}, {2549, 0}};
+  for (const auto& [roll, variant] : cases) {
+    Lo rng({roll});
+    CHECK_EQ(encounter_variant(rng, tables.variant_bands), variant);
+    Lo id_rng({roll});
+    CHECK_EQ(encounter_scene(id_rng, tables, 1), 100 + variant);
+  }
+  // A fixed scene (field op C9: id = scene + 0x200) keeps its scene and leaves the stream alone.
+  Lo fixed_rng({0});
+  CHECK_EQ(encounter_scene(fixed_rng, tables, 0x200 + 42), 42);
+  CHECK_EQ(fixed_rng.calls, 0u);
+  // No band table: always variant 0.
+  Lo bare_rng({5});
+  CHECK_EQ(encounter_variant(bare_rng, {}), 0);
+  // A seeded game generator repeats its group.
+  GameRng first(1234), second(1234);
+  CHECK_EQ(encounter_scene(first, tables, 1), encounter_scene(second, tables, 1));
 }
 
 void test_hit_chance() {
@@ -368,7 +396,7 @@ void test_setup() {
   CHECK_EQ(fixture.battle.unit(3).ap, 100);
   CHECK_EQ(fixture.battle.unit(3).countdown, 100);
   CHECK_EQ(fixture.battle.outcome() == Outcome::Ongoing, true);
-  // party sorted by id
+  // Party slot i takes unit i whatever the character ids.
   Fixture other_fixture;
   ScriptedRng rng(Lo::Fallback::Lo);
   rng.push(0);
@@ -376,7 +404,7 @@ void test_setup() {
   NullBrain nb;
   Battle b2(other_fixture.tables, rng, nb);
   CHECK(b2.start({make_member(2, "C"), make_member(0, "A"), make_member(1, "B")}, 0));
-  CHECK(b2.unit(0).name == "A" && b2.unit(1).name == "B" && b2.unit(2).name == "C");
+  CHECK(b2.unit(0).name == "C" && b2.unit(1).name == "A" && b2.unit(2).name == "B");
   CHECK(!b2.start({}, 0));
   CHECK(!b2.start({make_member(0, "A")}, 5));
 }
@@ -404,6 +432,82 @@ void test_gauge_cap() {
   attack.chain = {0, 1};
   CHECK(battle.apply(attack));
   CHECK_EQ(battle.unit(0).gauge, 1);
+}
+
+// An enemy's gauge tops out at the deepest row with an element cell that lacks the lock bit 0x4000 (none: -1, so landed hits leave
+// it at -1).
+void test_enemy_gauge_cap() {
+  for (const bool locked : {false, true}) {
+    data::GameTables tables = make_tables();
+    auto& enemy = tables.enemies[0];
+    // Row 0 column 0 and row 2 column 0 exist; the first holds element 1 unlocked, the second element 1 with or without the lock bit.
+    enemy.raw[0x30] = 1, enemy.raw[0x34] = 1;
+    enemy.raw[0x40] = 0x01, enemy.raw[0x41] = 0x40;
+    enemy.raw[0x42] = 0x01, enemy.raw[0x43] = locked ? 0x40 : 0x00;
+    ScriptedRng rng(Lo::Fallback::Lo);
+    rng.push(0);
+    rng.push(100);
+    NullBrain brain;
+    Battle battle(tables, rng, brain);
+    CHECK(battle.start({make_member(0, "A")}, 0));
+    CHECK_EQ(battle.unit(3).gauge_max, locked ? -1 : 2);
+    CHECK_EQ(battle.unit(3).gauge, -1);
+    battle.do_weapon_attack(3, 0, 2);
+    CHECK_EQ(battle.unit(3).gauge, locked ? -1 : 2);
+  }
+}
+
+// The field ring comes from the btbgdat row of the stage: the battlefield operand when it names a row, else the scene's background
+// (the same fallback the stage loader uses).
+void test_ring_battlefield_fallback() {
+  data::GameTables tables = make_tables();
+  tables.btbgdat = {{0, 1, 2}, {3, 4, 5}};
+  for (const auto& [field, expected] : {std::pair{1, std::array<int, 3>{3, 4, 5}}, std::pair{-1, std::array<int, 3>{0, 1, 2}},
+                                        std::pair{200, std::array<int, 3>{0, 1, 2}}}) {
+    ScriptedRng rng(Lo::Fallback::Lo);
+    rng.push(0);
+    rng.push(100);
+    NullBrain brain;
+    Battle battle(tables, rng, brain);
+    BattleOptions options;
+    options.battlefield = field;
+    CHECK(battle.start({make_member(0, "A")}, 0, options));
+    CHECK(battle.ring() == expected);
+  }
+}
+
+// While Pip's form change is pending no PC can act, so the scheduler runs time on (instead of returning to a host that cannot open a
+// menu) until a PC's countdown gives it its scripted turn, which casts the form element and clears the pending state.
+void test_settle_with_pending_evolution() {
+  struct EvolvingBrain final : EnemyBrain {
+    int pc_turns = 0;
+    EnemyAction choose(const Battle&, int, Rng&) override {
+      EnemyAction action;
+      action.kind = EnemyAction::Kind::None;
+      return action;
+    }
+    bool plan_turn(Battle& battle, int unit, Rng&, std::vector<EnemyAction>&) override {
+      if (!is_pc_slot(unit)) return false;
+      ++pc_turns;
+      battle.set_evo_pending(0);
+      return true;
+    }
+  };
+  data::GameTables tables = make_tables();
+  ScriptedRng rng(Lo::Fallback::Lo);
+  rng.push(0);
+  rng.push(100);
+  EvolvingBrain brain;
+  Battle battle(tables, rng, brain);
+  CHECK(battle.start({make_member(0, "A"), make_member(1, "B")}, 0));
+  CHECK(battle.can_act(0));
+  battle.set_evo_pending(0x80);
+  CHECK(!battle.can_act(0) && !battle.can_act(1));
+  battle.settle();
+  CHECK_EQ(battle.evo_pending(), 0);
+  CHECK(brain.pc_turns >= 1);
+  CHECK(battle.can_act(0) || battle.can_act(1));
+  CHECK(battle.outcome() == Outcome::Ongoing);
 }
 
 void test_stamina_sequence() {
@@ -555,6 +659,87 @@ void test_status_and_poison() {
   battle.unit_mut(1).hp = 10;
   battle.do_element(0, 3, 1, 1);
   CHECK(battle.unit(1).hp > 10 && battle.unit(1).hp <= battle.unit(1).max_hp);
+}
+
+// Element 4 = Saints (mode 14, power 110, heal power 200), 5 = Purify (mode 1, +0xE bit 0, lo 0xFFFFFF3F), 6 = Turn Red (mode 1, hi 0x08).
+void add_support_elements(data::GameTables& tables) {
+  tables.elements.resize(7);
+  auto& saints = tables.elements[4];
+  saints.raw[0] = 0x41, saints.raw[4] = 0xD0, saints.raw[5] = 0x08, saints.raw[6] = 1, saints.raw[7] = 14, saints.raw[8] = 110, saints.raw[0xA] = 200;
+  auto& purify = tables.elements[5];
+  purify.raw[0] = 0x04, purify.raw[1] = 1, purify.raw[4] = 0x40, purify.raw[5] = 0x08, purify.raw[6] = 1, purify.raw[7] = 1, purify.raw[0xA] = 100;
+  purify.raw[0xE] = 1, purify.raw[0x18] = 0x3F, purify.raw[0x19] = 0xFF, purify.raw[0x1A] = 0xFF, purify.raw[0x1B] = 0xFF;
+  auto& turn_red = tables.elements[6];
+  turn_red.raw[0] = 0x08, turn_red.raw[1] = 1, turn_red.raw[4] = 0xC0, turn_red.raw[5] = 0x20, turn_red.raw[6] = 1, turn_red.raw[7] = 1;
+  turn_red.raw[0xA] = 100, turn_red.raw[0x1C] = 0x08;
+}
+
+void test_saints_by_target_slot() {
+  // Mode 14 goes by the target's slot, not the caster's side: an enemy slot takes the mode 0 hit, a party slot the heal (plus the
+  // target's power x 10 stamina).
+  for (const int caster : {0, 3}) {
+    Fixture fixture;
+    add_support_elements(fixture.tables);
+    Battle& battle = fixture.battle;
+    battle.unit_mut(1).hp = 10;
+    battle.unit_mut(1).stamina = 0;
+    const int enemy_hp = battle.unit(3).hp;
+    battle.do_element(caster, 4, 0, 3);
+    battle.do_element(caster, 4, 0, 1);
+    CHECK(battle.unit(3).hp < enemy_hp);
+    CHECK(battle.unit(1).hp > 10);
+    CHECK_EQ(battle.unit(1).stamina, 70);
+    const auto& ev = battle.events();
+    CHECK(ev.size() >= 2);
+    if (ev.size() >= 2) {
+      CHECK(ev[ev.size() - 2].target == 3 && ev[ev.size() - 2].code == 0);
+      CHECK(ev.back().target == 1 && ev.back().code == 3);
+    }
+  }
+}
+
+void test_purify_cures() {
+  // Mode 1 with +0xE bit 0 removes the record's statuses and their timers; a permanent status stays.
+  Fixture fixture;
+  add_support_elements(fixture.tables);
+  Battle& battle = fixture.battle;
+  battle.do_element(0, 2, 0, 1);
+  CHECK((battle.unit(1).lo & st::kAfraid) != 0 && battle.unit(1).timers.count(8) == 1);
+  battle.unit_mut(1).lo |= st::kPoison;
+  battle.unit_mut(1).perm_lo |= st::kPoison;
+  battle.do_element(0, 5, 0, 1);
+  CHECK((battle.unit(1).lo & st::kAfraid) == 0 && battle.unit(1).timers.count(8) == 0);
+  CHECK((battle.unit(1).lo & st::kPoison) != 0);
+  CHECK((battle.unit(1).lo & 0xFFFFFF3Fu & ~st::kPoison) == 0);
+  // On a clean target nothing is inflicted.
+  const u32 clean = battle.unit(2).lo;
+  battle.do_element(0, 5, 0, 2);
+  CHECK_EQ(battle.unit(2).lo, clean);
+}
+
+void test_turn_colour_status() {
+  // Turn Red gives the target the red colour status (hi bit 3), replacing any other; that unit's weapon hits are red, so against the
+  // blue enemy they hit harder than the same unit's white hits.
+  const auto hit = [](bool keep_status) {
+    Fixture fixture;
+    add_support_elements(fixture.tables);
+    Battle& battle = fixture.battle;
+    battle.unit_mut(0).hi |= 0x01;
+    battle.do_element(1, 6, 0, 0);
+    CHECK_EQ(battle.unit(0).hi & 0x3Fu, 0x08u);
+    if (!keep_status) battle.unit_mut(0).hi &= ~0x3Fu;
+    Command attack;
+    attack.kind = Command::Kind::Attack;
+    attack.actor = 0;
+    attack.chain = {0};
+    CHECK(battle.apply(attack));
+    for (const ActionEvent& ev : battle.drain_events())
+      if (ev.kind == ActionEvent::Kind::Weapon) return ev.value;
+    return -1;
+  };
+  const int red = hit(true), white = hit(false);
+  CHECK(white > 0);
+  CHECK(red > white);
 }
 
 void test_big_catch() {
@@ -787,6 +972,75 @@ struct CastBrain final : EnemyBrain {
     return action;
   }
 };
+
+// A battle-script queue entry (op 67) aimed at several units: an element entry is one cast at all of them (each unit hit once, the field
+// ring takes the colour once), a weapon entry attacks each unit in turn.
+void test_queued_cast_targets() {
+  struct QueueBrain final : EnemyBrain {
+    std::vector<pac::QueuedAttack> queued;
+    bool done = false;
+    EnemyAction choose(const Battle&, int, Rng&) override {
+      EnemyAction action;
+      action.kind = EnemyAction::Kind::None;
+      return action;
+    }
+    bool plan_turn(Battle& battle, int unit, Rng&, std::vector<EnemyAction>& out) override {
+      if (is_pc_slot(unit) || done) return false;
+      done = true;
+      pac::ScriptedBrain::to_actions(battle, queued, out);
+      return true;
+    }
+  };
+  pac::QueuedAttack weapon;
+  weapon.type = 0;
+  weapon.value = 1;
+  weapon.mask = 0x5;
+  std::vector<EnemyAction> actions;
+  data::GameTables plan_tables = make_tables();
+  {
+    ScriptedRng rng(Lo::Fallback::Lo);
+    NullBrain brain;
+    Battle battle(plan_tables, rng, brain);
+    pac::QueuedAttack cast;
+    cast.type = 1;
+    cast.value = 1;
+    cast.mask = 0x7;
+    pac::ScriptedBrain::to_actions(battle, {cast, weapon}, actions);
+  }
+  CHECK_EQ(actions.size(), size_t{3});
+  if (actions.size() == 3) {
+    CHECK(actions[0].kind == EnemyAction::Kind::Element && actions[0].target == 0 && actions[0].targets == 0x7u);
+    CHECK(actions[1].kind == EnemyAction::Kind::Weapon && actions[1].target == 0);
+    CHECK(actions[2].kind == EnemyAction::Kind::Weapon && actions[2].target == 2);
+  }
+  // Element 1 aims at one unit, element 4 at its whole side: both hit each PC once and push the ring once.
+  for (const int element_id : {1, 4}) {
+    data::GameTables tables = make_tables();
+    tables.elements.resize(5);
+    tables.elements[4] = tables.elements[1];
+    tables.elements[4].raw[4] = 0x10;
+    ScriptedRng rng(Lo::Fallback::Lo);
+    QueueBrain brain;
+    pac::QueuedAttack cast;
+    cast.type = 1;
+    cast.value = element_id;
+    cast.mask = 0x7;
+    brain.queued = {cast};
+    Battle battle(tables, rng, brain);
+    rng.push(0);
+    rng.push(100);
+    CHECK(battle.start({make_member(0, "A", 999), make_member(1, "B", 999), make_member(2, "C", 999)}, 0));
+    for (int pc = 0; pc < kPcSlots; ++pc) battle.unit_mut(pc).stamina = 0;
+    battle.unit_mut(3).countdown = 30;
+    battle.settle();
+    CHECK(brain.done);
+    std::array<int, kPcSlots> hits{};
+    for (const ActionEvent& event : battle.events())
+      if (event.kind == ActionEvent::Kind::Element && event.actor == 3 && is_pc_slot(event.target)) ++hits[static_cast<size_t>(event.target)];
+    CHECK(hits == (std::array<int, kPcSlots>{1, 1, 1}));
+    CHECK(battle.ring() == (std::array<int, 3>{-1, -1, 5}));
+  }
+}
 
 // The element-trap HUD block: hidden while the trap cast runs, shown from its end; the action that springs the trap still shows it, and
 // the block is hidden once that action has ended.
@@ -1120,6 +1374,10 @@ void test_gear() {
   CHECK_EQ(hit_base(85, equip.wp_acc), 85 / 3 + 89 * 200 / 300);
   // Without a gear table the flat defaults apply.
   CHECK_EQ(make_equip(make_tables(), 0x20, 0x96, {0, 0, 0}).wp, 16);
+  // The accessory ids are kept whether or not the weapon and armour resolve (the Dopplegang 0xFC and 0xF9..0xFB tests read them).
+  const Equip unresolved = make_equip(tables, 0x1000, 0x1000, {0xFC, 0xF9, 0});
+  CHECK(unresolved.acc[0] == 0xFC && unresolved.acc[1] == 0xF9);
+  CHECK_EQ(make_equip(make_tables(), 0x20, 0x96, {0xFB, 0, 0}).acc[0], 0xFB);
 }
 
 // ------------------------------------------------------------------------------------------------ battle script VM
@@ -2156,6 +2414,12 @@ void test_god_mode() {
   fixture.battle.finish_external_action();
   CHECK(fixture.battle.unit(1).alive());
   CHECK_EQ(fixture.battle.unit(1).hp, fixture.battle.unit(1).max_hp);
+  // Frozen (lo 0x20000000) is in the cure mask: a frozen PC, which is not alive(), is freed as well.
+  fixture.battle.unit_mut(2).lo |= st::kDefeated;
+  fixture.battle.unit_mut(2).timers[29] = 5;
+  fixture.battle.finish_external_action();
+  CHECK(fixture.battle.unit(2).alive());
+  CHECK(fixture.battle.unit(2).timers.count(29) == 0);
 }
 
 // RDE auto-battle's hit pick: the strongest affordable hit above 79 %, weak otherwise, -1 when weak cannot be paid.
@@ -2266,20 +2530,452 @@ void test_anti_colour_seals() {
   }
 }
 
+// Element modes 13 (Revenge), 43 (flat heal), 46 (Piggy Boink), 51 (hero-set weapon tech).
+void test_element_modes_revenge_heal_piggy_hero() {
+  const auto add_element = [](data::GameTables& tables, size_t id, int mode, int power, int chance, int arg) {
+    if (tables.elements.size() <= id) tables.elements.resize(id + 1);
+    auto& element = tables.elements[id];
+    element.raw[5] = 0x80, element.raw[6] = 1, element.raw[7] = static_cast<u8>(mode), element.raw[8] = static_cast<u8>(power);
+    element.raw[0xA] = static_cast<u8>(chance), element.raw[0xE] = static_cast<u8>(arg);
+  };
+  {
+    // Revenge: the caster's inflicted negative statuses land on the target and leave the caster with their timers; a permanent one stays.
+    Fixture fixture;
+    add_element(fixture.tables, 4, 13, 0, 100, 0);
+    Unit& caster = fixture.battle.unit_mut(3);
+    caster.lo = st::kPoison | st::kAfraid | 0x400;
+    caster.perm_lo = 0x400;
+    caster.timers[0] = 9;
+    fixture.battle.do_element(3, 4, 0, 0);
+    CHECK_EQ(fixture.battle.unit(0).lo & (st::kPoison | st::kAfraid), st::kPoison | st::kAfraid);
+    CHECK_EQ(fixture.battle.unit(0).lo & 0x400u, 0);
+    CHECK_EQ(fixture.battle.unit(3).lo, 0x400);
+    CHECK(fixture.battle.unit(3).timers.count(0) == 0);
+    CHECK_EQ(fixture.battle.events().back().code, 0);
+  }
+  {
+    // The gate rnd(1, 99) <= +0xA fails: a miss, nothing moves.
+    Fixture fixture;
+    add_element(fixture.tables, 4, 13, 0, 50, 0);
+    fixture.battle.unit_mut(3).lo = st::kPoison;
+    fixture.rng.push(51);
+    fixture.battle.do_element(3, 4, 0, 0);
+    CHECK_EQ(fixture.battle.unit(3).lo, st::kPoison);
+    CHECK_EQ(fixture.battle.unit(0).lo & st::kPoison, 0);
+    CHECK_EQ(fixture.battle.events().back().code, 2);
+  }
+  {
+    // Mode 43 heals the flat +0xA, x125/100 with the caster's damage-up gear.
+    Fixture fixture;
+    add_element(fixture.tables, 4, 43, 0, 30, 0);
+    fixture.battle.unit_mut(0).hp = 5;
+    fixture.battle.do_element(1, 4, 0, 0);
+    CHECK_EQ(fixture.battle.unit(0).hp, 35);
+    CHECK_EQ(fixture.battle.events().back().code, 3);
+    fixture.battle.unit_mut(0).hp = 5;
+    fixture.battle.unit_mut(1).eq.gear_flags = data::gearflag::kDmgUp;
+    fixture.battle.do_element(1, 4, 0, 0);
+    CHECK_EQ(fixture.battle.unit(0).hp, 42);
+  }
+  {
+    // Piggy Boink: ATK / DEF damage with power + the savings; the hit wakes the target.
+    const auto piggy_damage = [&](int savings, bool& woke) {
+      data::GameTables tables = make_tables();
+      add_element(tables, 4, 46, 30, 0, 0);
+      ScriptedRng rng{Lo::Fallback::Lo};
+      NullBrain brain;
+      Battle battle{tables, rng, brain};
+      rng.push(0);
+      rng.push(100);
+      BattleOptions opt;
+      opt.piggy_bank = savings;
+      battle.start({make_member(0, "A"), make_member(1, "B"), make_member(2, "C")}, 0, opt);
+      battle.unit_mut(3).lo |= st::kAsleep;
+      const int hp0 = battle.unit(3).hp;
+      battle.do_element(0, 4, 0, 3);
+      woke = (battle.unit(3).lo & st::kAsleep) == 0;
+      return hp0 - battle.unit(3).hp;
+    };
+    bool woke = false;
+    const int plain = piggy_damage(0, woke);
+    CHECK(plain > 0);
+    CHECK(woke);
+    CHECK(piggy_damage(7, woke) > plain);
+  }
+  {
+    // Slap of Cyrus: a miss without the hero set; with weapon 0x3D and two of the hero accessories it is the weapon tech.
+    Fixture fixture;
+    add_element(fixture.tables, 4, 51, 10, 0, 1);
+    const int hp0 = fixture.battle.unit(3).hp;
+    fixture.battle.do_element(0, 4, 0, 3);
+    CHECK_EQ(fixture.battle.unit(3).hp, hp0);
+    CHECK_EQ(fixture.battle.events().back().code, 2);
+    Unit& hero = fixture.battle.unit_mut(0);
+    hero.hero_set = true;
+    fixture.battle.do_element(0, 4, 0, 3);
+    CHECK(fixture.battle.unit(3).hp < hp0);
+    hero.hero_set = false;
+    const int hp1 = fixture.battle.unit(3).hp;
+    fixture.battle.do_element(0, 4, 0, 3);
+    CHECK_EQ(fixture.battle.unit(3).hp, hp1);
+  }
+}
+
+// The colour multipliers of four PS1 enemy casts, from the inputs the PS1 held at the cast (attacker innate = attack colour, the ring
+// as it stood, target white): Multistab 1250 (68 damage from a raw 54), Gnaw Bones 1000, Slash All 1000, element 23 1125.
+void test_ps1_cast_colours() {
+  CHECK_EQ(colour_multiplier(5, 5, {5, 0, 4}, 1), 1250);
+  CHECK_EQ(54 * 1250 / 1000 * 102 / 100, 68);
+  CHECK_EQ(colour_multiplier(3, 3, {5, 0, 4}, 1), 1000);
+  CHECK_EQ(colour_multiplier(1, 1, {0, 4, 1}, 1), 1000);
+  CHECK_EQ(colour_multiplier(4, 4, {5, 0, 4}, 1), 1125);
+}
+
+// The hero set (weapon 0x3D with two of 0xC0 / 0xC1) doubles the wearer's weapon term, lets its crit roll succeed from 7, and raises
+// the evade its targets oppose to its hits by x125/100.
+void test_hero_set() {
+  ChanceIn chance;
+  chance.base = 68, chance.evd = 8;
+  chance.attacker_hero_set = true;
+  CHECK_EQ(hit_chance(chance), 58);
+  WeaponIn weapon;
+  weapon.atk = 9, weapon.wp = 16, weapon.def = 0, weapon.arm = 4, weapon.mult = 10, weapon.colour_mille = 1000;
+  for (const bool hero : {false, true}) {
+    weapon.hero_set = hero;
+    Lo rolls(Lo::Fallback::Lo);
+    for (int i = 0; i < 13; ++i) rolls.push(0);
+    rolls.push(7);
+    CHECK_EQ(weapon_damage(rolls, weapon).crit, hero);
+  }
+  // A weak hit with every roll low: ATK 9, weapon 16 (32 doubled) against DEF 0, armour 4: raw 8 (17), x1125/1000 for the white attacker.
+  const auto weak_hit = [](bool hero) {
+    Fixture fixture;
+    fixture.battle.unit_mut(0).hero_set = hero;
+    fixture.battle.unit_mut(3).innate = 0;
+    const int hp0 = fixture.battle.unit(3).hp;
+    fixture.battle.do_weapon_attack(0, 3, 0);
+    return hp0 - fixture.battle.unit(3).hp;
+  };
+  CHECK_EQ(weak_hit(false), 9);
+  CHECK_EQ(weak_hit(true), 19);
+  // The flag is fixed from the equipment at battle start; a Dopplegang form (the monster's gear) keeps it, and so does the way back.
+  data::GameTables tables = make_tables();
+  ScriptedRng rng{Lo::Fallback::Lo};
+  NullBrain brain;
+  Battle battle{tables, rng, brain};
+  rng.push(0);
+  rng.push(100);
+  PartyMember wearer = make_member(0, "A");
+  wearer.eq.weapon_id = 0x3D;
+  wearer.eq.acc = {0xC1, 0, 0xC0};
+  PartyMember half = make_member(1, "B");
+  half.eq.weapon_id = 0x3D;
+  half.eq.acc = {0xC1, 0, 0};
+  CHECK(battle.start({wearer, half}, 0));
+  CHECK(battle.unit(0).hero_set && !battle.unit(1).hero_set);
+  CHECK(battle.transform(0, 0));
+  CHECK(battle.unit(0).eq.weapon_id != 0x3D && battle.unit(0).hero_set);
+  CHECK(battle.transform(0, -1));
+  CHECK(battle.unit(0).hero_set);
+}
+
+// A weapon tech (mode 29) is an element command: its hits take the record's colour, not the caster's innate one. The white caster's blue
+// tech hits a red target as its opposite colour (x3/2); a white one does not.
+void test_weapon_tech_record_colour() {
+  const auto tech_damage = [](u8 colour_bit) {
+    Fixture fixture;
+    fixture.tables.elements.resize(5);
+    auto& record = fixture.tables.elements[4];
+    record.raw[5] = colour_bit, record.raw[6] = 1, record.raw[7] = 29, record.raw[8] = 20, record.raw[0xE] = 1;
+    fixture.battle.unit_mut(0).innate = 0x08;
+    fixture.battle.unit_mut(3).innate = 0x20;
+    const int hp0 = fixture.battle.unit(3).hp;
+    fixture.battle.do_element(0, 4, 0, 3);
+    return hp0 - fixture.battle.unit(3).hp;
+  };
+  const int white = tech_damage(0x08), blue = tech_damage(0x80);
+  CHECK(white > 0);
+  CHECK(blue > white);
+}
+
+// A double tech's weapon hits are dealt one each by its participants (the party slots of the character ids in record +0x14..+0x16), not
+// twice by the caster; a single tech (+0x14 = FF) hits +0xE times with the caster.
+void test_weapon_tech_participants() {
+  const auto tech_damage = [](bool double_tech, int caster_atk) {
+    Fixture fixture;
+    fixture.tables.elements.resize(5);
+    auto& record = fixture.tables.elements[4];
+    record.raw[5] = 0x08, record.raw[6] = 1, record.raw[7] = 29, record.raw[8] = 20, record.raw[0xE] = 2;
+    record.raw[0x14] = double_tech ? 1 : 0xFF, record.raw[0x15] = double_tech ? 2 : 0xFF, record.raw[0x16] = 0xFF, record.raw[0x17] = 0xFF;
+    fixture.battle.unit_mut(0).atk = caster_atk;
+    fixture.battle.unit_mut(1).atk = 60;
+    fixture.battle.unit_mut(2).atk = 60;
+    const int hp0 = fixture.battle.unit(3).hp;
+    fixture.battle.do_element(0, 4, 0, 3);
+    return hp0 - fixture.battle.unit(3).hp;
+  };
+  CHECK(tech_damage(false, 9) > 0);
+  CHECK(tech_damage(false, 90) > tech_damage(false, 9));
+  CHECK_EQ(tech_damage(true, 9), tech_damage(true, 90));
+  CHECK(tech_damage(true, 9) > tech_damage(false, 9));
+}
+
+// Double / triple techs: a tech whose partner tech a party member holds (open, unused, not sealed, gauge at its row, 1.0 stamina) turns into
+// the double tech; the cast uses up every caster's cell and 7.0 stamina, and caster entry k takes party slot k's gauge minus its own cell
+// level (Serge's X-Strike with Glenn in slot 2 leaves Glenn with Kid's gauge - 3).
+void test_combo_techs() {
+  constexpr int kDash = 0xA0, kGash = 0xD9, kXStrike = 0x9F, kLumi = 0xA1, kPartnerA = 0xC9, kPartnerB = 0xDE, kTriple = 0x89;
+  const auto setup = [](Fixture& fixture) {
+    auto& elements = fixture.tables.elements;
+    elements.resize(0x100);
+    const auto tech = [&](int id, int colour, int partner, int result) {
+      auto& record = elements[static_cast<size_t>(id)];
+      record.raw[1] = 2, record.raw[4] = 0x80, record.raw[5] = static_cast<u8>(colour), record.raw[6] = 3, record.raw[8] = 20, record.raw[0xC] = 20;
+      record.raw[0x14] = record.raw[0x15] = record.raw[0x16] = record.raw[0x17] = 0xFF;
+      record.raw[0x20] = static_cast<u8>(partner), record.raw[0x26] = static_cast<u8>(result);
+    };
+    tech(kDash, 0x08, kGash, kXStrike);
+    tech(kGash, 0x80, kDash, kXStrike);
+    tech(kXStrike, 0x20, 0, 0);
+    elements[kXStrike].raw[0x14] = 0, elements[kXStrike].raw[0x15] = 2;
+    tech(kLumi, 0x08, 0, 0);
+    elements[kLumi].raw[0x22] = kPartnerA, elements[kLumi].raw[0x24] = kPartnerB, elements[kLumi].raw[0x28] = kTriple;
+    tech(kPartnerA, 0x40, 0, 0);
+    tech(kPartnerB, 0x04, 0, 0);
+    tech(kTriple, 0x08, 0, 0);
+    elements[kTriple].raw[0x14] = 0, elements[kTriple].raw[0x15] = 1, elements[kTriple].raw[0x16] = 2;
+    const auto place = [&](int unit, int cell, int id) {
+      fixture.battle.unit_mut(unit).cells[static_cast<size_t>(cell)] = static_cast<u16>(id);
+      fixture.battle.unit_mut(unit).usable[static_cast<size_t>(cell)] = true;
+    };
+    place(0, 27, kDash);
+    place(2, 27, kGash);
+    place(0, 47, kLumi);
+    place(1, 45, kPartnerA);
+    place(2, 46, kPartnerB);
+    for (int unit = 0; unit < 3; ++unit) fixture.battle.unit_mut(unit).gauge_max = 7;
+  };
+  const auto with = [&](int gauge0, int gauge1, int gauge2, int stamina2) {
+    auto fixture = std::make_unique<Fixture>();
+    setup(*fixture);
+    fixture->battle.unit_mut(0).gauge = gauge0, fixture->battle.unit_mut(1).gauge = gauge1, fixture->battle.unit_mut(2).gauge = gauge2;
+    fixture->battle.unit_mut(2).stamina = stamina2;
+    return fixture;
+  };
+  CHECK_EQ(with(4, 6, 2, 70)->battle.cell_element(0, 27), kXStrike);
+  CHECK_EQ(with(4, 6, 2, 70)->battle.cell_element(2, 27), kXStrike);
+  // Glenn's gauge below his cell's row, or under 1.0 stamina: the plain tech.
+  CHECK_EQ(with(4, 6, 1, 70)->battle.cell_element(0, 27), kDash);
+  CHECK_EQ(with(4, 6, 2, 9)->battle.cell_element(0, 27), kDash);
+  {
+    auto fixture = with(4, 6, 2, 70);
+    fixture->battle.unit_mut(2).used[27] = true;
+    CHECK_EQ(fixture->battle.cell_element(0, 27), kDash);
+    fixture->battle.unit_mut(2).used[27] = false;
+    fixture->battle.unit_mut(2).lo |= st::kKO;
+    CHECK_EQ(fixture->battle.cell_element(0, 27), kDash);
+  }
+  {
+    // The cast: Serge 4 -> 1, Glenn takes Kid's 3 - 3 = 0; both pay 7.0 (Glenn goes negative); Kid recovers and keeps his gauge.
+    auto fixture = with(4, 3, 7, 40);
+    fixture->battle.unit_mut(1).stamina = 30;
+    const ComboTech combo = fixture->battle.combo_at(0, 27);
+    CHECK_EQ(combo.element, kXStrike);
+    CHECK(combo.units[0] == 0 && combo.cells[0] == 27 && combo.units[1] == 2 && combo.cells[1] == 27 && combo.units[2] == -1);
+    Command command;
+    command.kind = Command::Kind::Element, command.actor = 0, command.cell = 27, command.target = 3;
+    CHECK(fixture->battle.apply(command));
+    const Battle& battle = fixture->battle;
+    CHECK_EQ(battle.unit(0).gauge, 1);
+    CHECK_EQ(battle.unit(0).stamina, 0);
+    CHECK(battle.unit(0).used[27]);
+    CHECK_EQ(battle.unit(2).gauge, 0);
+    CHECK_EQ(battle.unit(2).stamina, -30);
+    CHECK(battle.unit(2).used[27]);
+    CHECK_EQ(battle.unit(1).gauge, 3);
+    CHECK(battle.unit(1).stamina > 30);
+    bool cast = false;
+    for (const ActionEvent& event : battle.events())
+      if (event.kind == ActionEvent::Kind::Element && event.element == kXStrike) cast = event.actor == 0 && event.group[0] == 0 && event.group[1] == 2 && event.group[2] == 0xFF;
+    CHECK(cast);
+  }
+  {
+    // Triple: each of the other two slots holds one of the two partner techs.
+    auto fixture = with(5, 5, 5, 70);
+    const ComboTech combo = fixture->battle.combo_at(0, 47);
+    CHECK_EQ(combo.element, kTriple);
+    CHECK(combo.cells[0] == 47 && combo.cells[1] == 45 && combo.cells[2] == 46);
+    fixture->battle.unit_mut(1).usable[45] = false;
+    CHECK_EQ(fixture->battle.cell_element(0, 47), kLumi);
+  }
+}
+
+// Run Away with pilfered loot pending drops the loot: the Run event carries system window row 5 and nothing stolen is left to keep.
+void test_run_drops_stolen_loot() {
+  for (const bool stole : {false, true}) {
+    Fixture fixture;
+    fixture.tables.elements.resize(5);
+    fixture.tables.elements[4].raw[7] = 30;
+    fixture.tables.drops[0].slot = {0x0005, 0x8069, 0x0007, 0x8061};
+    fixture.battle.unit_mut(3).drop_row = 0;
+    fixture.battle.set_cheats({.always_loot = true});
+    if (stole) fixture.battle.do_element(0, 4, 0, 3);
+    CHECK_EQ(fixture.battle.rewards().stolen.size(), stole ? 1u : 0u);
+    Command run;
+    run.kind = Command::Kind::Run;
+    run.actor = 0;
+    CHECK(fixture.battle.apply(run));
+    CHECK(fixture.battle.outcome() == Outcome::Fled);
+    CHECK(fixture.battle.rewards().stolen.empty());
+    CHECK(fixture.battle.events().back().kind == ActionEvent::Kind::Run);
+    CHECK_EQ(fixture.battle.events().back().sys_msg, stole ? 5 : -1);
+  }
+}
+
+// Mode 7 with record +0xE != 0 changes the stats only of a target wearing the hero set (Medalsome); +0xC != 0 then heals by the heal
+// formula with +0xC as its power, landed or not. A target with hi 0x2000000 takes the heal as damage.
+void test_stat_mode_hero_gate_and_heal() {
+  const auto cast = [](bool hero, u32 hi) {
+    Fixture fixture;
+    fixture.tables.elements.resize(5);
+    auto& record = fixture.tables.elements[4];
+    record.raw[5] = 0x80, record.raw[6] = 1, record.raw[7] = 7, record.raw[8] = 120, record.raw[0xA] = 100, record.raw[0xC] = 25,
+    record.raw[0xE] = 1, record.raw[0x1C] = 0xC0, record.raw[0x1D] = 0x0F;
+    Unit& target = fixture.battle.unit_mut(0);
+    target.hp = 5;
+    target.hi |= hi;
+    target.hero_set = hero;
+    fixture.battle.do_element(1, 4, 0, 0);
+    return std::make_pair(fixture.battle.unit(0), fixture.battle.events().back().code);
+  };
+  const auto [plain, plain_code] = cast(false, 0);
+  CHECK_EQ(plain.mod[0], 100);
+  CHECK(plain.hp > 5);
+  CHECK_EQ(plain_code, 3);
+  const auto [hero, hero_code] = cast(true, 0);
+  CHECK_EQ(hero.mod[0], 120);
+  CHECK_EQ(hero.mod[5], 120);
+  CHECK_EQ(hero.hp, plain.hp);
+  const auto [hurt, hurt_code] = cast(false, 0x2000000u);
+  CHECK_EQ(hurt.hp, 0);
+  CHECK_EQ(hurt_code, 0);
+}
+
+// A Dopplegang form's grid loses its lock bits and the gauge tops out at the form's deepest element row.
+void test_dopple_form_gauge_cap() {
+  Fixture fixture;
+  auto& monster = fixture.tables.enemies[0];
+  monster.raw[0x30] = 1, monster.raw[0x34] = 1;
+  monster.raw[0x40] = 0x01, monster.raw[0x41] = 0x40;
+  monster.raw[0x42] = 0x01, monster.raw[0x43] = 0x40;
+  CHECK_EQ(fixture.battle.unit(0).gauge_max, 7);
+  CHECK(fixture.battle.transform(0, 0));
+  CHECK_EQ(fixture.battle.unit(0).gauge_max, 2);
+  CHECK_EQ(fixture.battle.unit(0).cells[20], 1);
+  CHECK_EQ(fixture.battle.unit(0).gauge, -1);
+  CHECK(fixture.battle.transform(0, -1));
+  CHECK_EQ(fixture.battle.unit(0).gauge_max, 7);
+}
+
+// A monster-party scene (scene byte 0x0F bit 0) puts the Grand Slam picks into the party slots: the record under the slot's character id
+// (HP capped at 999), the grid cells of rows 1..7 opened (row 0 keeps its lock, so its element stays unusable), on the enemies as well; a
+// slot without a pick stays empty; the fight pays nothing and leaves the party records alone. Without picks the party fights as itself.
+void test_monster_party() {
+  data::GameTables tables = make_tables();
+  tables.scenes[0].raw[0x0F] = 1;
+  auto& monster = tables.enemies[0];
+  monster.raw[0x30] = 1, monster.raw[0x34] = 1;
+  monster.raw[0x40] = 0x01, monster.raw[0x41] = 0x40;
+  monster.raw[0x42] = 0x03, monster.raw[0x43] = 0x40;
+  ScriptedRng rng{Lo::Fallback::Lo};
+  ForcedWinBrain brain;
+  Battle battle{tables, rng, brain};
+  rng.push(0);
+  rng.push(100);
+  BattleOptions options;
+  options.monster_party = {0, -1, 0};
+  CHECK(battle.start({make_member(0, "A"), make_member(1, "B"), make_member(2, "C")}, 0, options));
+  CHECK(battle.monster_party());
+  const Unit& first = battle.unit(0);
+  CHECK(first.present && first.pc && first.form == 0 && first.src_id == 0);
+  CHECK_EQ(first.max_hp, 999);
+  CHECK_EQ(first.hp, 999);
+  CHECK_EQ(first.atk, 4);
+  CHECK_EQ(first.cells[0], 0x4001);
+  CHECK(!first.usable[0]);
+  CHECK_EQ(first.cells[20], 3);
+  CHECK(first.usable[20]);
+  CHECK_EQ(first.gauge_max, 2);
+  CHECK(first.ap == 8 && first.countdown == 8 && first.stamina == 70 && first.gauge == -1);
+  CHECK(!battle.unit(1).present);
+  CHECK(battle.unit(2).present && battle.unit(2).form == 0 && battle.unit(2).src_id == 2);
+  CHECK_EQ(battle.unit(3).cells[20], 3);
+  battle.finish_external_action();
+  CHECK(battle.outcome() == Outcome::Victory);
+  CHECK_EQ(battle.rewards().gold, 0);
+  CHECK_EQ(battle.party()[0].hp, 50);
+
+  ScriptedRng plain_rng{Lo::Fallback::Lo};
+  NullBrain plain_brain;
+  Battle plain{tables, plain_rng, plain_brain};
+  plain_rng.push(0);
+  plain_rng.push(100);
+  CHECK(plain.start({make_member(0, "A")}, 0));
+  CHECK(!plain.monster_party());
+  CHECK(plain.unit(0).form == -1 && plain.unit(0).name == "A");
+  CHECK_EQ(plain.unit(3).cells[20], 0x4003);
+}
+
+// Pilfered loot reaches the stock on a victory only.
+void test_stolen_loot_needs_victory() {
+  for (const bool win : {false, true}) {
+    Fixture fixture;
+    fixture.tables.elements.resize(5);
+    fixture.tables.elements[4].raw[5] = 0x80, fixture.tables.elements[4].raw[6] = 1, fixture.tables.elements[4].raw[7] = 30;
+    fixture.tables.drops[0].slot = {0x0005, 0x8069, 0x0007, 0};
+    fixture.rng.push(0);
+    fixture.rng.push(50);
+    fixture.battle.do_element(0, 4, 0, 3);
+    CHECK_EQ(fixture.battle.rewards().stolen.size(), 1u);
+    Command command;
+    command.actor = 0;
+    if (win) {
+      fixture.battle.unit_mut(3).hp = 1;
+      command.kind = Command::Kind::Attack;
+      command.chain = {2};
+    } else {
+      command.kind = Command::Kind::Run;
+    }
+    CHECK(fixture.battle.apply(command));
+    CHECK(fixture.battle.outcome() == (win ? Outcome::Victory : Outcome::Fled));
+    ui::GameState state;
+    game::apply_battle_result(state, fixture.tables, fixture.battle);
+    CHECK_EQ(state.item_count(0x0007), win ? 1 : 0);
+  }
+}
+
 int main() {
   test_gear();
   test_rng();
   test_formulas();
+  test_encounter_variant();
   test_hit_chance();
   test_colour_and_ring();
   test_growth();
   test_setup();
   test_gauge_cap();
+  test_enemy_gauge_cap();
+  test_ring_battlefield_fallback();
+  test_settle_with_pending_evolution();
   test_stamina_sequence();
   test_action_events();
   test_status_and_poison();
+  test_saints_by_target_slot();
+  test_purify_cures();
+  test_turn_colour_status();
   test_status_message();
   test_field_ring_writes();
+  test_queued_cast_targets();
   test_trap_hud();
   test_pilfer();
   test_forced_victory_pays_defeated_only();
@@ -2304,6 +3000,17 @@ int main() {
   test_god_mode();
   test_dopple_pool_and_form();
   test_auto_hit_level();
+  test_element_modes_revenge_heal_piggy_hero();
+  test_ps1_cast_colours();
+  test_hero_set();
+  test_weapon_tech_record_colour();
+  test_weapon_tech_participants();
+  test_combo_techs();
+  test_run_drops_stolen_loot();
+  test_stat_mode_hero_gate_and_heal();
+  test_dopple_form_gauge_cap();
+  test_stolen_loot_needs_victory();
+  test_monster_party();
   if (failures) {
     std::printf("%d failure(s)\n", failures);
     return 1;

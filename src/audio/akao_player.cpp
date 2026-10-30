@@ -170,6 +170,7 @@ void AkaoPlayer::fade_sfx_volume(u32 mask, int frames, int volume127) {
 }
 
 void AkaoPlayer::tick_60hz() {
+  ++random_index_;
   for (auto& channel : ch_) {
     if (!channel.active || channel.music || channel.vol_fade_left <= 0) continue;
     --channel.vol_fade_left;
@@ -472,7 +473,7 @@ int AkaoPlayer::alloc_voice() {
     const Voice& voice = voice_[size_t(i)];
     if (!voice.active) return i;
     // Steal released voices first, then the quietest one.
-    const float score = (voice.released ? 0.0f : 1e6f) + float(voice.env.level) * (voice.gl + voice.gr + 1e-3f);
+    const float score = (voice.released ? 0.0f : 1e6f) + float(voice.env.level) * (std::abs(voice.gl) + std::abs(voice.gr) + 1e-3f);
     if (score < best_score) {
       best_score = score;
       best = i;
@@ -515,13 +516,20 @@ void AkaoPlayer::end_channel(Channel& channel) {
 }
 
 void AkaoPlayer::note_on(Channel& channel, int key) {
+  // A key-on (a legato re-pitch is none) restarts the FE 19 slide from its start volume.
+  if (channel.keyon_slide_len && !channel.legato_prev) {
+    channel.volume = channel.keyon_volume;
+    channel.vol_slide_left = channel.keyon_slide_len;
+    channel.vol_slide_step = channel.keyon_slide_step;
+  }
   const int base_note = channel.octave * 12 + key;
   int note = base_note + channel.transpose;
   const Instrument* in = channel.inst;
   u16 a1 = channel.adsr1, a2 = channel.adsr2;
   channel.drum_pan = -1;
   channel.zone_scale = 0;
-  if (channel.drum && channel.code->keymap_abs) {
+  const bool keymap_note = channel.drum && channel.code->keymap_abs;
+  if (keymap_note) {
     const size_t off = size_t(channel.code->keymap_abs) + size_t(std::clamp(base_note, 0, 255)) * 8;
     if (off + 8 <= channel.code->data.size()) {
       const u8* entry = &channel.code->data[off];
@@ -569,6 +577,9 @@ void AkaoPlayer::note_on(Channel& channel, int key) {
     channel.fine_delta = ((channel.pitch_base * (fd & 0xFF)) >> 8) - channel.pitch_base;
   else
     channel.fine_delta = (channel.pitch_base * fd) >> 7;
+  // E1 random pitch moves the base after the fine-tune delta was taken from it; keymap (drum) notes have none.
+  if (channel.random_pitch && !keymap_note)
+    channel.pitch_base = int(akao_random_pitch(u32(channel.pitch_base), u32(channel.random_pitch), kAkaoRandom[random_index_]));
 
   // Legato into a sounding voice: re-pitch only.
   const bool keep = channel.legato_prev && channel.voice >= 0 && voice_[size_t(channel.voice)].active &&
@@ -818,12 +829,14 @@ void AkaoPlayer::run_ops(Channel& channel) {
       case 0xA5: channel.octave = bytes[1] & 15; break;
       case 0xA6: channel.octave = (channel.octave + 1) & 15; break;
       case 0xA7: channel.octave = (channel.octave - 1) & 15; break;
-      case 0xA8: channel.volume = s32(u32(bytes[1] & 0x7F) << 23); channel.vol_slide_left = 0; break;
+      // A8 / A9 volumes are signed bytes: 0x80..0xFF is a phase-inverted voice (a pair at +v / -v nearly cancels).
+      case 0xA8: channel.volume = s32(s8(bytes[1])) * (1 << 23); channel.vol_slide_left = channel.keyon_slide_len = 0; break;
       case 0xA9: {
+        channel.keyon_slide_len = 0;
         channel.vol_slide_left = slide(bytes[1]);
         const s32 prev = channel.volume & s32(0xFFFF0000);
         channel.volume = prev;
-        channel.vol_slide_step = (s32(u32(bytes[2] & 0x7F) << 23) - prev) / channel.vol_slide_left;
+        channel.vol_slide_step = (s32(s8(bytes[2])) * (1 << 23) - prev) / channel.vol_slide_left;
         break;
       }
       case 0xAA: channel.pan = u16(((bytes[1] + 0x40) & 0xFF) << 8); channel.pan_slide_left = 0; break;
@@ -971,6 +984,8 @@ void AkaoPlayer::run_ops(Channel& channel) {
       case 0xD0:  // SFX channels only: full length (the note is not shortened by 2 ticks)
         if (!channel.music) channel.full_length = true, channel.legato = channel.legato_prev = false;
         break;
+      case 0xE1: channel.random_pitch = bytes[1]; break;
+      case 0xE2: channel.random_pitch = 0; break;
       case 0xD8: channel.fine_tune = s8(bytes[1]); break;
       case 0xD9: channel.fine_tune += s8(bytes[1]); break;
       case 0xDA: channel.porta_steps = bytes[1] ? bytes[1] : 256; break;
@@ -1050,6 +1065,11 @@ void AkaoPlayer::run_ops(Channel& channel) {
             channel.drum = false;
             if (channel.zones.empty()) channel.patch = -1;
             break;
+          case 0x19:  // key-on volume slide: signed start volume, length, signed target volume
+            channel.keyon_volume = s32(s8(bytes[2])) * (1 << 23);
+            channel.keyon_slide_len = slide(bytes[3]);
+            channel.keyon_slide_step = (s32(s8(bytes[4])) * (1 << 23) - channel.keyon_volume) / channel.keyon_slide_len;
+            break;
           case 0x1A: channel.tenuto = true; break;
           case 0x1B: channel.tenuto = false; break;
           // Voice reservation, bar timers, SFX trigger: no audible effect here.
@@ -1057,7 +1077,7 @@ void AkaoPlayer::run_ops(Channel& channel) {
         }
         break;
       }
-      default:  // sidechains, random pitch, no-ops
+      default:  // sidechains, no-ops
         // OC_SFX_UNIMPL=1: reports (once per op) the opcodes the SFX programs run that have no audible model here.
         {
           static const bool want = std::getenv("OC_SFX_UNIMPL") != nullptr;
@@ -1165,7 +1185,7 @@ void AkaoPlayer::update_channel(Channel& channel, int) {
   // + 0x80, no master volume.
   int base = ((channel.volume >> 16) * (channel.balance >> 8)) >> 7;
   if (channel.trem.on) base += int(((s64(base) * (channel.trem.depth >> 8) * 512) >> 16) * channel.trem.value >> 15);
-  base = std::clamp(base, 0, 0x7FFF);
+  base = std::clamp(base, -0x8000, 0x7FFF);
   const int chan_pan = channel.drum_pan >= 0 ? (channel.drum_pan + 0x40) << 8 : channel.pan;
   int idx;
   if (channel.music) {

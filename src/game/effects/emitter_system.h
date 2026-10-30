@@ -222,7 +222,7 @@ class EmitterSystem {
   const assets::Emitter& header_def(size_t i) const;
   bool header_running(size_t i) const;
 
-  // Field script / sequence entry points. Names: 4 chars; "0000" = all emitters.
+  // Field script / sequence entry points. Names: 4 chars; "0000" = all emitters for stop and kill (start looks it up as a name).
   // start: field ACTIVATE_NAMED_OBJ, sequence op 22.
   bool start(std::string_view name);
   // Sequence op 22 of a task serving a target: target > 0 starts a clone whose op-39 selectors 1 / 2 read 9 / 0xD + target.
@@ -301,6 +301,16 @@ class EmitterSystem {
     // `morph_t` (0..1; `morph_t_prev` is the previous tick's value for interpolation). nullptr = no morph.
     const std::string* morph_name = nullptr;
     float morph_t = 0, morph_t_prev = 0;
+    // The object screen test of flag bit 28 on a type-0x02 mesh: the six points (assets::StagePart::cull_points) go through
+    // the object transform and the projection with the GTE's limits (view x / y saturate at +-0x7FFF, depth at 0..0xFFFF, a
+    // depth up to h / 2 or behind the eye projects at the largest scale ~2, screen x / y saturate at -1024..1023); the object
+    // is not drawn when no point has screen x in 1..351 or screen y in -31..223 (the x limits widen with the widescreen columns like
+    // render::cull_frame). Every other type tests its origin instead (off_screen(view)). False without the flag and under the free camera.
+    bool off_screen(const std::array<std::array<s16, 3>, 6>& points, const ViewParams& view) const;
+    // The flag bit 28 test of the other types (ground, models): the object origin is projected and the object is not drawn when the
+    // projection reports a GTE error (view x / y or depth saturated, a depth up to h / 2 or behind the eye, screen x / y outside
+    // -1024..1023). False for a type-0x02 mesh, without the flag and under the free camera.
+    bool off_screen(const ViewParams& view) const;
   };
   // `with_suppressed`: also the objects of emitters an overlay draws itself (set_draw_suppressed), for that overlay's own draw.
   void collect_meshes(const ViewParams& view, float alpha, std::vector<MeshInstance>& out, bool with_suppressed = false) const;

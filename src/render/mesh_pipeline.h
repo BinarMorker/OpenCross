@@ -187,7 +187,7 @@ class MeshPipeline {
     // Flash draw: every polygon twice,
     // both semi-transparent with the usual light colour: first with the white CLUT (0x7FFF ORed into every non-zero entry, STP
     // kept) and ABR 2 (B - F), then with the model's own CLUT and ABR 1 (B + F). Texels without STP are opaque in both, so they show the
-    // normal colour; STP texels end as B - light + texel * light.
+    // normal colour; STP texels end as B - light + texel * light, of the nearest blended surface only (a depth pass comes first).
     bool flash = false;
     // Ordering-table slab (ot_faces only; the 8F screen ripple's split at its OT index, see render_target.h build_screen_warp): a face is drawn only
     // when slot_min < its slot (face slot + ot_bias, + water_bias when submerged) <= slot_max.

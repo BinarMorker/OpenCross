@@ -2,8 +2,8 @@
 // Battle sound: the battle theme, the cast-time music ducking and the AKAO sound effects the animation scripts and effect sequences name by
 // tag. Sounds are looked up like the engine's one resource list (Resident / Actor / Pack groups, newest first; closing a group cuts its
 // sounds), the chant plays at the start of an element cast with mask 0x100 and the theme is ducked until the pack ends.
-// Music: the field starts a battle with the battle theme (song 2 / 0x14) unless the battle request keeps the field music (C9 flag 1). There
-// is no victory voice and no victory fade; the results screen starts the victory song.
+// Music: the field starts a battle with its battle song (the boss theme 0x31 with flag 0x40, else the battle theme 2 / 0x14) unless the
+// battle request keeps the field music (flag 1). There is no victory voice and no victory fade; the results screen starts the victory song.
 #include <bitset>
 #include <map>
 #include <memory>
@@ -74,12 +74,15 @@ class BattleAudio {
   audio::Sfx* sfx() { return sfx_.get(); }
 
   // Music.
-  // Starts the battle theme (song 2 / 0x14); with keep_field_music the field song continues instead.
-  void start_battle_theme(bool keep_field_music = false);
+  // Starts the battle song of the request's flags (audio::battle_song: the boss theme 0x31 with flag 0x40, else the battle theme 2 / 0x14);
+  // with keep_field_music the field song continues instead.
+  void start_battle_theme(int battle_flags, bool keep_field_music);
   // Music ducking of an element cast: the cast start fades the theme to 0x66 over 0x6D frames, the effect end back to 0x7F over 0x60 frames.
   // restore_cast() is a no-op unless duck_cast() ran.
   void duck_cast();
   void restore_cast();
+  // Effect sequence op 0x54: the music fades to `volume` (low 7 bits) over `ticks` frames; the effect end's restore_cast() still applies.
+  void fade_music(int volume, int ticks);
   // The pack opens (~1.85 s after the chant): the chant (mask 0x100) fades out over 0x3C frames and its channels stay silent until replaced.
   void fade_chant();
   // A one-shot theme (the victory songs 0x16 / 0x17).

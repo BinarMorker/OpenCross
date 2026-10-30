@@ -171,6 +171,27 @@ void test_grid() {
   CHECK(game_state.clear_all(0) == 4);
   CHECK(game_state.element_count(1) == 2 && game_state.element_count(2) == 1 && game_state.element_count(3) == 7 && game_state.element_count(7) == 1);
   CHECK(game_state.slot.chars[0].grid[3] == 0xA1);
+
+  // Placing takes the new copies before the occupant goes back: a stack refilled with itself holds what the stock had (5 placed,
+  // 2 left -> the cell keeps 2, the stock gets the 5 back), and replacing an element with itself at 99 in stock stays at 99.
+  CHECK(game_state.place(0, 0, 2, 3) == Why::Ok && game_state.cell_count(0, 0, 2) == 5 && game_state.element_count(3) == 2);
+  CHECK(game_state.place(0, 0, 2, 3) == Why::Ok && game_state.cell_count(0, 0, 2) == 2 && game_state.element_count(3) == 5);
+  CHECK(game_state.place(0, 0, 3, 1) == Why::Ok && game_state.element_count(1) == 1);
+  for (auto& stack : game_state.slot.elements)
+    if (stack.id == 1) stack.qty = 99;
+  CHECK(game_state.place(0, 0, 3, 1) == Why::Ok && game_state.element_count(1) == 99);
+  // With no stack of the occupant and no free slot the occupant cannot go back: refused, nothing changes.
+  for (auto& stack : game_state.slot.elements) {
+    if (stack.id == 1) stack.id = 0x7E;
+    if (stack.id == 0) stack.id = 0x7E, stack.qty = 1;
+  }
+  CHECK(game_state.can_remove(0, 0, 3) == Why::Full && game_state.remove(0, 0, 3) == Why::Full && game_state.cell_element(0, 0, 3) == 1);
+  CHECK(game_state.place(0, 0, 3, 7) == Why::Full && game_state.cell_element(0, 0, 3) == 1 && game_state.element_count(7) == 1);
+  // A stack cell that holds 0 copies returns none.
+  const int stock_before = game_state.element_count(3);
+  game_state.slot.chars[0].grid[2] = 3;
+  game_state.slot.chars[0].equipped_qty[2] = 0;
+  CHECK(game_state.remove(0, 0, 4) == Why::Ok && game_state.cell_element(0, 0, 4) == 0 && game_state.element_count(3) == stock_before);
 }
 
 void test_autofill() {
@@ -242,12 +263,31 @@ void test_sort() {
   CHECK((ids() == std::vector<int>{0x80, 0x55, 0x60, 0x35, 0x40, 0x10, 0x03, 0x02, 0x70, 0x6C}));
   // Empty slots sink to the end.
   CHECK(game_state.slot.elements[10].id == 0);
-  // Innate-first: character 0 is white (0x08), the mask maps it to black (0x10).
+  // Innate-first: character 0 is white (0x08), its opposite black (0x10). White first by id; then the rest through the exchange sort
+  // over the stock with the white and black slots emptied (slots 2, 5, 6, 7), which leaves 0x6C and 0x70 ahead of the lower ids;
+  // black last in stock order.
+  fixture.el(0x10, 1, 0x08, 0x77);
+  fixture.el(3, 1, 0x08, 0x77);
   fixture.el(2, 1, 0x10, 0x77);
-  fixture.el(3, 1, 0x80, 0x77);
-  fixture.el(0x10, 1, 0x04, 0x77);
+  fixture.el(0x60, 1, 0x10, 0x77);
   game_state.sort_elements(SortMode::InnateFirst, 0);
-  CHECK((ids() == std::vector<int>{2, 3, 0x10, 0x35, 0x40, 0x55, 0x60, 0x6C, 0x70, 0x80}));
+  CHECK((ids() == std::vector<int>{3, 0x10, 0x6C, 0x70, 0x35, 0x40, 0x55, 0x80, 0x60, 2}));
+}
+
+// Story tech learning (FE 79 / 74 / 73): the cell closing star level 3 / 5 / 7 over the first 8 columns of that row.
+void test_learn_tech() {
+  Fixture fixture;
+  GameState& game_state = fixture.gs;
+  const int before = game_state.element_count(1);
+  game_state.slot.chars[0].grid[21] = 0x4001;
+  CHECK(game_state.learn_tech(0, 3, 0x98) == 21);
+  CHECK(game_state.slot.chars[0].grid[21] == 0x4098);
+  CHECK(game_state.element_count(1) == before + 1);
+  CHECK(game_state.learn_tech(0, 5, 0x99) == 34 && game_state.slot.chars[0].grid[34] == 0x99);
+  CHECK(game_state.learn_tech(0, 7, 0x9A) == 42 && game_state.slot.chars[0].grid[42] == 0x9A);
+  // A tech replacing a tech returns nothing to the stock.
+  CHECK(game_state.learn_tech(0, 7, 0x9B) == 42 && game_state.element_count(0x9A) == 0);
+  CHECK(game_state.learn_tech(2, 3, 0x98) == -1);
 }
 
 void test_equip() {
@@ -324,6 +364,14 @@ void test_equip() {
   // Swapping weapons returns the old one to the stock.
   game_state.add_item(32);
   CHECK(game_state.equip(0, 0, 32) && game_state.item_count(32) == 1);
+  // The replaced piece needs its stack or a free slot: with neither the change is refused and nothing moves.
+  item(34, 0, 0x1);
+  game_state.take_item(32);
+  game_state.add_item(34);
+  game_state.add_item(34);
+  for (auto& stack : game_state.slot.items)
+    if (stack.id == 0) stack.id = 0x1FF, stack.qty = 1;
+  CHECK(!game_state.equip(0, 0, 34) && game_state.equipped(0, 0) == 32 && game_state.item_count(34) == 2 && game_state.item_count(32) == 0);
 }
 
 void test_use_and_options() {
@@ -338,6 +386,16 @@ void test_use_and_options() {
   fixture.stock(7, 1);
   game_state.slot.chars[0].cur_hp = 100;
   CHECK(game_state.use_element(7, 0) == Why::Full && game_state.element_count(7) == 1);
+  // The target must be recruited and not excluded: an unrecruited, an excluded or an out-of-range character is refused and nothing is consumed.
+  game_state.slot.chars[1].cur_hp = 10;
+  game_state.slot.chars[1].max_hp = 100;
+  game_state.slot.chars[5].cur_hp = 10;
+  game_state.slot.chars[5].max_hp = 100;
+  CHECK(game_state.use_element(7, 5) == Why::NotEligible && game_state.use_element(7, -1) == Why::NotEligible && game_state.element_count(7) == 1);
+  game_state.slot.unk_e1b8[2] |= 1u << 1;
+  CHECK(game_state.use_element(7, 1) == Why::NotEligible && game_state.slot.chars[1].cur_hp == 10 && game_state.element_count(7) == 1);
+  game_state.slot.unk_e1b8[2] &= ~(1u << 1);
+  CHECK(game_state.use_element(7, 1) == Why::Ok && game_state.slot.chars[1].cur_hp == 60 && game_state.element_count(7) == 0);
   game_state.set_option(opt::kAutoAttack, true);
   game_state.set_option(opt::kAnalogStick, true);
   CHECK(game_state.option(opt::kAutoAttack) && game_state.option(opt::kAnalogStick) && !game_state.option(opt::kMono));
@@ -389,6 +447,7 @@ int main() {
   test_autofill();
   test_autofill_order();
   test_sort();
+  test_learn_tech();
   test_equip();
   test_use_and_options();
   if (failures) {

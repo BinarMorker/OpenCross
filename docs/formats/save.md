@@ -77,7 +77,7 @@ The first table is the **summary/preview** that the load menu shows without deco
 | 0x37 | u32 | play time in 1/60 s frames, preview copy (unaligned; may be 1 frame ahead of 0x588) |
 | 0x3B | u32 | gold (preview) |
 | 0x3F | u8 | stars (preview) |
-| 0x40 | u8 | story progression value (0, 8, 0x10 .. 0x38 in a real file); also the key of the location text. Equals script variable 0 (low byte) |
+| 0x40 | u16 | story progression value (0, 8, 0x10 .. 0x38 in a real file); also the key of the location text. Equals script variable 0 (the whole u16; the last location threshold is 999) |
 | 0x42 | u8 | bits 0-1 = script variable 0x7E & 3: 0 normal, 2 a New Game+ / Continue+ game, 3 a cleared save written by the ending. The Continue+ list refuses slots with either bit |
 
 The full state:
@@ -194,7 +194,7 @@ The image mirrors the game's working memory; only the stepped fields are non-zer
 
 ## 7. Name encoding
 
-In the image a name is up to 6 symbols in a 16-byte record. In the stream each symbol is 11 bits: if the byte is >= 0xF8 the symbol is `((byte - 0xF7) << 8) | next_byte`, else the byte itself. Decoding: if `(v & 0x700) != 0` emit `((v & 0x700) >> 8) + 0xF7` then `v & 0xFF`. In short, **bytes 0xF8..0xFE are a 2-byte-code prefix** (the same as the message font, `docs/formats/text.md`). JP font table:
+In the image a name is up to 6 symbols in a 16-byte record. A longer name (the RDE Latin keyboard allows 12 characters) does not fit: RDE keeps the full name only in `ext_save.dat` (section 9) and leaves the record as it was; OpenCross stores the first 6 encodable symbols in the record and the full name in `ext_save.dat` (cards) or the page file (section 13), and a load prefers the full name. In the stream each symbol is 11 bits: if the byte is >= 0xF8 the symbol is `((byte - 0xF7) << 8) | next_byte`, else the byte itself. Decoding: if `(v & 0x700) != 0` emit `((v & 0x700) >> 8) + 0xF7` then `v & 0xFF`. In short, **bytes 0xF8..0xFE are a 2-byte-code prefix** (the same as the message font, `docs/formats/text.md`). JP font table:
 
 - single bytes: 0x75 space, 0x76.. hiragana in gojuon order (あいうえお かきくけこ ... ん, then voiced が..ぽ, small ぁぃぅぇぉっゃゅょ), 0xC6 。, 0xC7 「, 0xC8 」, 0xC9 #, 0xCA ー, 0xCB ~, 0xCC ⋯, 0xCD ?, 0xCE !, 0xCF •, 0xD0-0xD9 digits, 0xDA-0xF3 A-Z, 0xF5 、;
 - `F8 00`.. = a-z then katakana ア.. ヴ (F8 1A ア, F8 20 キ, F8 27 セ, F8 42 ル ...), a few kanji at F8 6C/6D 蛇骨, F8 73-77 星子夫改良, F8 8E/8F 龍種.
@@ -231,7 +231,7 @@ OpenCross: `ExtFile` (`src/save/ext_save.*`) parses by rule 1 and offers `slot(i
 
 ## 10. What OpenCross writes into a slot
 
-`FieldWorld::capture_state` + `write_slot`: script variables 0x000..0x3FF at `0x188 + 2*id`; location word 0x18E = the script room id of the disc in use; **head 0x40 = the scenario flag (variable 0, low byte)**; preview stars 0x3F; preview leader name 0x28 (Shift-JIS); party at 0x59C and 0x34; recruited bits; key items 0x180; header title `クロノ・クロス　` + fullwidth (slot + 1). Script item ids split as: ids < 0x200 search the 0x180 item slots, 0x200.. the 0xC0 element slots (id - 0x200), 0x400.. key-item bit (id - 0x401).
+`FieldWorld::capture_state` + `write_slot`: script variables 0x000..0x3FF at `0x188 + 2*id`; location word 0x18E = the script room id of the disc in use; **head 0x40 = the scenario flag (variable 0, u16)**; preview stars 0x3F; preview leader name 0x28 (Shift-JIS); party at 0x59C and 0x34; recruited bits; key items 0x180; header title `クロノ・クロス　` + fullwidth (slot + 1). Script item ids split as: ids < 0x200 search the 0x180 item slots, 0x200.. the 0xC0 element slots (id - 0x200), 0x400.. key-item bit (id - 0x401).
 
 **Continue.** Loading a slot restores the party/inventory block, the script variables and the room/entrance, so scripts resume exactly as a retail Continue. The entrance (room parameter) is **script variable 0x3A**: room init sets 0x3A to the entrance and save events overwrite it (for example `gal_b09i` saves inside its wake-up event with 0x3A = 4 and Continue resumes that event). The room is variable 6. The slot codec is bit-exact (round-trip tested).
 
@@ -242,7 +242,7 @@ Route check: `tests/routes/run_save.ps1` (scratch copy with `occ save-blank`, `c
 Evaluated once per field tick:
 
 1. **Load latch.** After a save is loaded, the next evaluation only records "last location = current, last allowed = 1", clears the latch and returns.
-2. **Trigger.** "Saving allowed" is true (OpenCross: `FieldWorld::can_save()` = script variable 0x3C == 1 and no debug tools used) **and** (last allowed was false **or** the location differs from the last location). So it also fires when "allowed" turns on while the location is unchanged (after a cutscene).
+2. **Trigger.** "Saving allowed" is true (OpenCross: `FieldWorld::can_save()` = script variable 0x3C == 1; using the debug tools does not change it) **and** (last allowed was false **or** the location differs from the last location). So it also fires when "allowed" turns on while the location is unchanged (after a cutscene).
 3. **Skips** (map id = the field map, entrance = the room parameter of the last room load; only maps 0xFA-0xFD): 0xFA entrances 0x13-0x16; 0xFB 0x13-0x17; 0xFC 0x10-0x15, 0x18, 0x19, 0x1A, 0x1D; 0xFD 0x10-0x15, 0x17-0x1A, 0x1D. A skipped call still records last location / allowed.
 4. **Write.** The block is built exactly like a manual save (header, state, version 0x106, checksum) and goes to card 1 file `BISLPSP02364CHRONO00` (existing entry reused, else the first free directory frame). The frame title is the normal `クロノ・クロス　０１`; the **summary leader-name field (0x28, 12 bytes) is "オートセーブ"** (`83 49 81 5B 83 67 83 5A 81 5B 83 75`), which is what the slot list shows; the icon flag stays 0x11. Then `ext_save.dat` slot 0 is stored.
 5. The manual save menu refuses slot 0.

@@ -243,10 +243,10 @@ def _set_speed(ds_dir, realtime):
     open(path, "w", encoding="utf-8", newline="\n").write(text)
 
 
-def _wait_new_file(folder, before, timeout=10.0, min_size=200):
+def _wait_new_file(folder, before, timeout=10.0, min_size=200, pattern="*"):
     t0 = time.time()
     while time.time() - t0 < timeout:
-        new = [f for f in glob.glob(os.path.join(folder, "*")) if f not in before]
+        new = [f for f in glob.glob(os.path.join(folder, pattern)) if f not in before]
         if new:
             f = max(new, key=os.path.getmtime)
             for _ in range(50):
@@ -410,7 +410,8 @@ class Session:
         for old in glob.glob(os.path.join(self.states, "*")):
             os.remove(old)
         self.win.key("F2")
-        f = _wait_new_file(self.states, set(), timeout=20.0, min_size=100000)
+        # The emulator writes "<slot>.sav.<random>" first and renames it to "<slot>.sav": only the final name counts.
+        f = _wait_new_file(self.states, set(), timeout=20.0, min_size=100000, pattern="*.sav")
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         shutil.move(f, path)
         return path

@@ -162,6 +162,8 @@ struct MainMenu::Impl {
   int page_cur = 1, page_top = 0;
   int card_msg_start = 0;
   bool load_mode = false;
+  // Opened by open_save_list: the save choice is the first screen and its Cancel closes the menu.
+  bool save_only = false;
   int load_cur = 0;
   bool save_confirm = false;
   bool load_pending = false;
