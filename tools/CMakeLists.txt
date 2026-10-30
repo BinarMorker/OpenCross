@@ -1,7 +1,10 @@
 # Developer tools, linked into opencross.exe and run as `opencross <tool> [args]` (src/tool_main.cpp): one shipped binary.
 #   occ (rooms / models / scripts / effects / saves), octext, ocaudio, ochd, ocprd, ocstage, ocbattle, ocmovie,
-#   ocbattleview, ocbattleseq, ocflow, ocmenudemo, ocshopdemo (the "oc" prefix is optional: `opencross battleview 7`).
+#   ocbattleview, ocbattleseq, ocflow, ocmenudemo, ocshopdemo, ocmodelview
+#   (the "oc" prefix is optional: `opencross modelview`).
 add_library(oc_tools STATIC
+  ocmodelview.cpp
+  model_viewer_load.cpp
   occ.cpp
   occ_save.cpp
   occ_dump_textures.cpp

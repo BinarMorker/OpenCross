@@ -68,6 +68,16 @@ OpenCross builds on Windows with Visual Studio 2026 (C++ tools), CMake, Ninja an
 
 The executable is written to `build\win-x64\bin\Release\opencross.exe`. Use `.\build.ps1 debug` for a debug build and add `-Test` to run the unit tests.
 
+## Model viewer
+
+Run `opencross.exe modelview` to help modders test and compare character model mods
+without loading a save or navigating to a specific scene. The native tool lets you
+inspect field characters, battle players and monsters with an orbit camera, animation playback
+and scrubbing, original/modded A/B comparison and controlled lighting. It reads the
+installed game data and existing mod preferences without changing saves or settings.
+See [the model viewer guide](docs/model-viewer.md) for controls, art-style selection
+and limitations.
+
 ## Credits and licence
 
 OpenCross is licensed under the GPL-3.0-or-later (see [LICENSE](LICENSE)). The libraries it uses and the community references that made it possible are listed in [CREDITS.md](CREDITS.md).
